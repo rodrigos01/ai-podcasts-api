@@ -16,7 +16,7 @@ Product behavior is fully described in [specs.md](specs.md); this document cover
 
 - Node 20+, TypeScript, Express
 - Firebase Firestore (a **named database**, not the default one — see Setup) + Firebase Storage, via `firebase-admin`
-- Google Gemini via `@google/genai`: `gemini-3.8-flash` for text, `gemini-3.1-flash-tts-preview` for speech, called through Gemini's **Interactions API** for real incremental audio streaming
+- Google Gemini `gemini-3.8-flash` for text (via `@google/genai`) and `gemini-3.1-flash-tts-preview` for speech (via `@google-cloud/text-to-speech`'s `streamingSynthesize`, for real incremental audio streaming at a much cheaper cost basis than the same model through `@google/genai`'s Interactions API)
 - zod for request validation and for validating every piece of LLM-generated JSON before it's trusted
 - vitest for unit tests
 
@@ -37,7 +37,7 @@ You need a Firebase/GCP project with:
   curl -X POST -H "Authorization: Bearer $(gcloud auth application-default print-access-token)" \
     "https://firebasestorage.googleapis.com/v1beta/projects/<your-project>/buckets/<your-bucket>:addFirebase"
   ```
-- A **service account key** (JSON) with Firestore + Storage access, downloaded locally.
+- A **service account key** (JSON), for local dev only — see Environment below. In any deployed environment (Cloud Run, etc.) this is omitted entirely and the app uses Application Default Credentials via the runtime's own attached service account instead.
 
 ### 2. Environment
 
@@ -51,6 +51,8 @@ FIREBASE_STORAGE_BUCKET=your-bucket-name
 FIRESTORE_DATABASE_ID=podcasts
 PORT=3000
 ```
+
+`FIREBASE_SERVICE_ACCOUNT_PATH` is optional — set it for local dev (pointing at a downloaded service-account JSON key); leave it unset in any deployed environment.
 
 ### 3. Install & run
 
@@ -66,6 +68,14 @@ npm run smoke                 # scripts/smoke-test.ts — drives the full real H
 ```
 
 `npm test` is safe to run anytime. `npm run smoke` and any real usage of the wizard/generation/audio endpoints make real, billed calls to Gemini — be deliberate with how often you run a full episode through generation.
+
+### 4. Deploy to Cloud Run
+
+```bash
+npm run deploy   # scripts/deploy.sh — gcloud run deploy --source, from .env
+```
+
+Reads `.env` and forwards it as Cloud Run env vars, deliberately excluding `PORT` (Cloud Run injects its own), `FIREBASE_SERVICE_ACCOUNT_PATH` (deployed environments use Application Default Credentials instead — see Setup), and anything not actually read by `src/config/env.ts`. Override the target service/region with `SERVICE_NAME=`/`REGION=`.
 
 ## Authentication
 
@@ -207,10 +217,10 @@ Episode length word/time targets:
 This is a single audio resource for the whole episode (not per-chunk), designed to be pointed at directly by a standard `<audio>` element or a native mobile player:
 
 - **Once fully generated**: behaves like a normal static audio file — proper `Content-Length`, `Accept-Ranges: bytes`, full seek support via `Range` requests.
-- **While still generating**: served as `audio/wav` over `Transfer-Encoding: chunked` (no `Content-Length`, since the final size isn't known yet). Playback can start immediately and can be paused/resumed, but cannot be scrubbed ahead of what's actually been generated. A `Range: bytes=N-` request resumes precisely from `N` if that's already been generated; if not, it triggers generation of whatever's needed to reach it.
-- Audio generation is genuinely on-demand — the first request for a given episode's stream is what triggers TTS synthesis (in chunks, cached from then on), not episode confirmation. Expect real latency (tens of seconds per chunk) the first time any given episode is streamed.
+- **While still generating**: served as `audio/ogg` (Ogg Opus) over `Transfer-Encoding: chunked` (no `Content-Length`, since the final size isn't known yet). Playback can start immediately and can be paused/resumed, but cannot be scrubbed ahead of what's actually been generated. A `Range: bytes=N-` request resumes precisely from `N` if that's already been generated; if not, it triggers generation of whatever's needed to reach it.
+- Audio generation is genuinely on-demand — the first request for a given episode's stream is what triggers TTS synthesis (in chunks, cached from then on), not episode confirmation. Expect real latency the first time any given episode is streamed.
 
-**Resuming from a saved position**: pass `?t=<seconds>` to start the stream from a playback position your app already has (e.g. the user exited the player and came back) — `GET .../audio/stream?t=754.2`. This is the recommended way to resume by time: the server converts it to the right byte offset internally, so your client never needs to know this app's underlying audio format. It behaves exactly like an equivalent `Range` byte-request (206 with `Content-Range` once the episode is fully generated; a chunked continuation, generating on demand, if not) — if a `Range` header is present on the same request, it takes precedence over `t`.
+**Resuming from a saved position**: pass `?t=<seconds>` to start the stream from a playback position your app already has (e.g. the user exited the player and came back) — `GET .../audio/stream?t=754.2`. The server resumes at the nearest generated-audio-chunk boundary at or before that time (not an exact byte offset — audio chunks are compressed, so a chunk's duration isn't known until it's been generated) — if a `Range` header is present on the same request, it takes precedence over `t`.
 
 ## Data model
 

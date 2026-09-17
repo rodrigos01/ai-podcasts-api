@@ -1,0 +1,17 @@
+// Used only by `npm run build` (the production build that `npm start`/a
+// deployed container actually runs). The base tsconfig.json includes
+// scripts/ and test/ too (so `tsc --noEmit` still typechecks them, and
+// rootDir "." mirrors the whole tree under dist/) — that's wrong for a
+// real build, since it puts the entry point at dist/src/index.js instead
+// of dist/index.js (which "main"/"start" in package.json assume, and
+// which is what Cloud Run's Node buildpack expects too). This narrows
+// rootDir/include to just src/ so dist/index.js lands where it should,
+// without ever emitting test/scripts output into the shipped image.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}

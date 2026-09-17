@@ -5,25 +5,28 @@ import {
   getCachedChunkSize,
   putCachedChunk,
 } from "../storage/audioCache.repository";
+import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
+import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
-import { buildWavHeader, WAV_HEADER_BYTES } from "../utils/wav";
+import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
+import { resolveTimeToByteOffset } from "../utils/oggOpus";
 import { HttpError } from "../utils/HttpError";
 
-const SPEAKER_LABEL_RE = /^\[([^\]]+)\]:/;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Chunk offsets are pure slices of the transcript (see chunker.ts) — a
  * chunk that's a continuation of an oversized single turn won't itself
- * start with a "[Speaker]:" label, so we look backward for the nearest one.
+ * start with a "Name:" label, so we look backward for the nearest one.
  */
 function getChunkText(transcript: string, chunk: TtsChunk): string {
   const raw = transcript.slice(chunk.startOffset, chunk.endOffset);
   if (SPEAKER_LABEL_RE.test(raw)) return raw;
 
-  const before = transcript.slice(0, chunk.startOffset);
-  const matches = [...before.matchAll(/\[[^\]]+\]:/g)];
-  const label = matches.at(-1)?.[0] ?? "";
+  const label = findLastSpeakerLabel(transcript.slice(0, chunk.startOffset));
   return label ? `${label} ${raw}` : raw;
 }
 
@@ -53,6 +56,14 @@ function assertAudioReady(episode: Episode): asserts episode is Episode & {
  * delivery via its onDelta callback. Any concurrent ("follower") request
  * for the same chunk just awaits the same promise and writes the resulting
  * buffer once it resolves, same as a cache hit.
+ *
+ * This Map only dedupes requests landing on *this* process — on Cloud Run,
+ * multiple instances each have their own empty Map, so it's not sufficient
+ * on its own. generateOrJoin below adds a Firestore-backed lock
+ * (audioLock.repository.ts) so at most one instance actually calls the TTS
+ * API for a given chunk; any other instance's "leader" (first *local*
+ * caller) ends up waiting for the real leader elsewhere and relaying the
+ * cached result once it lands, rather than generating a duplicate.
  */
 const inFlightGenerations = new Map<string, Promise<Buffer>>();
 
@@ -60,11 +71,52 @@ function chunkKey(podcastId: string, episodeId: string, index: number): string {
   return `${podcastId}:${episodeId}:${index}`;
 }
 
+async function generateOrJoin(
+  podcastId: string,
+  episodeId: string,
+  index: number,
+  directorPrompt: string,
+  chunkText: string,
+  speakers: { speaker: string; voiceName: string }[],
+  onDelta: (delta: Buffer) => void,
+): Promise<Buffer> {
+  for (;;) {
+    const acquired = await tryAcquireChunkLock(podcastId, episodeId, index);
+    if (acquired) {
+      try {
+        const parts: Buffer[] = [];
+        await streamSpeech(directorPrompt, parseScriptTurns(chunkText), speakers, (delta) => {
+          parts.push(delta);
+          onDelta(delta);
+        });
+        const full = Buffer.concat(parts);
+        await putCachedChunk(podcastId, episodeId, index, full);
+        return full;
+      } finally {
+        await releaseChunkLock(podcastId, episodeId, index);
+      }
+    }
+
+    // Another instance holds the lock and is generating this chunk right
+    // now — wait for it to land in the cache instead of duplicating the
+    // (costly) TTS call ourselves. If that instance dies mid-generation,
+    // its lock goes stale and a future iteration of tryAcquireChunkLock
+    // above will steal it and generate here instead.
+    const cached = await getCachedChunk(podcastId, episodeId, index);
+    if (cached) {
+      onDelta(cached);
+      return cached;
+    }
+    await sleep(CHUNK_LOCK_POLL_INTERVAL_MS);
+  }
+}
+
 function getOrStartChunkGeneration(
   podcastId: string,
   episodeId: string,
   index: number,
-  prompt: string,
+  directorPrompt: string,
+  chunkText: string,
   speakers: { speaker: string; voiceName: string }[],
   onDelta: (delta: Buffer) => void,
 ): { promise: Promise<Buffer>; isLeader: boolean } {
@@ -74,16 +126,15 @@ function getOrStartChunkGeneration(
     return { promise: existing, isLeader: false };
   }
 
-  const promise = (async () => {
-    const parts: Buffer[] = [];
-    await streamSpeech(prompt, speakers, (delta) => {
-      parts.push(delta);
-      onDelta(delta);
-    });
-    const full = Buffer.concat(parts);
-    await putCachedChunk(podcastId, episodeId, index, full);
-    return full;
-  })();
+  const promise = generateOrJoin(
+    podcastId,
+    episodeId,
+    index,
+    directorPrompt,
+    chunkText,
+    speakers,
+    onDelta,
+  );
 
   inFlightGenerations.set(key, promise);
   promise.finally(() => inFlightGenerations.delete(key));
@@ -100,10 +151,10 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart:
 
 /**
  * Streams the concatenation of all of an episode's TTS chunks as one
- * continuous WAV resource, generating (and caching) any chunk on demand the
- * first time it's needed. specs.md's Audio Delivery section calls for
- * on-demand, listen-triggered generation streamed back to the client, with
- * scrubbing disallowed until every chunk exists — so:
+ * continuous Ogg Opus resource, generating (and caching) any chunk on
+ * demand the first time it's needed. specs.md's Audio Delivery section
+ * calls for on-demand, listen-triggered generation streamed back to the
+ * client, with scrubbing disallowed until every chunk exists — so:
  *
  * - If every chunk is already cached, we know the total length: serve a
  *   normal, fully seekable static resource (real Content-Length,
@@ -114,6 +165,12 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart:
  *   request into the *already-cached* prefix resumes precisely from there;
  *   one that reaches into ungenerated territory just continues generation
  *   from that chunk's start until enough bytes exist to satisfy it.
+ *
+ * `seek.rangeStart` (an exact byte offset, from a `Range` header) takes
+ * priority; `seek.startTimeSeconds` (a saved playback position in seconds)
+ * is resolved to the nearest chunk boundary at-or-before that time — see
+ * utils/oggOpus.ts for why byte-exact time resume isn't possible anymore
+ * now that chunks are compressed instead of raw PCM.
  */
 export async function streamEpisodeAudio(
   podcastId: string,
@@ -121,7 +178,7 @@ export async function streamEpisodeAudio(
   episode: Episode,
   podcast: Podcast,
   res: Response,
-  rangeStart: number,
+  seek: { rangeStart: number | null; startTimeSeconds: number | null },
 ): Promise<void> {
   assertAudioReady(episode);
   const chunks = episode.ttsChunks;
@@ -132,12 +189,22 @@ export async function streamEpisodeAudio(
   );
   const allCached = cachedSizes.every((size) => size !== null);
 
-  res.set("Content-Type", "audio/wav");
+  const rangeStart =
+    seek.rangeStart ??
+    (seek.startTimeSeconds !== null
+      ? await resolveTimeToByteOffset(
+          seek.startTimeSeconds,
+          chunks.length,
+          (index) => cachedSizes[index] ?? null,
+          (index) => getCachedChunk(podcastId, episodeId, index),
+        )
+      : 0);
+
+  res.set("Content-Type", "audio/ogg");
   res.set("Accept-Ranges", "bytes");
 
   if (allCached) {
-    const totalPcmBytes = cachedSizes.reduce((sum, size) => sum + (size ?? 0), 0);
-    const totalLength = WAV_HEADER_BYTES + totalPcmBytes;
+    const totalLength = cachedSizes.reduce((sum, size) => sum + (size ?? 0), 0);
 
     if (rangeStart >= totalLength) {
       throw new HttpError(416, "Range Not Satisfiable");
@@ -151,10 +218,7 @@ export async function streamEpisodeAudio(
     }
     res.set("Content-Length", String(totalLength - rangeStart));
 
-    const header = buildWavHeader(totalPcmBytes);
-    res.write(header.subarray(rangeStart));
-
-    let pos = header.length;
+    let pos = 0;
     for (let index = 0; index < chunks.length; index++) {
       const data = await getCachedChunk(podcastId, episodeId, index);
       if (data) writeSlice(res, data, pos, rangeStart);
@@ -165,15 +229,13 @@ export async function streamEpisodeAudio(
   }
 
   res.status(200);
-  const header = buildWavHeader(null);
-  res.write(header.subarray(Math.min(rangeStart, header.length)));
 
   let stopped = false;
   res.on("close", () => {
     stopped = true;
   });
 
-  let pos = header.length;
+  let pos = 0;
   for (let index = 0; index < chunks.length && !stopped; index++) {
     const chunk = chunks[index];
     if (!chunk) continue;
@@ -188,14 +250,14 @@ export async function streamEpisodeAudio(
     }
 
     const chunkText = getChunkText(episode.transcript, chunk);
-    const fullPrompt = `${episode.ttsPrompt}\n\n#### TRANSCRIPT\n${chunkText}`;
 
     let emittedInChunk = 0;
     const { promise, isLeader } = getOrStartChunkGeneration(
       podcastId,
       episodeId,
       index,
-      fullPrompt,
+      episode.ttsPrompt,
+      chunkText,
       speakers,
       (delta) => {
         writeSlice(res, delta, chunkStart + emittedInChunk, rangeStart);

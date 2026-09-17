@@ -1,18 +1,7 @@
+import { MAX_TTS_INPUT_TOKENS, TARGET_CHUNK_TOKENS } from "../../constants/ttsLimits";
 import { estimateTokens } from "../../utils/tokenEstimate";
+import { matchLabelPrefix } from "../../utils/scriptText";
 import type { TtsChunk } from "../../schemas/episode.schema";
-
-// Conservative ceiling for a single TTS submission (base prompt + chunk
-// text combined), safely under Gemini TTS's stated "tens of thousands of
-// tokens" context window per prompting-guide.md.
-const MAX_TTS_INPUT_TOKENS = 12_000;
-
-// specs.md's "Audio Generation" section calls for audio to be generated
-// on-demand and streamed back *as the user listens* — chunking purely up
-// to MAX_TTS_INPUT_TOKENS would pack an entire short episode into one TTS
-// call, so the client waits for the whole episode to synthesize before
-// playback can start at all. Target a much smaller practical chunk size
-// (~4 minutes of speech) instead, so the first chunk is ready quickly.
-const TARGET_CHUNK_TOKENS = 1_000;
 
 interface TurnSpan {
   text: string;
@@ -35,13 +24,12 @@ function splitIntoTurnSpans(transcript: string): TurnSpan[] {
 // at sentence boundaries. Offsets stay pure slices of the *original*
 // transcript (never a reconstructed/re-prefixed string) so the "offsets are
 // sliced from transcript on demand" contract holds for every chunk — but
-// only the first resulting sub-chunk will start with the "[Speaker]:"
-// label. Consumers (the audio-generation step) must prepend the label
-// themselves for later sub-chunks, found by scanning backward from
-// startOffset for the nearest "[Speaker]:" marker in the full transcript.
+// only the first resulting sub-chunk will start with the "Name:" label.
+// Consumers (the audio-generation step) must prepend the label themselves
+// for later sub-chunks, found by scanning backward from startOffset for
+// the nearest "Name:" marker in the full transcript.
 function splitOversizedTurn(span: TurnSpan, budgetTokens: number): TurnSpan[] {
-  const speakerMatch = span.text.match(/^(\[[^\]]+\]:\s*)/);
-  const labelChars = speakerMatch?.[1] ? speakerMatch[1].length : 0;
+  const labelChars = matchLabelPrefix(span.text)?.length ?? 0;
   const sentences = span.text.match(/[^.!?]+[.!?]*\s*/g) ?? [span.text];
   const maxBufferChars = Math.max(1, budgetTokens * 4 - labelChars);
 

@@ -1,10 +1,13 @@
 import { storageBucket } from "../config/firebase";
 
-// Raw PCM (audio/l16), not individually WAV-wrapped — chunks are byte
-// concatenated in order to form one continuous episode-length stream, so
-// each chunk must be headerless.
+// Each chunk is a fully self-contained Ogg Opus stream (own header, own
+// final page) from one streamingSynthesize call — independently valid and
+// playable on its own. Concatenating several forms a "chained" Ogg
+// bitstream, which is a legitimate part of the Ogg spec and standard
+// players handle it; see utils/oggOpus.ts for how per-chunk duration is
+// recovered from that structure for time-based resume.
 function chunkPath(podcastId: string, episodeId: string, chunkIndex: number): string {
-  return `podcasts/${podcastId}/episodes/${episodeId}/audio/chunk-${chunkIndex}.pcm`;
+  return `podcasts/${podcastId}/episodes/${episodeId}/audio/chunk-${chunkIndex}.opus`;
 }
 
 export async function getCachedChunk(
@@ -41,7 +44,7 @@ export async function putCachedChunk(
   data: Buffer,
 ): Promise<void> {
   const file = storageBucket.file(chunkPath(podcastId, episodeId, chunkIndex));
-  await file.save(data, { contentType: "audio/l16" });
+  await file.save(data, { contentType: "audio/ogg" });
 }
 
 export async function deleteEpisodeAudio(podcastId: string, episodeId: string): Promise<void> {

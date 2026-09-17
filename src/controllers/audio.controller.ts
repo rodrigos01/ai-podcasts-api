@@ -3,7 +3,6 @@ import { getEpisode } from "../data/episode.repository";
 import { requireUserId } from "../middleware/requireAuth";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { streamEpisodeAudio } from "../services/audio.service";
-import { secondsToByteOffset } from "../utils/wav";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
 
@@ -42,7 +41,9 @@ export async function stream(req: Request, res: Response) {
 
   const rangeStart = parseRangeStart(req.headers.range);
   const startTime = parseStartTime(req.query);
-  const resolvedStart = rangeStart ?? (startTime !== null ? secondsToByteOffset(startTime) : 0);
 
-  await streamEpisodeAudio(podcastId, episodeId, episode, podcast, res, resolvedStart);
+  await streamEpisodeAudio(podcastId, episodeId, episode, podcast, res, {
+    rangeStart,
+    startTimeSeconds: startTime,
+  });
 }

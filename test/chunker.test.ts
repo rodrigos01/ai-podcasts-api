@@ -4,7 +4,7 @@ import { chunkTranscript } from "../src/services/episodeGeneration/chunker";
 const MAX_TTS_INPUT_TOKENS = 12_000;
 
 function turn(speaker: string, chars: number): string {
-  return `[${speaker}]: ${"a".repeat(chars)}`;
+  return `${speaker}: ${"a".repeat(chars)}`;
 }
 
 describe("chunkTranscript", () => {
@@ -26,8 +26,8 @@ describe("chunkTranscript", () => {
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
       const slice = transcript.slice(chunk.startOffset, chunk.endOffset);
-      // Every chunk boundary should land on a "[Speaker]:" turn start, never mid-turn.
-      expect(slice.startsWith("[A]:") || slice.startsWith("[B]:")).toBe(true);
+      // Every chunk boundary should land on a "Speaker:" turn start, never mid-turn.
+      expect(slice.startsWith("A:") || slice.startsWith("B:")).toBe(true);
     }
   });
 
@@ -43,15 +43,15 @@ describe("chunkTranscript", () => {
   it("falls back to sentence-level splitting for a single oversized turn", () => {
     const basePromptTokens = MAX_TTS_INPUT_TOKENS - 100; // budget ~400 chars
     const longSentence = "This is a sentence that repeats. ".repeat(40); // ~1360 chars, one turn
-    const labeledTranscript = `[A]: ${longSentence}`;
+    const labeledTranscript = `A: ${longSentence}`;
     const chunks = chunkTranscript(labeledTranscript, basePromptTokens);
 
     expect(chunks.length).toBeGreaterThan(1);
-    // Only the first sub-chunk carries the original "[A]:" label — offsets
+    // Only the first sub-chunk carries the original "A:" label — offsets
     // stay pure slices of the original transcript; a consumer re-adds the
     // label for later sub-chunks by scanning backward for it (see chunker.ts).
     const firstSlice = labeledTranscript.slice(chunks[0]?.startOffset, chunks[0]?.endOffset);
-    expect(firstSlice.startsWith("[A]:")).toBe(true);
+    expect(firstSlice.startsWith("A:")).toBe(true);
 
     // Chunks are contiguous, non-overlapping slices covering the whole turn.
     for (let i = 1; i < chunks.length; i++) {

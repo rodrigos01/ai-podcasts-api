@@ -9,9 +9,12 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   GEMINI_API_KEY: z.string().min(1, "GEMINI_API_KEY is required"),
   FIREBASE_PROJECT_ID: z.string().min(1, "FIREBASE_PROJECT_ID is required"),
-  FIREBASE_SERVICE_ACCOUNT_PATH: z
-    .string()
-    .min(1, "FIREBASE_SERVICE_ACCOUNT_PATH is required"),
+  // Local dev only — a downloaded service-account JSON key. Left unset in
+  // any deployed environment (Cloud Run, Cloud Functions, GKE); firebase.ts
+  // falls back to Application Default Credentials via the runtime's
+  // attached service account instead. Never bake this file into a
+  // container image — that's a long-lived secret shipped in every layer.
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1).optional(),
   FIREBASE_STORAGE_BUCKET: z.string().min(1, "FIREBASE_STORAGE_BUCKET is required"),
   FIRESTORE_DATABASE_ID: z.string().min(1).default("podcasts"),
 });

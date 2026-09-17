@@ -1,7 +1,10 @@
 import type { GoogleGenAI as GoogleGenAIClient } from "@google/genai" with { "resolution-mode": "import" };
+import textToSpeech from "@google-cloud/text-to-speech";
 import type { ZodType } from "zod";
 import { z } from "zod";
+import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
+import type { ScriptTurn } from "../utils/scriptText";
 
 const TEXT_MODEL = "gemini-3.8-flash";
 const TTS_MODEL = "gemini-3.1-flash-tts-preview";
@@ -10,7 +13,10 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 
 // @google/genai ships ESM-only type declarations shared across its
 // import/require conditions, which trips up TS's Node16 module resolution
-// for a static `require`. A dynamic import sidesteps that entirely.
+// for a static `require`. A dynamic import sidesteps that entirely. Only
+// used for text generation now — TTS moved to @google-cloud/text-to-speech
+// (see streamSpeech), which is plain CommonJS and has a much cheaper cost
+// basis for the same underlying models.
 function getClient(): Promise<GoogleGenAIClient> {
   if (!clientPromise) {
     clientPromise = import("@google/genai").then(
@@ -19,6 +25,18 @@ function getClient(): Promise<GoogleGenAIClient> {
   }
   return clientPromise;
 }
+
+// Reuses the same already-loaded service-account credentials as Firebase
+// Admin (no separate file read or path resolution needed) when running
+// locally with FIREBASE_SERVICE_ACCOUNT_PATH set; in any deployed
+// environment `serviceAccount` is undefined and passing no `credentials`
+// option here makes this client fall back to Application Default
+// Credentials too, same as firebase.ts does for the Admin SDK. Unlike the
+// Generative Language API client above, this one is synchronous to
+// construct and plain CommonJS.
+const ttsClient = new textToSpeech.TextToSpeechClient(
+  serviceAccount ? { credentials: serviceAccount } : undefined,
+);
 
 /**
  * Gemini's structured-output schema is an OpenAPI-3.0 subset: it rejects
@@ -104,54 +122,103 @@ export interface SpeakerVoice {
 }
 
 /**
- * Streams raw PCM (audio/l16) deltas for `prompt` as they're synthesized,
- * via the Interactions API's `stream: true` mode — genuine incremental TTS
- * streaming, not a one-shot call. `onChunk` is invoked once per delta with
- * its decoded bytes, in order, so callers can pipe straight to an HTTP
- * response while also buffering for caching. Explicitly requesting a
- * container format (wav/mp3/ogg) is rejected by this model — audio/l16 is
- * the only supported output, confirmed empirically against the live API.
+ * Streams raw PCM deltas for `directorPrompt` + `turns` as they're
+ * synthesized, via Cloud Text-to-Speech's bidi `streamingSynthesize` gRPC
+ * call — genuine incremental streaming, not a one-shot call. `onChunk` is
+ * invoked once per delta with its decoded bytes, in order, so callers can
+ * pipe straight to an HTTP response while also buffering for caching.
+ *
+ * Migrated off the Generative Language API's Interactions endpoint to this
+ * client: same underlying model, same multi-speaker + free-text-prompt
+ * capability (confirmed empirically — `StreamingSynthesisInput` accepts a
+ * `prompt` string alongside `multiSpeakerMarkup.turns`), much cheaper
+ * billing for it. `audioEncoding: "OGG_OPUS"` compresses far better than
+ * raw PCM for the same audio — confirmed empirically that `streamingSynthesize`
+ * only accepts a subset of the API's advertised encodings: `LINEAR16` and
+ * `MP3` are both rejected outright ("Unsupported audio encoding") even
+ * though they're valid for the non-streaming `synthesizeSpeech` call;
+ * `PCM` and `OGG_OPUS` are the two confirmed to work. Don't "fix" this back
+ * to LINEAR16 or MP3 without re-confirming against the live API first.
  */
+// Cloud TTS's speakerAlias is far stricter than our own speaker names:
+// "cannot contain whitespace or non-alphanumeric characters" (confirmed
+// empirically — rejects e.g. "Ray Sterling" outright). Real names
+// (host/guest/cast names) routinely contain spaces, apostrophes, etc., so
+// we sanitize into an alphanumeric-only alias for the wire format and map
+// back internally — callers (audio.service.ts, audiobookAudio.service.ts)
+// keep using real display names throughout and never see this constraint.
+function sanitizeSpeakerAlias(name: string): string {
+  const alias = name.replace(/[^A-Za-z0-9]/g, "");
+  return alias || "Speaker";
+}
+
 export async function streamSpeech(
-  prompt: string,
+  directorPrompt: string,
+  turns: ScriptTurn[],
   speakers: SpeakerVoice[],
   onChunk: (chunk: Buffer) => void,
 ): Promise<void> {
-  const client = await getClient();
-
-  const stream = await withRetry(() =>
-    client.interactions.create({
-      model: TTS_MODEL,
-      input: prompt,
-      response_format: { type: "audio" },
-      generation_config: {
-        speech_config: speakers.map((s) => ({ speaker: s.speaker, voice: s.voiceName })),
-      },
-      stream: true,
-    }),
-  );
+  const aliasByName = new Map(speakers.map((s) => [s.speaker, sanitizeSpeakerAlias(s.speaker)]));
+  const aliasedTurns = turns.map((turn) => ({
+    speaker: aliasByName.get(turn.speaker) ?? sanitizeSpeakerAlias(turn.speaker),
+    text: turn.text,
+  }));
 
   let receivedAnyAudio = false;
-  try {
-    for await (const event of stream) {
-      if (event.event_type === "error") {
-        throw new Error(`Gemini TTS stream error: ${event.error?.message ?? "unknown error"}`);
-      }
-      if (event.event_type === "step.delta" && event.delta?.type === "audio" && event.delta.data) {
-        receivedAnyAudio = true;
-        onChunk(Buffer.from(event.delta.data, "base64"));
+  let lastError: unknown;
+  const attempts = 3;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const grpcStream = ttsClient.streamingSynthesize();
+
+        grpcStream.on("data", (response: { audioContent?: Uint8Array | Buffer | string | null }) => {
+          if (!response.audioContent) return;
+          receivedAnyAudio = true;
+          onChunk(Buffer.from(response.audioContent as Uint8Array));
+        });
+        grpcStream.on("error", (err: Error) => reject(err));
+        grpcStream.on("end", () => resolve());
+
+        grpcStream.write({
+          streamingConfig: {
+            voice: {
+              languageCode: "en-US",
+              modelName: TTS_MODEL,
+              multiSpeakerVoiceConfig: {
+                speakerVoiceConfigs: speakers.map((s) => ({
+                  speakerAlias: aliasByName.get(s.speaker),
+                  speakerId: s.voiceName,
+                })),
+              },
+            },
+            streamingAudioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 24000 },
+          },
+        });
+        grpcStream.write({ input: { prompt: directorPrompt, multiSpeakerMarkup: { turns: aliasedTurns } } });
+        grpcStream.end();
+      });
+      lastError = undefined;
+      break;
+    } catch (err) {
+      lastError = err;
+      // A retry after any audio was already emitted would duplicate bytes
+      // already written to a live HTTP response — only a clean failure
+      // (nothing emitted yet) is safe to retry.
+      if (receivedAnyAudio) break;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
       }
     }
-  } catch (err) {
-    // A long-lived stream can drop mid-transfer (e.g. ECONNRESET) — surface
-    // this as a normal rejection rather than letting it propagate as
-    // whatever shape the underlying transport threw it in.
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Gemini TTS stream failed mid-transfer: ${message}`);
   }
 
+  if (lastError) {
+    const message = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`Cloud TTS stream failed: ${message}`);
+  }
   if (!receivedAnyAudio) {
-    throw new Error("Gemini TTS stream produced no audio data");
+    throw new Error("Cloud TTS stream produced no audio data");
   }
 }
 

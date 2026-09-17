@@ -7,8 +7,20 @@ export function errorHandler(
   err: unknown,
   _req: Request,
   res: Response,
-  _next: NextFunction,
+  next: NextFunction,
 ) {
+  // A streaming response (e.g. audio/stream) may fail after it's already
+  // sent headers and some body bytes — there's no JSON error response to
+  // send at that point, just a broken connection for the client to notice.
+  // Delegating to Express's default handler (rather than calling res.json
+  // ourselves) avoids a second ERR_HTTP_HEADERS_SENT crash on top of the
+  // original error.
+  if (res.headersSent) {
+    console.error("Error after headers sent:", err);
+    next(err);
+    return;
+  }
+
   if (err instanceof MulterError) {
     res.status(400).json({ error: "UploadError", message: err.message });
     return;
