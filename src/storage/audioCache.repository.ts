@@ -10,6 +10,16 @@ function chunkPath(podcastId: string, episodeId: string, chunkIndex: number): st
   return `podcasts/${podcastId}/episodes/${episodeId}/audio/chunk-${chunkIndex}.opus`;
 }
 
+// The client-facing artifact: every chunk above remuxed (container only, no
+// re-encode — see utils/webmRemux.ts) into one finished WebM/Opus file, built
+// once a fully-cached episode's audio.service.ts caller finalizes it. This is
+// what /stream serves directly for a completed episode, and what a CDN in
+// front of this bucket would eventually point at — the per-chunk Ogg cache
+// above stays purely an internal generation-time detail.
+function completeWebmPath(podcastId: string, episodeId: string): string {
+  return `podcasts/${podcastId}/episodes/${episodeId}/audio/complete.webm`;
+}
+
 export async function getCachedChunk(
   podcastId: string,
   episodeId: string,
@@ -45,6 +55,26 @@ export async function putCachedChunk(
 ): Promise<void> {
   const file = storageBucket.file(chunkPath(podcastId, episodeId, chunkIndex));
   await file.save(data, { contentType: "audio/ogg" });
+}
+
+export async function getCachedCompleteWebm(
+  podcastId: string,
+  episodeId: string,
+): Promise<Buffer | null> {
+  const file = storageBucket.file(completeWebmPath(podcastId, episodeId));
+  const [exists] = await file.exists();
+  if (!exists) return null;
+  const [contents] = await file.download();
+  return contents;
+}
+
+export async function putCachedCompleteWebm(
+  podcastId: string,
+  episodeId: string,
+  data: Buffer,
+): Promise<void> {
+  const file = storageBucket.file(completeWebmPath(podcastId, episodeId));
+  await file.save(data, { contentType: "audio/webm; codecs=opus" });
 }
 
 export async function deleteEpisodeAudio(podcastId: string, episodeId: string): Promise<void> {

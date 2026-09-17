@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getOggOpusDurationSeconds, resolveTimeToByteOffset } from "../src/utils/oggOpus";
+import { getOggOpusDurationSeconds, resolveTimeToChunkIndex } from "../src/utils/oggOpus";
 
 /**
  * Builds a minimal, spec-valid single-page Ogg stream (RFC 3533) with a
@@ -56,36 +56,35 @@ describe("getOggOpusDurationSeconds", () => {
   });
 });
 
-describe("resolveTimeToByteOffset", () => {
+describe("resolveTimeToChunkIndex", () => {
   const chunkDurations = [2, 2, 2]; // seconds
-  const chunkSizes = [1000, 1000, 1000]; // bytes
   const buffers = chunkDurations.map((seconds) => buildOggPage(48000n * BigInt(seconds), 0));
 
   function makeChunkAccessors(cachedCount: number) {
-    const cachedSizeAt = (index: number) => (index < cachedCount ? chunkSizes[index] ?? null : null);
+    const isCached = (index: number) => index < cachedCount;
     const fetchCachedBytes = async (index: number) =>
       index < cachedCount ? (buffers[index] ?? null) : null;
-    return { cachedSizeAt, fetchCachedBytes };
+    return { isCached, fetchCachedBytes };
   }
 
-  it("resumes at byte 0 for time 0", async () => {
-    const { cachedSizeAt, fetchCachedBytes } = makeChunkAccessors(3);
-    expect(await resolveTimeToByteOffset(0, 3, cachedSizeAt, fetchCachedBytes)).toBe(0);
+  it("resumes at chunk 0 for time 0", async () => {
+    const { isCached, fetchCachedBytes } = makeChunkAccessors(3);
+    expect(await resolveTimeToChunkIndex(0, 3, isCached, fetchCachedBytes)).toBe(0);
   });
 
   it("resumes at the chunk boundary at-or-before the requested time, not mid-chunk", async () => {
-    const { cachedSizeAt, fetchCachedBytes } = makeChunkAccessors(3);
-    // 3 seconds falls inside chunk 1 (which spans [2,4)) — resume at its start (byte 1000), not further in.
-    expect(await resolveTimeToByteOffset(3, 3, cachedSizeAt, fetchCachedBytes)).toBe(1000);
+    const { isCached, fetchCachedBytes } = makeChunkAccessors(3);
+    // 3 seconds falls inside chunk 1 (which spans [2,4)) — resume at its start (index 1), not further in.
+    expect(await resolveTimeToChunkIndex(3, 3, isCached, fetchCachedBytes)).toBe(1);
   });
 
   it("stops at the first not-yet-cached chunk even if the requested time is further ahead", async () => {
-    const { cachedSizeAt, fetchCachedBytes } = makeChunkAccessors(1);
-    expect(await resolveTimeToByteOffset(10, 3, cachedSizeAt, fetchCachedBytes)).toBe(1000);
+    const { isCached, fetchCachedBytes } = makeChunkAccessors(1);
+    expect(await resolveTimeToChunkIndex(10, 3, isCached, fetchCachedBytes)).toBe(1);
   });
 
-  it("returns the total cached length when the requested time is beyond everything cached", async () => {
-    const { cachedSizeAt, fetchCachedBytes } = makeChunkAccessors(3);
-    expect(await resolveTimeToByteOffset(100, 3, cachedSizeAt, fetchCachedBytes)).toBe(3000);
+  it("returns the chunk count when the requested time is beyond everything cached", async () => {
+    const { isCached, fetchCachedBytes } = makeChunkAccessors(3);
+    expect(await resolveTimeToChunkIndex(100, 3, isCached, fetchCachedBytes)).toBe(3);
   });
 });
