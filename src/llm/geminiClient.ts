@@ -116,6 +116,43 @@ export async function generateText<T>(options: GenerateTextOptions<T>): Promise<
   return options.schema.parse(parsed);
 }
 
+interface GeneratePlainTextOptions {
+  systemInstruction: string;
+  prompt: string;
+}
+
+/**
+ * Plain, unstructured text generation — no `responseSchema`/`responseMimeType`.
+ * Confirmed empirically (structured-vs-plain-tmp.ts, 15 real trials): grammar-
+ * constrained structured output on this model runs ~35-55% slower on average
+ * than free-form text for an equivalent short response, with a noticeably
+ * fatter slow tail (multi-second outliers were structured-only). Use this
+ * for call sites that don't actually need a validated JSON shape — e.g. the
+ * per-turn conversation agent (agent.ts), whose `{speech, endEpisode}` shape
+ * is simple enough to encode as plain text + a trailing marker instead. If a
+ * caller genuinely needs a validated structured shape (the wizards,
+ * producerPrompt, condensation), keep using `generateText`.
+ */
+export async function generatePlainText(options: GeneratePlainTextOptions): Promise<string> {
+  const client = await getClient();
+
+  const response = await withRetry(() =>
+    client.models.generateContent({
+      model: TEXT_MODEL,
+      contents: options.prompt,
+      config: {
+        systemInstruction: options.systemInstruction,
+      },
+    }),
+  );
+
+  const text = response.text;
+  if (!text) {
+    throw new Error("Gemini returned an empty response");
+  }
+  return text;
+}
+
 export interface SpeakerVoice {
   speaker: string;
   voiceName: string;
