@@ -147,12 +147,15 @@ All request/response bodies are JSON unless noted.
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/podcasts/:podcastId/sources` | Add a source — JSON `{title, contents}`, or multipart file upload |
+| POST | `/podcasts/:podcastId/sources` | Add a source — JSON `{title, contents}`, multipart file upload, or a Google Drive file |
 | GET | `/podcasts/:podcastId/sources` | List sources for a podcast |
 | GET | `/podcasts/:podcastId/sources/:sourceId` | Get one source |
 | DELETE | `/podcasts/:podcastId/sources/:sourceId` | Delete a source |
 
-To upload a file, `POST` multipart form-data with a `file` field (PDF only — text is extracted server-side); an optional `title` field overrides the default (the filename). Otherwise, send JSON: `{"title": "...", "contents": "..."}`.
+Three ways to add a source, on the same endpoint:
+- **File upload**: `POST` multipart form-data with a `file` field (PDF only — text is extracted server-side); an optional `title` field overrides the default (the filename).
+- **Plain text**: JSON `{"title": "...", "contents": "..."}`.
+- **Google Drive**: JSON `{"fileId": "<drive-file-id>", "accessToken": "<oauth-access-token>", "title": "optional override"}`. `accessToken` is *your client's own* Google OAuth access token (obtained via Google Sign-In with Drive read scope, e.g. `drive.readonly`) — this backend has no Drive credentials of its own and forwards the token to Google only for this one request, never storing it. Supports Google Docs (exported as plain text) and PDF files stored in Drive (extracted the same way as an uploaded PDF); any other file type is rejected with `400`. An expired/invalid token comes back as `401`; a file the token can't access as `403`.
 
 ### Episodes
 

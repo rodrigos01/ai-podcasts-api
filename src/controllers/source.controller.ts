@@ -1,8 +1,9 @@
 import type { Request, Response } from "express";
 import { createSource, deleteSource, getSource, listSources } from "../data/source.repository";
 import { requireUserId } from "../middleware/requireAuth";
-import { sourceCreateSchema } from "../schemas/source.schema";
+import { sourceCreateSchema, sourceGoogleDriveSchema } from "../schemas/source.schema";
 import { requireOwnedPodcast } from "../services/podcastAccess";
+import { fetchGoogleDriveSource } from "../services/googleDrive.service";
 import { extractPdfText } from "../services/source.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
@@ -24,6 +25,19 @@ export async function create(req: Request, res: Response) {
       contents,
       sourceType: "pdf",
       originalFilename: req.file.originalname,
+    });
+    res.status(201).json(source);
+    return;
+  }
+
+  if (req.body?.fileId) {
+    const { fileId, accessToken, title } = sourceGoogleDriveSchema.parse(req.body);
+    const drive = await fetchGoogleDriveSource(fileId, accessToken);
+    const source = await createSource(podcastId, {
+      title: title || drive.title,
+      contents: drive.contents,
+      sourceType: drive.sourceType,
+      originalFilename: drive.title,
     });
     res.status(201).json(source);
     return;

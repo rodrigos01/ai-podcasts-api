@@ -1,7 +1,7 @@
 import { PDFParse } from "pdf-parse";
 import { HttpError } from "../utils/HttpError";
 
-const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
 export async function extractPdfText(buffer: Buffer): Promise<string> {
   if (buffer.byteLength > MAX_UPLOAD_BYTES) {
