@@ -6,7 +6,8 @@ import {
   putCachedChunk,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
-import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
+import { getEpisode } from "../data/episode.repository";
+import { CHUNK_LOCK_POLL_INTERVAL_MS, EPISODE_CHUNK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
@@ -38,12 +39,21 @@ function resolveCastVoices(
   return [...hosts, ...episode.guests].map((p) => ({ speaker: p.name, voiceName: p.voice }));
 }
 
-function assertAudioReady(episode: Episode): asserts episode is Episode & {
-  ttsChunks: TtsChunk[];
-  transcript: string;
-  ttsPrompt: string;
-} {
-  if (episode.status !== "ready" || !episode.ttsChunks || !episode.transcript || !episode.ttsPrompt) {
+/**
+ * The producer prompt (see producerPrompt.service.ts) is generated from
+ * persona/podcast/episode metadata before the conversation starts, and chunk
+ * boundaries are sealed incrementally as the conversation progresses (see
+ * chunker.ts's sealedChunksSoFar, wired up in orchestrator.ts) — so audio
+ * can start streaming as soon as the first chunk is sealed, well before the
+ * episode reaches status "ready". This only rules out the cases where there
+ * is nothing to stream at all: generation hasn't produced a prompt yet, or
+ * it failed outright.
+ */
+function assertAudioAvailable(episode: Episode): asserts episode is Episode & { ttsPrompt: string } {
+  if (episode.status === "failed") {
+    throw HttpError.badRequest("Episode generation failed");
+  }
+  if (!episode.ttsPrompt) {
     throw HttpError.badRequest("Episode audio is not ready yet");
   }
 }
@@ -150,27 +160,38 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart:
 }
 
 /**
- * Streams the concatenation of all of an episode's TTS chunks as one
- * continuous Ogg Opus resource, generating (and caching) any chunk on
- * demand the first time it's needed. specs.md's Audio Delivery section
- * calls for on-demand, listen-triggered generation streamed back to the
- * client, with scrubbing disallowed until every chunk exists — so:
+ * Streams the concatenation of an episode's TTS chunks as one continuous
+ * Ogg Opus resource, generating (and caching) any chunk on demand the first
+ * time it's needed. specs.md's Audio Delivery section calls for on-demand,
+ * listen-triggered generation streamed back to the client, with scrubbing
+ * disallowed until every chunk exists — so:
  *
- * - If every chunk is already cached, we know the total length: serve a
- *   normal, fully seekable static resource (real Content-Length,
- *   Accept-Ranges, honors any Range request).
- * - Otherwise we don't know the final length, so we serve chunked-transfer
- *   (no Content-Length) starting from `rangeStart`, live-generating and
- *   caching whatever chunk(s) that offset falls into or beyond. A `Range`
- *   request into the *already-cached* prefix resumes precisely from there;
- *   one that reaches into ungenerated territory just continues generation
- *   from that chunk's start until enough bytes exist to satisfy it.
+ * - If the episode has finished generating (`status: "ready"`) and every
+ *   chunk is already cached, we know the total length: serve a normal,
+ *   fully seekable static resource (real Content-Length, Accept-Ranges,
+ *   honors any Range request).
+ * - Otherwise we serve chunked-transfer (no Content-Length) starting from
+ *   `rangeStart`, live-generating and caching whatever chunk(s) that offset
+ *   falls into or beyond. A `Range` request into the *already-cached*
+ *   prefix resumes precisely from there; one that reaches into ungenerated
+ *   territory just continues generation from that chunk's start until
+ *   enough bytes exist to satisfy it.
+ * - While the episode is still generating (`status: "generating"`), chunk
+ *   boundaries keep being sealed by the orchestrator as the conversation
+ *   progresses (see chunker.ts's sealedChunksSoFar). Once this stream has
+ *   generated audio for every chunk sealed so far, it re-fetches the
+ *   episode doc and waits for more to appear instead of ending the
+ *   response — so a listener who started playback early rides straight
+ *   through into newly-generated audio without a second request.
  *
  * `seek.rangeStart` (an exact byte offset, from a `Range` header) takes
  * priority; `seek.startTimeSeconds` (a saved playback position in seconds)
  * is resolved to the nearest chunk boundary at-or-before that time — see
  * utils/oggOpus.ts for why byte-exact time resume isn't possible anymore
- * now that chunks are compressed instead of raw PCM.
+ * now that chunks are compressed instead of raw PCM. Both are resolved
+ * against whatever chunks are sealed at request time; seeking ahead of
+ * that isn't supported, same as seeking ahead of ungenerated audio never
+ * has been.
  */
 export async function streamEpisodeAudio(
   podcastId: string,
@@ -180,14 +201,17 @@ export async function streamEpisodeAudio(
   res: Response,
   seek: { rangeStart: number | null; startTimeSeconds: number | null },
 ): Promise<void> {
-  assertAudioReady(episode);
-  const chunks = episode.ttsChunks;
+  assertAudioAvailable(episode);
   const speakers = resolveCastVoices(podcast, episode);
 
-  const cachedSizes = await Promise.all(
+  let chunks = episode.ttsChunks ?? [];
+  let transcript = episode.transcript ?? "";
+  let status = episode.status;
+  const ttsPrompt = episode.ttsPrompt;
+
+  const initialCachedSizes = await Promise.all(
     chunks.map((_, index) => getCachedChunkSize(podcastId, episodeId, index)),
   );
-  const allCached = cachedSizes.every((size) => size !== null);
 
   const rangeStart =
     seek.rangeStart ??
@@ -195,7 +219,7 @@ export async function streamEpisodeAudio(
       ? await resolveTimeToByteOffset(
           seek.startTimeSeconds,
           chunks.length,
-          (index) => cachedSizes[index] ?? null,
+          (index) => initialCachedSizes[index] ?? null,
           (index) => getCachedChunk(podcastId, episodeId, index),
         )
       : 0);
@@ -203,8 +227,12 @@ export async function streamEpisodeAudio(
   res.set("Content-Type", "audio/ogg");
   res.set("Accept-Ranges", "bytes");
 
-  if (allCached) {
-    const totalLength = cachedSizes.reduce((sum, size) => sum + (size ?? 0), 0);
+  // Fully generated AND fully cached: total length is known, so we can
+  // serve a normal seekable static resource. While the episode is still
+  // generating, more chunks may still be sealed after this snapshot, so we
+  // always fall through to the live/incremental path below instead.
+  if (status === "ready" && initialCachedSizes.every((size) => size !== null)) {
+    const totalLength = initialCachedSizes.reduce((sum, size) => sum + (size ?? 0), 0);
 
     if (rangeStart >= totalLength) {
       throw new HttpError(416, "Range Not Satisfiable");
@@ -236,27 +264,49 @@ export async function streamEpisodeAudio(
   });
 
   let pos = 0;
-  for (let index = 0; index < chunks.length && !stopped; index++) {
+  let index = 0;
+  while (!stopped) {
+    if (index >= chunks.length) {
+      // Caught up to every chunk sealed as of our last look. If the episode
+      // is still generating, more chunk boundaries may land in Firestore as
+      // the conversation continues — poll for them instead of ending the
+      // stream early. "ready" here means we've genuinely reached the end
+      // (possibly the episode finished while we were mid-stream); "failed"
+      // means there's nothing more coming.
+      if (status !== "generating") break;
+      await sleep(EPISODE_CHUNK_POLL_INTERVAL_MS);
+      const fresh = await getEpisode(podcastId, episodeId);
+      if (!fresh) break;
+      status = fresh.status;
+      chunks = fresh.ttsChunks ?? chunks;
+      transcript = fresh.transcript ?? transcript;
+      continue;
+    }
+
     const chunk = chunks[index];
-    if (!chunk) continue;
+    if (!chunk) {
+      index++;
+      continue;
+    }
     const chunkStart = pos;
-    const cachedSize = cachedSizes[index];
+    const cachedSize = await getCachedChunkSize(podcastId, episodeId, index);
 
     if (cachedSize !== null) {
       const data = await getCachedChunk(podcastId, episodeId, index);
       if (data) writeSlice(res, data, chunkStart, rangeStart);
       pos = chunkStart + (data?.length ?? 0);
+      index++;
       continue;
     }
 
-    const chunkText = getChunkText(episode.transcript, chunk);
+    const chunkText = getChunkText(transcript, chunk);
 
     let emittedInChunk = 0;
     const { promise, isLeader } = getOrStartChunkGeneration(
       podcastId,
       episodeId,
       index,
-      episode.ttsPrompt,
+      ttsPrompt,
       chunkText,
       speakers,
       (delta) => {
@@ -275,6 +325,7 @@ export async function streamEpisodeAudio(
       writeSlice(res, fullChunk, chunkStart, rangeStart);
       pos = chunkStart + fullChunk.length;
     }
+    index++;
   }
 
   if (!res.destroyed && !res.writableEnded) res.end();

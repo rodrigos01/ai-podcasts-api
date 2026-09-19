@@ -39,9 +39,8 @@ export const episodeUpdateSchema = z.object({
 export const episodeProgressSchema = z.object({
   stage: z.enum([
     "kickoff",
-    "conversation",
-    "transcript",
     "producer_prompt",
+    "conversation",
     "chunking",
     "condensation",
     "done",

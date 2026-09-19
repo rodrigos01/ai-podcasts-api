@@ -9,7 +9,7 @@ import { getPodcast } from "../../data/podcast.repository";
 import { getSource } from "../../data/source.repository";
 import type { Person } from "../../schemas/person.schema";
 import { AgentSession } from "./agent";
-import { chunkTranscript } from "./chunker";
+import { chunkTranscript, sealedChunksSoFar } from "./chunker";
 import { condenseForAllHosts } from "./condensation.service";
 import { runConversation } from "./conversationLoop";
 import { generateBaseTtsPrompt } from "./producerPrompt.service";
@@ -36,6 +36,20 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget },
     });
 
+    // Generated from persona/podcast/episode metadata alone, before any
+    // conversation turn exists (see producerPrompt.service.ts) — this and
+    // the token budget it yields are what let chunk boundaries start
+    // sealing from turn 1 onward, instead of waiting for the whole
+    // transcript to exist first.
+    const ttsPrompt = await generateBaseTtsPrompt(podcast, episode, cast.speakers);
+    const basePromptTokens = await countTokens(ttsPrompt);
+
+    await patchEpisodeState(podcastId, episodeId, {
+      ttsPrompt,
+      ttsChunks: [],
+      progress: { stage: "producer_prompt", targetWordRange: wordTarget },
+    });
+
     const otherSpeakerName = (speakerId: string) =>
       cast.speakers.find((s) => s.id !== speakerId)?.name ?? "the other speaker";
 
@@ -60,37 +74,29 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       async ({ wordCount, transcript }) => {
         // Persisted after every turn (not just at the end) so a crash or
         // restart mid-conversation loses at most the in-flight turn, not
-        // the whole episode's progress.
+        // the whole episode's progress. Chunk boundaries are sealed
+        // incrementally in the same patch — sealedChunksSoFar drops the
+        // still-growing trailing chunk, so every chunk written here is
+        // final and safe for /stream to generate audio for immediately,
+        // even while the conversation is still going.
         await patchEpisodeState(podcastId, episodeId, {
           transcript,
+          ttsChunks: sealedChunksSoFar(transcript, basePromptTokens),
           progress: { stage: "conversation", currentWordCount: wordCount, targetWordRange: wordTarget },
         });
       },
     );
 
-    await patchEpisodeState(podcastId, episodeId, {
-      transcript: conversation.transcript,
-      progress: {
-        stage: "transcript",
-        currentWordCount: conversation.finalWordCount,
-        targetWordRange: wordTarget,
-      },
-    });
-
-    const speakerNames: [string, string] = [cast.speakers[0].name, cast.speakers[1].name];
-    const ttsPrompt = await generateBaseTtsPrompt(conversation.transcript, speakerNames);
-
-    await patchEpisodeState(podcastId, episodeId, {
-      ttsPrompt,
-      progress: { stage: "producer_prompt", targetWordRange: wordTarget },
-    });
-
-    const basePromptTokens = await countTokens(ttsPrompt);
     const ttsChunks = chunkTranscript(conversation.transcript, basePromptTokens);
 
     await patchEpisodeState(podcastId, episodeId, {
+      transcript: conversation.transcript,
       ttsChunks,
-      progress: { stage: "chunking", targetWordRange: wordTarget },
+      progress: {
+        stage: "chunking",
+        currentWordCount: conversation.finalWordCount,
+        targetWordRange: wordTarget,
+      },
     });
 
     const participatingHosts = hosts;

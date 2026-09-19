@@ -32,3 +32,10 @@ export const CHUNK_LOCK_TTL_MS = 5 * 60 * 1000;
 // How often a waiting instance re-checks whether the chunk it's waiting on
 // has been cached yet by whichever instance holds the lock.
 export const CHUNK_LOCK_POLL_INTERVAL_MS = 1_500;
+
+// How often /stream re-fetches the episode doc once it has caught up to
+// every chunk sealed so far but the episode is still generating (see
+// audio.service.ts) — distinct from CHUNK_LOCK_POLL_INTERVAL_MS, which polls
+// Storage for one specific chunk's cached bytes, not Firestore for new chunk
+// boundaries.
+export const EPISODE_CHUNK_POLL_INTERVAL_MS = 1_500;

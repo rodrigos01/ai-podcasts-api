@@ -109,3 +109,19 @@ export function chunkTranscript(transcript: string, basePromptTokens: number): T
 
   return chunks;
 }
+
+/**
+ * Re-chunks the transcript-so-far during generation, for callers that want
+ * to seal chunk boundaries incrementally instead of waiting for the whole
+ * conversation to finish. chunkTranscript's left-to-right greedy pass never
+ * revisits an earlier flush once it happens, so re-running it against a
+ * longer transcript always reproduces identical boundaries for every chunk
+ * except the last — that one is still "open" and may grow (or later split)
+ * as more turns are appended. Dropping it here means every chunk this
+ * returns is final and safe to hand to /stream immediately; the true last
+ * chunk only appears once the caller re-chunks with the finished transcript
+ * (a plain chunkTranscript call, once the conversation has actually ended).
+ */
+export function sealedChunksSoFar(transcript: string, basePromptTokens: number): TtsChunk[] {
+  return chunkTranscript(transcript, basePromptTokens).slice(0, -1);
+}
