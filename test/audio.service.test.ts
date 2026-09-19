@@ -9,8 +9,10 @@ import { getOggOpusDurationSeconds } from "../src/utils/oggOpus";
 // verified manually per this repo's testing philosophy (see AGENTS.md); what
 // we want covered here is streamEpisodeAudio's own control flow (which
 // chunks get fetched vs. generated, range/time-resume math, leader/follower
-// handling), exercised against a *real* ffmpeg remux so the WebM output is
-// genuinely validated, not just assumed.
+// handling), exercised against a *real* ffmpeg remux so the output is
+// genuinely validated, not just assumed — including that it's actually a
+// single, non-chained Ogg stream (the whole point of this remux — see
+// oggRemux.ts), not just "some bytes that start with OggS".
 const chunkStore = new Map<string, Buffer>();
 const completeStore = new Map<string, Buffer>();
 const chunkKey = (p: string, e: string, i: number) => `${p}:${e}:${i}`;
@@ -23,8 +25,8 @@ vi.mock("../src/storage/audioCache.repository", () => ({
   putCachedChunk: vi.fn(async (p: string, e: string, i: number, data: Buffer) => {
     chunkStore.set(chunkKey(p, e, i), data);
   }),
-  getCachedCompleteWebm: vi.fn(async (p: string, e: string) => completeStore.get(`${p}:${e}`) ?? null),
-  putCachedCompleteWebm: vi.fn(async (p: string, e: string, data: Buffer) => {
+  getCachedCompleteOgg: vi.fn(async (p: string, e: string) => completeStore.get(`${p}:${e}`) ?? null),
+  putCachedCompleteOgg: vi.fn(async (p: string, e: string, data: Buffer) => {
     completeStore.set(`${p}:${e}`, data);
   }),
 }));
@@ -52,8 +54,6 @@ vi.mock("../src/llm/geminiClient", () => ({
   ),
 }));
 
-const EBML_MAGIC = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
-
 function genOggOpus(frequency: number, durationSeconds: number): Buffer {
   const args = [
     "-hide_banner",
@@ -72,12 +72,38 @@ function genOggOpus(frequency: number, durationSeconds: number): Buffer {
   return execFileSync(ffmpeg.path, args, { maxBuffer: 1024 * 1024 * 32 });
 }
 
+/**
+ * Counts distinct logical Ogg streams (BOS pages / serial numbers) in a
+ * buffer — this is the actual bug this remux exists to fix: ExoPlayer's
+ * OggExtractor decodes a single logical stream fine but doesn't follow a
+ * "chained" bitstream (multiple BOS'd streams concatenated) past the first
+ * one. A correct response must always be exactly 1.
+ */
+function countLogicalOggStreams(data: Buffer): number {
+  const serials = new Set<number>();
+  let offset = 0;
+  for (;;) {
+    const idx = data.indexOf("OggS", offset, "ascii");
+    if (idx === -1) break;
+    const headerType = data[idx + 5];
+    if (headerType !== undefined && (headerType & 0x02) !== 0) {
+      serials.add(data.readUInt32LE(idx + 14));
+    }
+    offset = idx + 4;
+  }
+  return serials.size;
+}
+
 let chunkA: Buffer;
 let chunkB: Buffer;
 
 beforeAll(() => {
   chunkA = genOggOpus(440, 2);
   chunkB = genOggOpus(880, 2);
+  // Sanity-check the fixture itself is genuinely chained (2 independent
+  // logical streams) — otherwise countLogicalOggStreams' assertions below
+  // wouldn't actually be testing anything.
+  expect(countLogicalOggStreams(Buffer.concat([chunkA, chunkB]))).toBe(2);
 });
 
 afterEach(() => {
@@ -158,7 +184,7 @@ function makePodcast() {
 }
 
 describe("streamEpisodeAudio", () => {
-  it("generates missing chunks, relays valid WebM live, and finalizes complete.webm", async () => {
+  it("generates missing chunks, relays a single non-chained Ogg stream live, and finalizes complete.ogg", async () => {
     pendingChunks = [chunkA, chunkB];
     const episode = makeEpisode(2);
     const podcast = makePodcast();
@@ -169,19 +195,19 @@ describe("streamEpisodeAudio", () => {
       startTimeSeconds: null,
     });
 
-    expect(res.headers["Content-Type"]).toBe("audio/webm; codecs=opus");
+    expect(res.headers["Content-Type"]).toBe("audio/ogg");
     expect(res.statusCode).toBe(200);
-    expect(res.body().subarray(0, 4)).toEqual(EBML_MAGIC);
+    expect(countLogicalOggStreams(res.body())).toBe(1);
     // Both chunks were generated and cached under their own Ogg Opus keys.
     expect(chunkStore.get(chunkKey("p1", "ep1", 0))).toEqual(chunkA);
     expect(chunkStore.get(chunkKey("p1", "ep1", 1))).toEqual(chunkB);
 
     // Finalization is fire-and-forget after the response completes.
     await vi.waitFor(() => expect(completeStore.get("p1:ep1")).toBeDefined());
-    expect(completeStore.get("p1:ep1")!.subarray(0, 4)).toEqual(EBML_MAGIC);
+    expect(countLogicalOggStreams(completeStore.get("p1:ep1")!)).toBe(1);
   });
 
-  it("serves a fully-cached episode's complete.webm with exact byte-range slicing", async () => {
+  it("serves a fully-cached episode's complete.ogg with exact byte-range slicing", async () => {
     chunkStore.set(chunkKey("p1", "ep1", 0), chunkA);
     chunkStore.set(chunkKey("p1", "ep1", 1), chunkB);
     const episode = makeEpisode(2);
@@ -194,7 +220,7 @@ describe("streamEpisodeAudio", () => {
     });
     expect(full.statusCode).toBe(200);
     const fullBody = full.body();
-    expect(fullBody.subarray(0, 4)).toEqual(EBML_MAGIC);
+    expect(countLogicalOggStreams(fullBody)).toBe(1);
     expect(completeStore.get("p1:ep1")).toEqual(fullBody);
 
     const midpoint = Math.floor(fullBody.length / 2);
@@ -210,7 +236,7 @@ describe("streamEpisodeAudio", () => {
     expect(partial.body()).toEqual(fullBody.subarray(midpoint));
   });
 
-  it("resolves a ?t= resume on a cached episode to a fresh WebM starting at the requested chunk", async () => {
+  it("resolves a ?t= resume on a cached episode to a fresh single-stream Ogg starting at the requested chunk", async () => {
     chunkStore.set(chunkKey("p1", "ep1", 0), chunkA);
     chunkStore.set(chunkKey("p1", "ep1", 1), chunkB);
     const episode = makeEpisode(2);
@@ -225,13 +251,13 @@ describe("streamEpisodeAudio", () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.body();
-    expect(body.subarray(0, 4)).toEqual(EBML_MAGIC);
+    expect(countLogicalOggStreams(body)).toBe(1);
 
     // The resumed stream should be its own fresh, self-contained resource
     // covering only chunk 1's ~2s — not the full ~4s episode.
     const remuxedChunk1Only = execFileSync(
       ffmpeg.path,
-      ["-hide_banner", "-loglevel", "error", "-f", "ogg", "-i", "pipe:0", "-c:a", "copy", "-f", "webm", "pipe:1"],
+      ["-hide_banner", "-loglevel", "error", "-f", "ogg", "-i", "pipe:0", "-c:a", "copy", "-f", "ogg", "pipe:1"],
       { input: chunkB, maxBuffer: 1024 * 1024 * 32 },
     );
     expect(body.length).toBeLessThan(remuxedChunk1Only.length + 200);

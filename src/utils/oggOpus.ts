@@ -55,11 +55,12 @@ export function getOggOpusDurationSeconds(buffer: Buffer): number {
  * listener left off.
  *
  * Returns a chunk *index*, not a byte offset — since audio.service.ts
- * remuxes each per-chunk Ogg Opus buffer into WebM for delivery (see
- * webmRemux.ts), there's no meaningful byte-offset relationship between the
- * cached Ogg chunks and the WebM bytes actually sent to the client. Resuming
- * by time means starting a *fresh* WebM stream from this chunk's Ogg bytes
- * onward, not seeking within a previously-produced one.
+ * remuxes the per-chunk Ogg Opus buffers into a single non-chained stream
+ * for delivery (see oggRemux.ts), there's no fixed byte-offset relationship
+ * between the cached chunks and the remuxed bytes actually sent to the
+ * client (page/segment boundaries shift once repaged into one stream).
+ * Resuming by time means starting a *fresh* remuxed stream from this
+ * chunk's Ogg bytes onward, not seeking within a previously-produced one.
  */
 export async function resolveTimeToChunkIndex(
   startTimeSeconds: number,

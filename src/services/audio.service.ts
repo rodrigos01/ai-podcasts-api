@@ -3,9 +3,9 @@ import { streamSpeech } from "../llm/geminiClient";
 import {
   getCachedChunk,
   getCachedChunkSize,
-  getCachedCompleteWebm,
+  getCachedCompleteOgg,
   putCachedChunk,
-  putCachedCompleteWebm,
+  putCachedCompleteOgg,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
 import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
@@ -13,7 +13,7 @@ import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
 import { resolveTimeToChunkIndex } from "../utils/oggOpus";
-import { createOggToWebmRemuxer, remuxOggBufferToWebmFile } from "../utils/webmRemux";
+import { createChainedOggRemuxer, remuxChainedOggBuffer } from "../utils/oggRemux";
 import { HttpError } from "../utils/HttpError";
 
 function sleep(ms: number): Promise<void> {
@@ -146,10 +146,11 @@ function getOrStartChunkGeneration(
 
 /**
  * Remuxes cached Ogg Opus chunks [startIndex, endIndexExclusive) into one
- * WebM file — every chunk in the range must already be cached. Used both to
- * build an episode's canonical `complete.webm` artifact (the full range) and
- * to serve a `?t=` time-resume once an episode is fully cached (a suffix
- * range, remuxed fresh as its own standalone, from-the-start WebM stream).
+ * continuous, non-chained Ogg stream — every chunk in the range must
+ * already be cached. Used both to build an episode's canonical
+ * `complete.ogg` artifact (the full range) and to serve a `?t=` time-resume
+ * once an episode is fully cached (a suffix range, remuxed fresh as its own
+ * standalone, from-the-start Ogg stream).
  */
 async function remuxChunkRange(
   podcastId: string,
@@ -163,28 +164,29 @@ async function remuxChunkRange(
     if (!data) throw new Error(`Missing cached chunk ${index} while remuxing chunk range`);
     parts.push(data);
   }
-  return remuxOggBufferToWebmFile(Buffer.concat(parts));
+  return remuxChainedOggBuffer(Buffer.concat(parts));
 }
 
 /**
- * Returns the episode's canonical WebM artifact, building and persisting it
- * on first use. This is the file a later request (or, eventually, a CDN in
- * front of the bucket) serves directly — see audioCache.repository.ts.
+ * Returns the episode's canonical single-stream Ogg artifact, building and
+ * persisting it on first use. This is the file a later request (or,
+ * eventually, a CDN in front of the bucket) serves directly — see
+ * audioCache.repository.ts.
  */
-async function ensureCompleteWebm(
+async function ensureCompleteOgg(
   podcastId: string,
   episodeId: string,
   chunkCount: number,
 ): Promise<Buffer> {
-  const cached = await getCachedCompleteWebm(podcastId, episodeId);
+  const cached = await getCachedCompleteOgg(podcastId, episodeId);
   if (cached) return cached;
-  const webm = await remuxChunkRange(podcastId, episodeId, 0, chunkCount);
-  await putCachedCompleteWebm(podcastId, episodeId, webm);
-  return webm;
+  const ogg = await remuxChunkRange(podcastId, episodeId, 0, chunkCount);
+  await putCachedCompleteOgg(podcastId, episodeId, ogg);
+  return ogg;
 }
 
-/** Writes a 200/206 response for a single, fully-known WebM buffer, honoring an exact byte offset. */
-function sendWebmBuffer(res: Response, data: Buffer, rangeStart: number): void {
+/** Writes a 200/206 response for a single, fully-known Ogg buffer, honoring an exact byte offset. */
+function sendOggBuffer(res: Response, data: Buffer, rangeStart: number): void {
   if (rangeStart > 0 && rangeStart >= data.length) {
     throw new HttpError(416, "Range Not Satisfiable");
   }
@@ -200,13 +202,13 @@ function sendWebmBuffer(res: Response, data: Buffer, rangeStart: number): void {
 
 /**
  * Serves a fully-cached episode. A `Range` header (exact byte offset) is
- * served straight from the finished `complete.webm` buffer — this is why
- * that artifact is remuxed with a real Cues/SeekHead index (see
- * webmRemux.ts): standard byte-range slicing over it is enough for players
- * to seek precisely on their own. A `?t=` resume (no `Range` header) instead
- * remuxes just the requested chunk-boundary-onward suffix into its own
- * fresh, from-the-start WebM stream, matching the same chunk-boundary
- * precision `?t=` has always had.
+ * served straight from the finished `complete.ogg` buffer — Ogg has no
+ * separate seek index (unlike WebM's Cues), players bisect-search directly
+ * on page granule positions, so plain byte-range slicing over the finished
+ * artifact is enough for players to seek precisely on their own. A `?t=`
+ * resume (no `Range` header) instead remuxes just the requested
+ * chunk-boundary-onward suffix into its own fresh, from-the-start Ogg
+ * stream, matching the same chunk-boundary precision `?t=` has always had.
  */
 async function serveCachedEpisode(
   podcastId: string,
@@ -216,8 +218,8 @@ async function serveCachedEpisode(
   res: Response,
 ): Promise<void> {
   if (seek.rangeStart !== null) {
-    const webm = await ensureCompleteWebm(podcastId, episodeId, chunkCount);
-    sendWebmBuffer(res, webm, seek.rangeStart);
+    const ogg = await ensureCompleteOgg(podcastId, episodeId, chunkCount);
+    sendOggBuffer(res, ogg, seek.rangeStart);
     return;
   }
 
@@ -229,24 +231,25 @@ async function serveCachedEpisode(
       (index) => getCachedChunk(podcastId, episodeId, index),
     );
     if (startIndex > 0) {
-      const webm = await remuxChunkRange(podcastId, episodeId, startIndex, chunkCount);
-      sendWebmBuffer(res, webm, 0);
+      const ogg = await remuxChunkRange(podcastId, episodeId, startIndex, chunkCount);
+      sendOggBuffer(res, ogg, 0);
       return;
     }
   }
 
-  const webm = await ensureCompleteWebm(podcastId, episodeId, chunkCount);
-  sendWebmBuffer(res, webm, 0);
+  const ogg = await ensureCompleteOgg(podcastId, episodeId, chunkCount);
+  sendOggBuffer(res, ogg, 0);
 }
 
 /**
  * Relays a still-generating episode's audio live: feeds each chunk's Ogg
  * Opus bytes (cached or freshly generated) into one ffmpeg remux process
- * for the whole request, relaying its WebM output to the response as it's
- * produced — generating (and caching) any not-yet-cached chunk on demand,
- * same as before this remux step was introduced. specs.md's Audio Delivery
- * section calls for on-demand, listen-triggered generation streamed back to
- * the client, with scrubbing disallowed until every chunk exists.
+ * for the whole request, relaying its re-muxed, single-stream Ogg output to
+ * the response as it's produced — generating (and caching) any not-yet-
+ * cached chunk on demand, same as before this remux step was introduced.
+ * specs.md's Audio Delivery section calls for on-demand, listen-triggered
+ * generation streamed back to the client, with scrubbing disallowed until
+ * every chunk exists.
  *
  * A byte-exact `Range` resume isn't reproducible here without re-running the
  * whole remux from scratch and discarding leading output — not worth the
@@ -267,7 +270,7 @@ async function relayLiveAudio(
   res: Response,
 ): Promise<void> {
   const chunks = episode.ttsChunks;
-  const remuxer = createOggToWebmRemuxer();
+  const remuxer = createChainedOggRemuxer();
 
   let stopped = false;
   res.on("close", () => {
@@ -321,26 +324,32 @@ async function relayLiveAudio(
     // Every chunk now exists — best-effort finalize the CDN-ready artifact
     // for future requests. Failures here must never affect this response,
     // which has already completed successfully.
-    ensureCompleteWebm(podcastId, episodeId, chunks.length).catch((err) => {
-      console.error(`Failed to finalize complete.webm for ${podcastId}/${episodeId}:`, err);
+    ensureCompleteOgg(podcastId, episodeId, chunks.length).catch((err) => {
+      console.error(`Failed to finalize complete.ogg for ${podcastId}/${episodeId}:`, err);
     });
   }
 }
 
 /**
- * Streams an episode's audio as WebM/Opus, generating (and caching) any
- * not-yet-generated chunk on demand. Cloud TTS only gives us Ogg Opus (see
- * geminiClient.ts), which compresses well but plays back unreliably on
- * Android, especially progressively over HTTP — so every response here is
- * remuxed from the cached Ogg Opus chunks into WebM (container change only,
- * `-c:a copy`, no re-encode — see utils/webmRemux.ts) before being sent.
+ * Streams an episode's audio as Ogg Opus, generating (and caching) any
+ * not-yet-generated chunk on demand. Each cached chunk is its own
+ * independent logical Ogg stream (self-contained, own header/final page),
+ * so naively concatenating them — what this used to serve directly —
+ * produces a "chained" Ogg bitstream: spec-legal, but confirmed empirically
+ * that ExoPlayer's OggExtractor doesn't follow a chain past its first
+ * logical stream (it decodes the first chunk's Opus audio fine, then just
+ * stops). Every response here is instead re-muxed into a single, continuous
+ * logical stream (container-level repaging only, `-c:a copy`, no re-encode
+ * — see utils/oggRemux.ts) before being sent, so a client only ever sees
+ * one logical stream.
  *
  * - If every chunk is already cached: serveCachedEpisode serves the
- *   episode's finished `complete.webm` artifact (or a `?t=`-resumed suffix
+ *   episode's finished `complete.ogg` artifact (or a `?t=`-resumed suffix
  *   of it) as a normal, fully seekable static resource.
  * - Otherwise: relayLiveAudio serves `Transfer-Encoding: chunked` (no
  *   Content-Length, since the final size isn't known yet), live-remuxing
- *   each chunk's Ogg Opus bytes to WebM as they're generated.
+ *   each chunk's Ogg Opus bytes into the single output stream as they're
+ *   generated.
  */
 export async function streamEpisodeAudio(
   podcastId: string,
@@ -359,7 +368,7 @@ export async function streamEpisodeAudio(
   );
   const allCached = cachedSizes.every((size) => size !== null);
 
-  res.set("Content-Type", "audio/webm; codecs=opus");
+  res.set("Content-Type", "audio/ogg");
   res.set("Accept-Ranges", "bytes");
 
   if (allCached) {
