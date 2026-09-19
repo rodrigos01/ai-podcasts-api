@@ -45,7 +45,7 @@ export function getOggOpusDurationSeconds(buffer: Buffer): number {
 }
 
 /**
- * Resolves a saved playback position (seconds) into the byte offset of the
+ * Resolves a saved playback position (seconds) into the index of the
  * nearest chunk boundary at-or-before that time, walking cached chunks in
  * order and summing their real durations. Stops (and resumes generation
  * from there) at the first not-yet-cached chunk, same as the implicit
@@ -53,27 +53,32 @@ export function getOggOpusDurationSeconds(buffer: Buffer): number {
  * trades exact-second precision for correctness — a resumed stream starts
  * at most one chunk's length early, never skips ahead of where the
  * listener left off.
+ *
+ * Returns a chunk *index*, not a byte offset — since audio.service.ts
+ * remuxes the per-chunk Ogg Opus buffers into a single non-chained stream
+ * for delivery (see oggRemux.ts), there's no fixed byte-offset relationship
+ * between the cached chunks and the remuxed bytes actually sent to the
+ * client (page/segment boundaries shift once repaged into one stream).
+ * Resuming by time means starting a *fresh* remuxed stream from this
+ * chunk's Ogg bytes onward, not seeking within a previously-produced one.
  */
-export async function resolveTimeToByteOffset(
+export async function resolveTimeToChunkIndex(
   startTimeSeconds: number,
   chunkCount: number,
-  cachedSizeAt: (index: number) => number | null,
+  isCached: (index: number) => boolean,
   fetchCachedBytes: (index: number) => Promise<Buffer | null>,
 ): Promise<number> {
-  let byteOffset = 0;
   let elapsed = 0;
   for (let index = 0; index < chunkCount; index++) {
-    if (elapsed >= startTimeSeconds) return byteOffset;
-    const size = cachedSizeAt(index);
-    if (size === null) return byteOffset;
+    if (elapsed >= startTimeSeconds) return index;
+    if (!isCached(index)) return index;
     const bytes = await fetchCachedBytes(index);
-    if (!bytes) return byteOffset;
+    if (!bytes) return index;
     const duration = getOggOpusDurationSeconds(bytes);
     // The target time falls within this chunk — stop at its start rather
     // than consuming it, so resume never lands past where the listener was.
-    if (elapsed + duration > startTimeSeconds) return byteOffset;
+    if (elapsed + duration > startTimeSeconds) return index;
     elapsed += duration;
-    byteOffset += size;
   }
-  return byteOffset;
+  return chunkCount;
 }

@@ -3,11 +3,28 @@ import { storageBucket } from "../config/firebase";
 // Each chunk is a fully self-contained Ogg Opus stream (own header, own
 // final page) from one streamingSynthesize call — independently valid and
 // playable on its own. Concatenating several forms a "chained" Ogg
-// bitstream, which is a legitimate part of the Ogg spec and standard
-// players handle it; see utils/oggOpus.ts for how per-chunk duration is
-// recovered from that structure for time-based resume.
+// bitstream — spec-legal, but confirmed empirically that ExoPlayer's
+// OggExtractor doesn't follow a chain past its first logical stream, so
+// nothing serves these chunks concatenated raw to a client anymore (see
+// utils/oggRemux.ts, which collapses them into one logical stream first).
+// See utils/oggOpus.ts for how per-chunk duration is recovered from this
+// per-chunk structure for time-based resume.
 function chunkPath(podcastId: string, episodeId: string, chunkIndex: number): string {
   return `podcasts/${podcastId}/episodes/${episodeId}/audio/chunk-${chunkIndex}.opus`;
+}
+
+// The client-facing artifact: every chunk above remuxed (container-only, no
+// re-encode — see utils/oggRemux.ts) into one finished, non-chained Ogg
+// stream, built once a fully-cached episode's audio.service.ts caller
+// finalizes it. This is what /stream serves directly for a completed
+// episode, and what a CDN in front of this bucket would eventually point
+// at — the per-chunk cache above stays purely an internal generation-time
+// detail (each chunk is itself a separate logical Ogg stream, so naively
+// concatenating them — what /stream used to serve directly — produces a
+// "chained" bitstream that ExoPlayer's OggExtractor doesn't follow past the
+// first chunk; the remux collapses that into one logical stream instead).
+function completeOggPath(podcastId: string, episodeId: string): string {
+  return `podcasts/${podcastId}/episodes/${episodeId}/audio/complete.ogg`;
 }
 
 export async function getCachedChunk(
@@ -44,6 +61,26 @@ export async function putCachedChunk(
   data: Buffer,
 ): Promise<void> {
   const file = storageBucket.file(chunkPath(podcastId, episodeId, chunkIndex));
+  await file.save(data, { contentType: "audio/ogg" });
+}
+
+export async function getCachedCompleteOgg(
+  podcastId: string,
+  episodeId: string,
+): Promise<Buffer | null> {
+  const file = storageBucket.file(completeOggPath(podcastId, episodeId));
+  const [exists] = await file.exists();
+  if (!exists) return null;
+  const [contents] = await file.download();
+  return contents;
+}
+
+export async function putCachedCompleteOgg(
+  podcastId: string,
+  episodeId: string,
+  data: Buffer,
+): Promise<void> {
+  const file = storageBucket.file(completeOggPath(podcastId, episodeId));
   await file.save(data, { contentType: "audio/ogg" });
 }
 

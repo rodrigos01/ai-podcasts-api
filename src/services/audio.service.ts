@@ -3,14 +3,17 @@ import { streamSpeech } from "../llm/geminiClient";
 import {
   getCachedChunk,
   getCachedChunkSize,
+  getCachedCompleteOgg,
   putCachedChunk,
+  putCachedCompleteOgg,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
 import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
-import { resolveTimeToByteOffset } from "../utils/oggOpus";
+import { resolveTimeToChunkIndex } from "../utils/oggOpus";
+import { createChainedOggRemuxer, remuxChainedOggBuffer } from "../utils/oggRemux";
 import { HttpError } from "../utils/HttpError";
 
 function sleep(ms: number): Promise<void> {
@@ -141,36 +144,212 @@ function getOrStartChunkGeneration(
   return { promise, isLeader: true };
 }
 
-/** Writes `data` sliced from `rangeStart` (relative to `chunkStart`), if any of it is in range. */
-function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart: number): void {
-  if (res.destroyed || res.writableEnded) return;
-  if (rangeStart < chunkStart + data.length) {
-    res.write(data.subarray(Math.max(0, rangeStart - chunkStart)));
+/**
+ * Remuxes cached Ogg Opus chunks [startIndex, endIndexExclusive) into one
+ * continuous, non-chained Ogg stream — every chunk in the range must
+ * already be cached. Used both to build an episode's canonical
+ * `complete.ogg` artifact (the full range) and to serve a `?t=` time-resume
+ * once an episode is fully cached (a suffix range, remuxed fresh as its own
+ * standalone, from-the-start Ogg stream).
+ */
+async function remuxChunkRange(
+  podcastId: string,
+  episodeId: string,
+  startIndex: number,
+  endIndexExclusive: number,
+): Promise<Buffer> {
+  const parts: Buffer[] = [];
+  for (let index = startIndex; index < endIndexExclusive; index++) {
+    const data = await getCachedChunk(podcastId, episodeId, index);
+    if (!data) throw new Error(`Missing cached chunk ${index} while remuxing chunk range`);
+    parts.push(data);
+  }
+  return remuxChainedOggBuffer(Buffer.concat(parts));
+}
+
+/**
+ * Returns the episode's canonical single-stream Ogg artifact, building and
+ * persisting it on first use. This is the file a later request (or,
+ * eventually, a CDN in front of the bucket) serves directly — see
+ * audioCache.repository.ts.
+ */
+async function ensureCompleteOgg(
+  podcastId: string,
+  episodeId: string,
+  chunkCount: number,
+): Promise<Buffer> {
+  const cached = await getCachedCompleteOgg(podcastId, episodeId);
+  if (cached) return cached;
+  const ogg = await remuxChunkRange(podcastId, episodeId, 0, chunkCount);
+  await putCachedCompleteOgg(podcastId, episodeId, ogg);
+  return ogg;
+}
+
+/** Writes a 200/206 response for a single, fully-known Ogg buffer, honoring an exact byte offset. */
+function sendOggBuffer(res: Response, data: Buffer, rangeStart: number): void {
+  if (rangeStart > 0 && rangeStart >= data.length) {
+    throw new HttpError(416, "Range Not Satisfiable");
+  }
+  if (rangeStart > 0) {
+    res.status(206);
+    res.set("Content-Range", `bytes ${rangeStart}-${data.length - 1}/${data.length}`);
+  } else {
+    res.status(200);
+  }
+  res.set("Content-Length", String(data.length - rangeStart));
+  res.end(data.subarray(rangeStart));
+}
+
+/**
+ * Serves a fully-cached episode. A `Range` header (exact byte offset) is
+ * served straight from the finished `complete.ogg` buffer — Ogg has no
+ * separate seek index (unlike WebM's Cues), players bisect-search directly
+ * on page granule positions, so plain byte-range slicing over the finished
+ * artifact is enough for players to seek precisely on their own. A `?t=`
+ * resume (no `Range` header) instead remuxes just the requested
+ * chunk-boundary-onward suffix into its own fresh, from-the-start Ogg
+ * stream, matching the same chunk-boundary precision `?t=` has always had.
+ */
+async function serveCachedEpisode(
+  podcastId: string,
+  episodeId: string,
+  chunkCount: number,
+  seek: { rangeStart: number | null; startTimeSeconds: number | null },
+  res: Response,
+): Promise<void> {
+  if (seek.rangeStart !== null) {
+    const ogg = await ensureCompleteOgg(podcastId, episodeId, chunkCount);
+    sendOggBuffer(res, ogg, seek.rangeStart);
+    return;
+  }
+
+  if (seek.startTimeSeconds !== null) {
+    const startIndex = await resolveTimeToChunkIndex(
+      seek.startTimeSeconds,
+      chunkCount,
+      () => true,
+      (index) => getCachedChunk(podcastId, episodeId, index),
+    );
+    if (startIndex > 0) {
+      const ogg = await remuxChunkRange(podcastId, episodeId, startIndex, chunkCount);
+      sendOggBuffer(res, ogg, 0);
+      return;
+    }
+  }
+
+  const ogg = await ensureCompleteOgg(podcastId, episodeId, chunkCount);
+  sendOggBuffer(res, ogg, 0);
+}
+
+/**
+ * Relays a still-generating episode's audio live: feeds each chunk's Ogg
+ * Opus bytes (cached or freshly generated) into one ffmpeg remux process
+ * for the whole request, relaying its re-muxed, single-stream Ogg output to
+ * the response as it's produced — generating (and caching) any not-yet-
+ * cached chunk on demand, same as before this remux step was introduced.
+ * specs.md's Audio Delivery section calls for on-demand, listen-triggered
+ * generation streamed back to the client, with scrubbing disallowed until
+ * every chunk exists.
+ *
+ * A byte-exact `Range` resume isn't reproducible here without re-running the
+ * whole remux from scratch and discarding leading output — not worth the
+ * complexity for what's normally a short window before an episode finishes
+ * generating, so it's intentionally not supported while still-generating: a
+ * `Range` header is ignored and this always serves a full 200 response
+ * (spec-compliant — a server that won't honor a Range request serves the
+ * whole resource instead). `startIndex` (from `?t=`, resolved to the nearest
+ * chunk boundary by the caller) still restarts a fresh stream from there.
+ */
+async function relayLiveAudio(
+  podcastId: string,
+  episodeId: string,
+  episode: Episode & { ttsChunks: TtsChunk[]; transcript: string; ttsPrompt: string },
+  speakers: { speaker: string; voiceName: string }[],
+  cachedSizes: (number | null)[],
+  startIndex: number,
+  res: Response,
+): Promise<void> {
+  const chunks = episode.ttsChunks;
+  const remuxer = createChainedOggRemuxer();
+
+  let stopped = false;
+  res.on("close", () => {
+    stopped = true;
+    remuxer.destroy();
+  });
+  remuxer.stdout.on("data", (data: Buffer) => {
+    if (!res.destroyed && !res.writableEnded) res.write(data);
+  });
+
+  const feedDone = (async () => {
+    for (let index = startIndex; index < chunks.length && !stopped; index++) {
+      const chunk = chunks[index];
+      if (!chunk) continue;
+
+      if (cachedSizes[index] !== null) {
+        const data = await getCachedChunk(podcastId, episodeId, index);
+        if (data) remuxer.write(data);
+        continue;
+      }
+
+      const chunkText = getChunkText(episode.transcript, chunk);
+      const { promise, isLeader } = getOrStartChunkGeneration(
+        podcastId,
+        episodeId,
+        index,
+        episode.ttsPrompt,
+        chunkText,
+        speakers,
+        (delta) => remuxer.write(delta),
+      );
+
+      const fullChunk = await promise;
+      // Leader: progressive delivery already happened via the onDelta callback above.
+      // Follower: no progressive delivery occurred for us — write once, in full, when ready.
+      if (!isLeader) remuxer.write(fullChunk);
+    }
+    remuxer.end();
+  })();
+
+  try {
+    await feedDone;
+    await remuxer.done;
+  } catch (err) {
+    if (!stopped) throw err;
+  } finally {
+    if (!res.destroyed && !res.writableEnded) res.end();
+  }
+
+  if (!stopped && startIndex === 0) {
+    // Every chunk now exists — best-effort finalize the CDN-ready artifact
+    // for future requests. Failures here must never affect this response,
+    // which has already completed successfully.
+    ensureCompleteOgg(podcastId, episodeId, chunks.length).catch((err) => {
+      console.error(`Failed to finalize complete.ogg for ${podcastId}/${episodeId}:`, err);
+    });
   }
 }
 
 /**
- * Streams the concatenation of all of an episode's TTS chunks as one
- * continuous Ogg Opus resource, generating (and caching) any chunk on
- * demand the first time it's needed. specs.md's Audio Delivery section
- * calls for on-demand, listen-triggered generation streamed back to the
- * client, with scrubbing disallowed until every chunk exists — so:
+ * Streams an episode's audio as Ogg Opus, generating (and caching) any
+ * not-yet-generated chunk on demand. Each cached chunk is its own
+ * independent logical Ogg stream (self-contained, own header/final page),
+ * so naively concatenating them — what this used to serve directly —
+ * produces a "chained" Ogg bitstream: spec-legal, but confirmed empirically
+ * that ExoPlayer's OggExtractor doesn't follow a chain past its first
+ * logical stream (it decodes the first chunk's Opus audio fine, then just
+ * stops). Every response here is instead re-muxed into a single, continuous
+ * logical stream (container-level repaging only, `-c:a copy`, no re-encode
+ * — see utils/oggRemux.ts) before being sent, so a client only ever sees
+ * one logical stream.
  *
- * - If every chunk is already cached, we know the total length: serve a
- *   normal, fully seekable static resource (real Content-Length,
- *   Accept-Ranges, honors any Range request).
- * - Otherwise we don't know the final length, so we serve chunked-transfer
- *   (no Content-Length) starting from `rangeStart`, live-generating and
- *   caching whatever chunk(s) that offset falls into or beyond. A `Range`
- *   request into the *already-cached* prefix resumes precisely from there;
- *   one that reaches into ungenerated territory just continues generation
- *   from that chunk's start until enough bytes exist to satisfy it.
- *
- * `seek.rangeStart` (an exact byte offset, from a `Range` header) takes
- * priority; `seek.startTimeSeconds` (a saved playback position in seconds)
- * is resolved to the nearest chunk boundary at-or-before that time — see
- * utils/oggOpus.ts for why byte-exact time resume isn't possible anymore
- * now that chunks are compressed instead of raw PCM.
+ * - If every chunk is already cached: serveCachedEpisode serves the
+ *   episode's finished `complete.ogg` artifact (or a `?t=`-resumed suffix
+ *   of it) as a normal, fully seekable static resource.
+ * - Otherwise: relayLiveAudio serves `Transfer-Encoding: chunked` (no
+ *   Content-Length, since the final size isn't known yet), live-remuxing
+ *   each chunk's Ogg Opus bytes into the single output stream as they're
+ *   generated.
  */
 export async function streamEpisodeAudio(
   podcastId: string,
@@ -189,93 +368,24 @@ export async function streamEpisodeAudio(
   );
   const allCached = cachedSizes.every((size) => size !== null);
 
-  const rangeStart =
-    seek.rangeStart ??
-    (seek.startTimeSeconds !== null
-      ? await resolveTimeToByteOffset(
-          seek.startTimeSeconds,
-          chunks.length,
-          (index) => cachedSizes[index] ?? null,
-          (index) => getCachedChunk(podcastId, episodeId, index),
-        )
-      : 0);
-
   res.set("Content-Type", "audio/ogg");
   res.set("Accept-Ranges", "bytes");
 
   if (allCached) {
-    const totalLength = cachedSizes.reduce((sum, size) => sum + (size ?? 0), 0);
-
-    if (rangeStart >= totalLength) {
-      throw new HttpError(416, "Range Not Satisfiable");
-    }
-
-    if (rangeStart > 0) {
-      res.status(206);
-      res.set("Content-Range", `bytes ${rangeStart}-${totalLength - 1}/${totalLength}`);
-    } else {
-      res.status(200);
-    }
-    res.set("Content-Length", String(totalLength - rangeStart));
-
-    let pos = 0;
-    for (let index = 0; index < chunks.length; index++) {
-      const data = await getCachedChunk(podcastId, episodeId, index);
-      if (data) writeSlice(res, data, pos, rangeStart);
-      pos += data?.length ?? 0;
-    }
-    res.end();
+    await serveCachedEpisode(podcastId, episodeId, chunks.length, seek, res);
     return;
   }
 
+  const startIndex =
+    seek.startTimeSeconds !== null
+      ? await resolveTimeToChunkIndex(
+          seek.startTimeSeconds,
+          chunks.length,
+          (index) => cachedSizes[index] !== null,
+          (index) => getCachedChunk(podcastId, episodeId, index),
+        )
+      : 0;
+
   res.status(200);
-
-  let stopped = false;
-  res.on("close", () => {
-    stopped = true;
-  });
-
-  let pos = 0;
-  for (let index = 0; index < chunks.length && !stopped; index++) {
-    const chunk = chunks[index];
-    if (!chunk) continue;
-    const chunkStart = pos;
-    const cachedSize = cachedSizes[index];
-
-    if (cachedSize !== null) {
-      const data = await getCachedChunk(podcastId, episodeId, index);
-      if (data) writeSlice(res, data, chunkStart, rangeStart);
-      pos = chunkStart + (data?.length ?? 0);
-      continue;
-    }
-
-    const chunkText = getChunkText(episode.transcript, chunk);
-
-    let emittedInChunk = 0;
-    const { promise, isLeader } = getOrStartChunkGeneration(
-      podcastId,
-      episodeId,
-      index,
-      episode.ttsPrompt,
-      chunkText,
-      speakers,
-      (delta) => {
-        writeSlice(res, delta, chunkStart + emittedInChunk, rangeStart);
-        emittedInChunk += delta.length;
-      },
-    );
-
-    if (isLeader) {
-      // Progressive delivery already happened via the onDelta callback above.
-      const fullChunk = await promise;
-      pos = chunkStart + fullChunk.length;
-    } else {
-      // Follower: no progressive delivery occurred for us — write once, in full, when ready.
-      const fullChunk = await promise;
-      writeSlice(res, fullChunk, chunkStart, rangeStart);
-      pos = chunkStart + fullChunk.length;
-    }
-  }
-
-  if (!res.destroyed && !res.writableEnded) res.end();
+  await relayLiveAudio(podcastId, episodeId, episode, speakers, cachedSizes, startIndex, res);
 }
