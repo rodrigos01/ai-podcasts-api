@@ -176,7 +176,8 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart:
  *   prefix resumes precisely from there; one that reaches into ungenerated
  *   territory just continues generation from that chunk's start until
  *   enough bytes exist to satisfy it.
- * - While the episode is still generating (`status: "generating"`), chunk
+ * - While the episode is still in progress (`status: "generating"` before
+ *   any chunk is sealed, `"streamable"` once at least one is), chunk
  *   boundaries keep being sealed by the orchestrator as the conversation
  *   progresses (see chunker.ts's sealedChunksSoFar). Once this stream has
  *   generated audio for every chunk sealed so far, it re-fetches the
@@ -268,12 +269,14 @@ export async function streamEpisodeAudio(
   while (!stopped) {
     if (index >= chunks.length) {
       // Caught up to every chunk sealed as of our last look. If the episode
-      // is still generating, more chunk boundaries may land in Firestore as
-      // the conversation continues — poll for them instead of ending the
-      // stream early. "ready" here means we've genuinely reached the end
-      // (possibly the episode finished while we were mid-stream); "failed"
-      // means there's nothing more coming.
-      if (status !== "generating") break;
+      // is still in progress ("generating" — nothing sealed yet — or
+      // "streamable" — some chunks sealed, more turns still to come), more
+      // chunk boundaries may land in Firestore as the conversation
+      // continues — poll for them instead of ending the stream early.
+      // "ready" here means we've genuinely reached the end (possibly the
+      // episode finished while we were mid-stream); "failed" means there's
+      // nothing more coming.
+      if (status === "ready" || status === "failed") break;
       await sleep(EPISODE_CHUNK_POLL_INTERVAL_MS);
       const fresh = await getEpisode(podcastId, episodeId);
       if (!fresh) break;

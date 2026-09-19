@@ -78,10 +78,16 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
         // incrementally in the same patch — sealedChunksSoFar drops the
         // still-growing trailing chunk, so every chunk written here is
         // final and safe for /stream to generate audio for immediately,
-        // even while the conversation is still going.
+        // even while the conversation is still going. Once the first chunk
+        // seals, status flips to "streamable" so polling clients know
+        // /stream is usable without waiting for the whole episode — sealed
+        // chunk count only ever grows (see chunker.ts's sealedChunksSoFar),
+        // so this never needs to flip back.
+        const sealed = sealedChunksSoFar(transcript, basePromptTokens);
         await patchEpisodeState(podcastId, episodeId, {
           transcript,
-          ttsChunks: sealedChunksSoFar(transcript, basePromptTokens),
+          ttsChunks: sealed,
+          status: sealed.length > 0 ? "streamable" : "generating",
           progress: { stage: "conversation", currentWordCount: wordCount, targetWordRange: wordTarget },
         });
       },
