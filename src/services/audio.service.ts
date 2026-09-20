@@ -23,7 +23,7 @@ function sleep(ms: number): Promise<void> {
  * chunk that's a continuation of an oversized single turn won't itself
  * start with a "Name:" label, so we look backward for the nearest one.
  */
-function getChunkText(transcript: string, chunk: TtsChunk): string {
+export function getChunkText(transcript: string, chunk: TtsChunk): string {
   const raw = transcript.slice(chunk.startOffset, chunk.endOffset);
   if (SPEAKER_LABEL_RE.test(raw)) return raw;
 

@@ -14,9 +14,30 @@
 // the boundary for us. This must match what hostPersona.prompts.ts's
 // transcript-building and sceneDirector.prompts.ts's format instruction
 // actually produce — if you change the turn format, update this too.
-const NAME_PATTERN = "[A-Z][A-Za-z0-9 .'-]{0,59}";
-export const SPEAKER_LABEL_RE = new RegExp(`^(${NAME_PATTERN}):`);
-const SPEAKER_LABEL_GLOBAL_RE = new RegExp(`^(${NAME_PATTERN}):`, "gm");
+//
+// Unicode-aware (\p{Lu}/\p{L}, not A-Z/A-Za-z): a Person's `name`
+// (person.schema.ts) is unrestricted free text, so a real display name
+// with an accented or non-Latin letter (e.g. "María", "Renée") is
+// entirely plausible. An ASCII-only pattern silently fails to recognize
+// such a name as a label at all — getChunkText then treats her turn as an
+// unlabeled continuation of whichever speaker preceded her, backward-scans,
+// and prepends *their* label instead, so the previous speaker's voice
+// reads "María: <her actual line>" verbatim, literally leaking the label
+// into spoken audio while never using her own voice. Confirmed via
+// test/chunkPipeline.integration.test.ts's accented-name case before this
+// fix. All regex literals built from NAME_PATTERN need the "u" flag for
+// \p{} escapes to be treated as Unicode property classes rather than a
+// syntax error.
+//
+// Also includes typographic apostrophe/dash variants (U+2018/2019 curly
+// quotes, U+2013/2014 en/em dash) alongside the plain ASCII ' and - :
+// host/guest names aren't only user-typed — podcastOptionSchema.hosts and
+// episodeDraftSchema.guests (wizard.schema.ts) are themselves LLM-generated
+// drafts, and an LLM commonly emits curly quotes/dashes by default in a
+// stylized name like "D'Angelo", which the ASCII-only versions don't cover.
+const NAME_PATTERN = "[\\p{Lu}][\\p{L}\\p{N} .'‘’–—-]{0,59}";
+export const SPEAKER_LABEL_RE = new RegExp(`^(${NAME_PATTERN}):`, "u");
+const SPEAKER_LABEL_GLOBAL_RE = new RegExp(`^(${NAME_PATTERN}):`, "gmu");
 
 /**
  * Every distinct speaker labeled in a "Name: text" formatted script, in
@@ -40,7 +61,7 @@ export function extractSpeakerNames(script: string): string[] {
 
 /** The "Name:" prefix (including trailing whitespace) at the very start of `text`, if any. */
 export function matchLabelPrefix(text: string): string | null {
-  const match = text.match(new RegExp(`^${NAME_PATTERN}:\\s*`));
+  const match = text.match(new RegExp(`^${NAME_PATTERN}:\\s*`, "u"));
   return match ? match[0] : null;
 }
 
@@ -75,7 +96,7 @@ export interface ScriptTurn {
  */
 export function parseScriptTurns(script: string): ScriptTurn[] {
   const turns: ScriptTurn[] = [];
-  const re = new RegExp(`^(${NAME_PATTERN}):\\s*([\\s\\S]*)$`);
+  const re = new RegExp(`^(${NAME_PATTERN}):\\s*([\\s\\S]*)$`, "u");
   for (const part of script.split("\n\n")) {
     const match = part.match(re);
     if (match?.[1] !== undefined && match[2] !== undefined) {
