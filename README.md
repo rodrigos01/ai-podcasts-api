@@ -209,7 +209,7 @@ Episode length word/time targets:
 | `medium` | 6500-8000 | 40-50 min |
 | `long` | 8000-9000 | ~50-65 min |
 
-**Episode status lifecycle**: `generating` → `ready` (or `failed`, with `error` set). Poll `/status` (returns `{status, progress, error}`, where `progress` includes the current stage and running word count) rather than the full episode while waiting.
+**Episode status lifecycle**: `generating` → `streamable` → `ready` (or `failed`, with `error` set). `streamable` means at least one TTS chunk has been sealed and `/stream` will serve audio, even though the conversation may still be in progress — treat it the same as `ready` for "go ahead and play this," and only wait for `ready` specifically if you need the episode fully finished. Poll `/status` (returns `{status, progress, error, generatedAudioSeconds}`, where `progress` includes the current stage and running word count, and `generatedAudioSeconds` is the total audio duration generated/cached so far) rather than the full episode while waiting.
 
 ### Audio
 
@@ -220,7 +220,7 @@ Episode length word/time targets:
 This is a single audio resource for the whole episode (not per-chunk), designed to be pointed at directly by a standard `<audio>` element or a native mobile player:
 
 - **Once fully generated**: behaves like a normal static audio file — proper `Content-Length`, `Accept-Ranges: bytes`, full seek support via `Range` requests.
-- **While still generating**: served as `audio/ogg` (Ogg Opus) over `Transfer-Encoding: chunked` (no `Content-Length`, since the final size isn't known yet). Playback can start immediately and can be paused/resumed, but cannot be scrubbed ahead of what's actually been generated. A `Range: bytes=N-` request resumes precisely from `N` if that's already been generated; if not, it triggers generation of whatever's needed to reach it.
+- **While still generating**: served as `audio/ogg` (Ogg Opus) over `Transfer-Encoding: chunked` (no `Content-Length`, since the final size isn't known yet). Playback can start immediately and can be paused/resumed, but cannot be scrubbed ahead of what's actually been generated. A `Range: bytes=N-` request resumes precisely from `N` if that's already been generated; if not, it triggers generation of whatever's needed to reach it. `Episode.generatedAudioSeconds` (see `/status` above) tells a client how much audio currently exists, for building a "scrub within what's generated so far" UI — it's updated in Firestore as each chunk finishes, not computed on request.
 - Audio generation is genuinely on-demand — the first request for a given episode's stream is what triggers TTS synthesis (in chunks, cached from then on), not episode confirmation. Expect real latency the first time any given episode is streamed.
 
 **Resuming from a saved position**: pass `?t=<seconds>` to start the stream from a playback position your app already has (e.g. the user exited the player and came back) — `GET .../audio/stream?t=754.2`. The server resumes at the nearest generated-audio-chunk boundary at or before that time (not an exact byte offset — audio chunks are compressed, so a chunk's duration isn't known until it's been generated) — if a `Range` header is present on the same request, it takes precedence over `t`.
@@ -229,7 +229,7 @@ This is a single audio resource for the whole episode (not per-chunk), designed 
 
 - **Podcast**: `title`, `description`, `structure` (markdown), `hosts[]` (each with `id`, `name`, `voice`, `persona`).
 - **Source**: `title`, `contents` (extracted plain text), `sourceType`.
-- **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]`, `productionNotes`, `status`, `progress`, `transcript`, `ttsPrompt`, `ttsChunks[]` (internal chunk boundaries), `condensedSummaries` (per-host continuity notes carried into future episodes), `error`.
+- **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]`, `productionNotes`, `status`, `progress`, `transcript`, `ttsPrompt`, `ttsChunks[]` (internal chunk boundaries), `generatedAudioSeconds` (total audio duration generated so far), `condensedSummaries` (per-host continuity notes carried into future episodes), `error`.
 
 ## Known limitations
 
