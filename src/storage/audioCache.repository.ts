@@ -1,11 +1,16 @@
 import { storageBucket } from "../config/firebase";
 
-// Each chunk is a fully self-contained Ogg Opus stream (own header, own
-// final page) from one streamingSynthesize call — independently valid and
-// playable on its own. Concatenating several forms a "chained" Ogg
-// bitstream, which is a legitimate part of the Ogg spec and standard
-// players handle it; see utils/oggOpus.ts for how per-chunk duration is
-// recovered from that structure for time-based resume.
+// Each chunk starts as its own independent Ogg Opus stream from one
+// streamingSynthesize call, but audio.service.ts's oggStitch rewrite (see
+// utils/oggStitch.ts) patches it in place before it's ever cached here: a
+// shared serial number, continuous page sequence, and continuous granule
+// timeline, with duplicate OpusHead/OpusTags header pages dropped for every
+// chunk after the first. What's stored under each chunk's key is therefore
+// a *fragment* of one single continuous logical Ogg bitstream, not a
+// standalone playable file on its own — concatenating the cached chunks in
+// order reconstructs that one stream. See utils/oggOpus.ts for how a
+// chunk's own last page (now an absolute, not per-chunk-relative, position)
+// is used for time-based resume.
 function chunkPath(podcastId: string, episodeId: string, chunkIndex: number): string {
   return `podcasts/${podcastId}/episodes/${episodeId}/audio/chunk-${chunkIndex}.opus`;
 }

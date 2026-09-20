@@ -57,9 +57,12 @@ describe("getOggOpusDurationSeconds", () => {
 });
 
 describe("resolveTimeToByteOffset", () => {
-  const chunkDurations = [2, 2, 2]; // seconds
+  // Post-stitching, each cached chunk's own last-page granule is the
+  // absolute cumulative end time of the episode so far, not a per-chunk
+  // relative duration — these chunks each span 2s (ending at 2s, 4s, 6s).
+  const cumulativeEndSeconds = [2, 4, 6];
   const chunkSizes = [1000, 1000, 1000]; // bytes
-  const buffers = chunkDurations.map((seconds) => buildOggPage(48000n * BigInt(seconds), 0));
+  const buffers = cumulativeEndSeconds.map((seconds) => buildOggPage(48000n * BigInt(seconds), 0));
 
   function makeChunkAccessors(cachedCount: number) {
     const cachedSizeAt = (index: number) => (index < cachedCount ? chunkSizes[index] ?? null : null);

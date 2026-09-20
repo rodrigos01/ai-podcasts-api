@@ -12,6 +12,7 @@ import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
 import { resolveTimeToByteOffset } from "../utils/oggOpus";
+import { extractHeaderPages, OggPageAccumulator, OggStitcher } from "../utils/oggStitch";
 import { HttpError } from "../utils/HttpError";
 
 function sleep(ms: number): Promise<void> {
@@ -81,6 +82,24 @@ function chunkKey(podcastId: string, episodeId: string, index: number): string {
   return `${podcastId}:${episodeId}:${index}`;
 }
 
+/**
+ * Generates one chunk (or joins another instance's in-flight generation of
+ * it) and rewrites its Ogg pages in place via `stitcher` — dropping
+ * duplicate headers, unifying the serial number, and continuing the page
+ * sequence/granule timeline from wherever the episode's previous chunks
+ * left off — so what gets cached and relayed is always a fragment of one
+ * continuous logical Ogg bitstream, never a standalone chained chunk. See
+ * utils/oggStitch.ts.
+ *
+ * `onDelta`'s second argument marks a piece that's part of the episode's
+ * only OpusHead/OpusTags (always chunk 0) — callers must relay these
+ * unconditionally, even into a response that otherwise starts later.
+ *
+ * Whichever path this takes (real generation below, or the cross-instance
+ * cache-poll fallback), `stitcher`'s state is guaranteed correct by the
+ * time this returns, so a caller processing chunks strictly in order can
+ * always trust it for the next chunk.
+ */
 async function generateOrJoin(
   podcastId: string,
   episodeId: string,
@@ -88,17 +107,29 @@ async function generateOrJoin(
   directorPrompt: string,
   chunkText: string,
   speakers: { speaker: string; voiceName: string }[],
-  onDelta: (delta: Buffer) => void,
+  stitcher: OggStitcher,
+  isFirstChunk: boolean,
+  isLastChunk: boolean,
+  onDelta: (delta: Buffer, isHeader: boolean) => void,
 ): Promise<Buffer> {
   for (;;) {
     const acquired = await tryAcquireChunkLock(podcastId, episodeId, index);
     if (acquired) {
       try {
+        stitcher.startChunk();
+        const accumulator = new OggPageAccumulator();
         const parts: Buffer[] = [];
         await streamSpeech(directorPrompt, parseScriptTurns(chunkText), speakers, (delta) => {
-          parts.push(delta);
-          onDelta(delta);
+          for (const rawPage of accumulator.push(delta)) {
+            const rewritten = stitcher.processPage(rawPage, isFirstChunk, isLastChunk);
+            if (rewritten) {
+              parts.push(rewritten.page);
+              onDelta(rewritten.page, rewritten.isHeader);
+            }
+          }
         });
+        accumulator.assertDrained();
+        stitcher.endChunk();
         const full = Buffer.concat(parts);
         await putCachedChunk(podcastId, episodeId, index, full);
         return full;
@@ -111,10 +142,21 @@ async function generateOrJoin(
     // now — wait for it to land in the cache instead of duplicating the
     // (costly) TTS call ourselves. If that instance dies mid-generation,
     // its lock goes stale and a future iteration of tryAcquireChunkLock
-    // above will steal it and generate here instead.
+    // above will steal it and generate here instead. The cached bytes are
+    // already fully rewritten by whichever instance produced them, so we
+    // only need to catch our own stitcher up, not reprocess anything — but
+    // we do need to split out chunk 0's header so the caller can relay it
+    // unconditionally like it would for a live-generated page.
     const cached = await getCachedChunk(podcastId, episodeId, index);
     if (cached) {
-      onDelta(cached);
+      stitcher.deriveFromCachedBuffer(cached, isFirstChunk);
+      if (isFirstChunk) {
+        const header = extractHeaderPages(cached);
+        onDelta(header, true);
+        onDelta(cached.subarray(header.length), false);
+      } else {
+        onDelta(cached, false);
+      }
       return cached;
     }
     await sleep(CHUNK_LOCK_POLL_INTERVAL_MS);
@@ -128,7 +170,10 @@ function getOrStartChunkGeneration(
   directorPrompt: string,
   chunkText: string,
   speakers: { speaker: string; voiceName: string }[],
-  onDelta: (delta: Buffer) => void,
+  stitcher: OggStitcher,
+  isFirstChunk: boolean,
+  isLastChunk: boolean,
+  onDelta: (delta: Buffer, isHeader: boolean) => void,
 ): { promise: Promise<Buffer>; isLeader: boolean } {
   const key = chunkKey(podcastId, episodeId, index);
   const existing = inFlightGenerations.get(key);
@@ -143,6 +188,9 @@ function getOrStartChunkGeneration(
     directorPrompt,
     chunkText,
     speakers,
+    stitcher,
+    isFirstChunk,
+    isLastChunk,
     onDelta,
   );
 
@@ -151,12 +199,40 @@ function getOrStartChunkGeneration(
   return { promise, isLeader: true };
 }
 
-/** Writes `data` sliced from `rangeStart` (relative to `chunkStart`), if any of it is in range. */
-function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart: number): void {
+/** Writes `data` sliced from `start` (relative to `chunkStart`), if any of it is in range. */
+function writeSlice(res: Response, data: Buffer, chunkStart: number, start: number): void {
   if (res.destroyed || res.writableEnded) return;
-  if (rangeStart < chunkStart + data.length) {
-    res.write(data.subarray(Math.max(0, rangeStart - chunkStart)));
+  if (start < chunkStart + data.length) {
+    res.write(data.subarray(Math.max(0, start - chunkStart)));
   }
+}
+
+/**
+ * Writes an already-fully-rewritten whole chunk buffer, same as writeSlice,
+ * except when `mayNeedHeader` — chunk 0, and only when the caller has
+ * decided this response may legitimately start beyond it (a `?t=` resume,
+ * never a real Range header — see streamEpisodeAudio). In that case, its
+ * OpusHead/OpusTags pages are written unconditionally first, since they're
+ * the *only* copy anywhere in the episode: every later chunk's own copy was
+ * already dropped by the stitcher.
+ */
+function writeChunk(
+  res: Response,
+  data: Buffer,
+  chunkStart: number,
+  start: number,
+  mayNeedHeader: boolean,
+): void {
+  if (mayNeedHeader && start > chunkStart) {
+    const header = extractHeaderPages(data);
+    const headerEnd = chunkStart + header.length;
+    if (start < headerEnd) {
+      if (!res.destroyed && !res.writableEnded) res.write(header);
+      writeSlice(res, data, chunkStart, headerEnd);
+      return;
+    }
+  }
+  writeSlice(res, data, chunkStart, start);
 }
 
 /**
@@ -170,12 +246,18 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart:
  *   chunk is already cached, we know the total length: serve a normal,
  *   fully seekable static resource (real Content-Length, Accept-Ranges,
  *   honors any Range request).
- * - Otherwise we serve chunked-transfer (no Content-Length) starting from
- *   `rangeStart`, live-generating and caching whatever chunk(s) that offset
- *   falls into or beyond. A `Range` request into the *already-cached*
- *   prefix resumes precisely from there; one that reaches into ungenerated
- *   territory just continues generation from that chunk's start until
- *   enough bytes exist to satisfy it.
+ * - Otherwise we don't know the final length, so we serve chunked-transfer
+ *   (no Content-Length) starting from `rangeStart`, live-generating and
+ *   caching whatever chunk(s) that offset falls into or beyond. A `Range`
+ *   request into the *already-cached* prefix resumes precisely from there;
+ *   one that reaches into ungenerated territory just continues generation
+ *   from that chunk's start until enough bytes exist to satisfy it. A real
+ *   `Range` header can't be honored with a valid `206`/`Content-Range` in
+ *   this branch — that requires a concrete end position, which an
+ *   unfinished resource doesn't have — so a byte-Range resume request gets
+ *   the full body from byte 0 with a plain `200`, exactly what an HTTP
+ *   client expects when its Range request wasn't honored, and it
+ *   self-skips accordingly.
  * - While the episode is still in progress (`status: "generating"` before
  *   any chunk is sealed, `"streamable"` once at least one is), chunk
  *   boundaries keep being sealed by the orchestrator as the conversation
@@ -183,7 +265,28 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, rangeStart:
  *   generated audio for every chunk sealed so far, it re-fetches the
  *   episode doc and waits for more to appear instead of ending the
  *   response — so a listener who started playback early rides straight
- *   through into newly-generated audio without a second request.
+ *   through into newly-generated audio without a second request. Since a
+ *   chunk generated while the episode isn't yet `"ready"` can never be
+ *   trusted as the episode's true final chunk (sealing always holds back
+ *   the still-growing tail until generation completes), only a chunk
+ *   processed once `status` has already confirmed `"ready"` — meaning
+ *   `chunks` is now the complete, final list — gets its Ogg `EOS` page
+ *   preserved; every other chunk has it cleared, even if it's the last one
+ *   sealed *so far*.
+ *
+ * A real `Range` header is only ever sent by a client resuming a
+ * connection it already established from byte 0 earlier (a network retry,
+ * or a seek after the player already parsed the stream's format) — so it
+ * never needs the episode's header re-sent, and we never inject it there,
+ * in either branch, to avoid miscounting bytes relative to what that
+ * client already has. `?t=`'s resolved byte offset is different: it's
+ * designed to be the *first* request of a fresh session (e.g. reopening
+ * the app to resume a saved position), so if it lands past chunk 0 — the
+ * only chunk carrying the stream's OpusHead/OpusTags, since the stitcher
+ * drops every later chunk's copy — the header is injected unconditionally
+ * first. Without this, a client cold-starting via `?t=` into a later chunk
+ * would receive a stream with no header at all and could never identify
+ * its format.
  *
  * `seek.rangeStart` (an exact byte offset, from a `Range` header) takes
  * priority; `seek.startTimeSeconds` (a saved playback position in seconds)
@@ -214,6 +317,7 @@ export async function streamEpisodeAudio(
     chunks.map((_, index) => getCachedChunkSize(podcastId, episodeId, index)),
   );
 
+  const isByteRangeRequest = seek.rangeStart !== null;
   const rangeStart =
     seek.rangeStart ??
     (seek.startTimeSeconds !== null
@@ -239,24 +343,39 @@ export async function streamEpisodeAudio(
       throw new HttpError(416, "Range Not Satisfiable");
     }
 
-    if (rangeStart > 0) {
+    // Never inject the header for a real Range request — see the function
+    // doc comment above for why that would miscount bytes for a client
+    // resuming a connection it already parsed the format from.
+    const mayNeedHeader = !isByteRangeRequest;
+    const chunk0 = mayNeedHeader && rangeStart > 0 ? await getCachedChunk(podcastId, episodeId, 0) : null;
+    const injectedHeaderLength = chunk0 ? extractHeaderPages(chunk0).length : 0;
+    const effectiveStart = Math.max(rangeStart, injectedHeaderLength);
+
+    if (isByteRangeRequest && rangeStart > 0) {
       res.status(206);
       res.set("Content-Range", `bytes ${rangeStart}-${totalLength - 1}/${totalLength}`);
+      res.set("Content-Length", String(totalLength - rangeStart));
     } else {
       res.status(200);
+      res.set("Content-Length", String(injectedHeaderLength + (totalLength - effectiveStart)));
     }
-    res.set("Content-Length", String(totalLength - rangeStart));
 
     let pos = 0;
     for (let index = 0; index < chunks.length; index++) {
-      const data = await getCachedChunk(podcastId, episodeId, index);
-      if (data) writeSlice(res, data, pos, rangeStart);
+      const data = index === 0 && chunk0 ? chunk0 : await getCachedChunk(podcastId, episodeId, index);
+      if (data) writeChunk(res, data, pos, rangeStart, index === 0 && mayNeedHeader);
       pos += data?.length ?? 0;
     }
     res.end();
     return;
   }
 
+  // Total length is still unknown, so a real Range request can't be
+  // honored precisely (no valid Content-Range without a concrete end) —
+  // only skip the body forward when the skip came from `?t=`, not an
+  // actual Range header (this also means `bodyStart > 0` below can only
+  // happen for a `?t=` resume, never a real Range request).
+  const bodyStart = isByteRangeRequest ? 0 : rangeStart;
   res.status(200);
 
   let stopped = false;
@@ -264,6 +383,7 @@ export async function streamEpisodeAudio(
     stopped = true;
   });
 
+  const stitcher = new OggStitcher();
   let pos = 0;
   let index = 0;
   while (!stopped) {
@@ -293,10 +413,19 @@ export async function streamEpisodeAudio(
     }
     const chunkStart = pos;
     const cachedSize = await getCachedChunkSize(podcastId, episodeId, index);
+    const isFirstChunk = index === 0;
+    // Only trustworthy once `status` has already confirmed "ready" in a
+    // prior poll iteration — at that point `chunks` is the complete, final
+    // list, so this really is the episode's last chunk, not just the last
+    // one sealed so far. See the function doc comment above.
+    const isLastChunk = status === "ready" && index === chunks.length - 1;
 
     if (cachedSize !== null) {
       const data = await getCachedChunk(podcastId, episodeId, index);
-      if (data) writeSlice(res, data, chunkStart, rangeStart);
+      if (data) {
+        writeChunk(res, data, chunkStart, bodyStart, isFirstChunk);
+        stitcher.deriveFromCachedBuffer(data, isFirstChunk);
+      }
       pos = chunkStart + (data?.length ?? 0);
       index++;
       continue;
@@ -312,20 +441,31 @@ export async function streamEpisodeAudio(
       ttsPrompt,
       chunkText,
       speakers,
-      (delta) => {
-        writeSlice(res, delta, chunkStart + emittedInChunk, rangeStart);
+      stitcher,
+      isFirstChunk,
+      isLastChunk,
+      (delta, isHeader) => {
+        if (isHeader) {
+          if (!res.destroyed && !res.writableEnded) res.write(delta);
+        } else {
+          writeSlice(res, delta, chunkStart + emittedInChunk, bodyStart);
+        }
         emittedInChunk += delta.length;
       },
     );
 
     if (isLeader) {
-      // Progressive delivery already happened via the onDelta callback above.
+      // Progressive delivery already happened via the onDelta callback
+      // above, and generateOrJoin already brought `stitcher` up to date.
       const fullChunk = await promise;
       pos = chunkStart + fullChunk.length;
     } else {
-      // Follower: no progressive delivery occurred for us — write once, in full, when ready.
+      // Follower: no progressive delivery occurred for us, and our own
+      // `stitcher` instance never saw this chunk's pages — catch it up
+      // from the (already rewritten) shared result before relaying it.
       const fullChunk = await promise;
-      writeSlice(res, fullChunk, chunkStart, rangeStart);
+      writeChunk(res, fullChunk, chunkStart, bodyStart, isFirstChunk);
+      stitcher.deriveFromCachedBuffer(fullChunk, isFirstChunk);
       pos = chunkStart + fullChunk.length;
     }
     index++;
