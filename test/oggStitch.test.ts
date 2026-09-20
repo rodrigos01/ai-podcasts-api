@@ -206,6 +206,60 @@ describe("OggStitcher", () => {
     expect(out[0]!.granule).toBe(48000n + 96000n);
     expect(out[0]!.eos).toBe(true);
   });
+
+  // audio.service.ts skips a chunk whose TTS generation fails outright
+  // (e.g. a content-moderation false positive) rather than aborting the
+  // whole stream — it does this by calling startChunk()/endChunk() around
+  // the failed attempt with zero (or partial) processPage calls in
+  // between, exactly like a real attempt that failed before/during
+  // producing audio. These two tests simulate that directly, using the
+  // real class, to confirm the following chunk's timeline stays correct.
+  it("keeps the timeline correct when a chunk is skipped after contributing zero audio", () => {
+    const chunk0 = [opusHeadPage(111, 0), opusTagsPage(111, 1), audioPage(111, 2, 96000n)];
+    const chunk2 = [opusHeadPage(333, 0), opusTagsPage(333, 1), audioPage(333, 2, 48000n, true)];
+
+    const stitcher = new OggStitcher();
+    stitchChunk(stitcher, chunk0, true, false);
+
+    // Chunk 1 fails before any page ever arrives — exactly what
+    // audio.service.ts's catch block does: startChunk() already ran
+    // inside generateOrJoin before the failure, so just endChunk() with
+    // nothing processed in between.
+    stitcher.startChunk();
+    stitcher.endChunk();
+
+    const out = stitchChunk(stitcher, chunk2, false, true).flatMap(readPages);
+
+    // Chunk 2 continues from chunk 0's granule (96000) — the skipped
+    // chunk 1 contributed nothing, not a gap and not a rollback.
+    expect(out[0]!.granule).toBe(48000n + 96000n);
+    // Sequence continues gaplessly too — skipping a chunk doesn't skip
+    // sequence numbers, since chunk 1 simply never emitted any pages.
+    expect(out[0]!.sequence).toBe(3);
+    expect(out.at(-1)!.eos).toBe(true);
+  });
+
+  it("commits whatever partial audio a skipped chunk emitted before failing, not just zero", () => {
+    const chunk0 = [opusHeadPage(111, 0), opusTagsPage(111, 1), audioPage(111, 2, 96000n)];
+    const chunk2 = [opusHeadPage(333, 0), opusTagsPage(333, 1), audioPage(333, 2, 48000n, true)];
+
+    const stitcher = new OggStitcher();
+    stitchChunk(stitcher, chunk0, true, false);
+
+    // Chunk 1 emits one real audio page (already streamed to the client
+    // via onDelta) before failing partway through — that granule progress
+    // is irreversible (the client already has those bytes) and must be
+    // committed, not discarded, when the failure is caught.
+    stitcher.startChunk();
+    const rewritten = stitcher.processPage(audioPage(222, 2, 24000n), false, false);
+    expect(rewritten).not.toBeNull();
+    stitcher.endChunk();
+
+    const out = stitchChunk(stitcher, chunk2, false, true).flatMap(readPages);
+
+    // Continues from 96000 (chunk 0) + 24000 (chunk 1's partial progress).
+    expect(out[0]!.granule).toBe(48000n + 96000n + 24000n);
+  });
 });
 
 describe("OggPageAccumulator", () => {

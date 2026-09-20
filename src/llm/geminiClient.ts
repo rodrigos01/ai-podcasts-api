@@ -213,7 +213,25 @@ export async function streamSpeech(
         grpcStream.on("data", (response: { audioContent?: Uint8Array | Buffer | string | null }) => {
           if (!response.audioContent) return;
           receivedAnyAudio = true;
-          onChunk(Buffer.from(response.audioContent as Uint8Array));
+          // onChunk is caller-provided processing (page reassembly, Ogg
+          // stitching in audio.service.ts) running synchronously inside
+          // this gRPC event handler — outside the `new Promise` executor's
+          // own call stack, so a throw here would NOT be caught by the
+          // try/catch around it and would instead surface as a raw
+          // uncaught exception deep inside the transport's dispatch, well
+          // past any of our own error handling. Converting it into a
+          // normal rejection here is what actually makes a bad chunk
+          // recoverable instead of destabilizing (or crashing) the whole
+          // process — this was very likely the real mechanism behind
+          // "TTS errors crash the server," not Cloud TTS's own clean
+          // content-moderation error path (which already rejects cleanly
+          // via the "error" event below).
+          try {
+            onChunk(Buffer.from(response.audioContent as Uint8Array));
+          } catch (err) {
+            grpcStream.destroy?.();
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
         });
         grpcStream.on("error", (err: Error) => reject(err));
         grpcStream.on("end", () => resolve());

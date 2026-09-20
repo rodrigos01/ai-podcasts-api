@@ -461,19 +461,54 @@ export async function streamEpisodeAudio(
       },
     );
 
-    if (isLeader) {
-      // Progressive delivery already happened via the onDelta callback
-      // above, and generateOrJoin already brought `stitcher` up to date.
-      const fullChunk = await promise;
-      pos = chunkStart + fullChunk.length;
-    } else {
-      // Follower: no progressive delivery occurred for us, and our own
-      // `stitcher` instance never saw this chunk's pages — catch it up
-      // from the (already rewritten) shared result before relaying it.
-      const fullChunk = await promise;
-      writeChunk(res, fullChunk, chunkStart, bodyStart, isFirstChunk);
-      stitcher.deriveFromCachedBuffer(fullChunk, isFirstChunk);
-      pos = chunkStart + fullChunk.length;
+    try {
+      if (isLeader) {
+        // Progressive delivery already happened via the onDelta callback
+        // above, and generateOrJoin already brought `stitcher` up to date.
+        const fullChunk = await promise;
+        pos = chunkStart + fullChunk.length;
+      } else {
+        // Follower: no progressive delivery occurred for us, and our own
+        // `stitcher` instance never saw this chunk's pages — catch it up
+        // from the (already rewritten) shared result before relaying it.
+        const fullChunk = await promise;
+        writeChunk(res, fullChunk, chunkStart, bodyStart, isFirstChunk);
+        stitcher.deriveFromCachedBuffer(fullChunk, isFirstChunk);
+        pos = chunkStart + fullChunk.length;
+      }
+    } catch (err) {
+      // Cloud TTS occasionally rejects a chunk outright (most commonly a
+      // false-positive content-moderation block on some turn's text, per
+      // Gemini TTS's known behavior) — that must not take down the whole
+      // stream, or the whole server. Skip the chunk: nothing gets written
+      // for it (a small silent gap in the finished audio), and nothing
+      // gets cached, so a later request tries generating it fresh — worth
+      // it since a moderation false-positive isn't necessarily permanent
+      // and a transient failure genuinely might succeed on retry.
+      //
+      // Chunk 0 is the one exception: it's the only chunk carrying the
+      // episode's Ogg header (OpusHead/OpusTags) — every later chunk's own
+      // copy is dropped by the stitcher — so skipping it would produce a
+      // headerless, invalid stream with nothing to identify its format,
+      // not just a content gap. Surface the failure for this request
+      // instead of emitting broken audio; a later request still gets a
+      // fresh attempt at it, same as any other skipped chunk.
+      if (isFirstChunk) throw err;
+
+      console.error(
+        `Skipping podcast ${podcastId} episode ${episodeId} chunk ${index} after TTS failure (nothing written for it):`,
+        err,
+      );
+      if (isLeader) {
+        // generateOrJoin's own stitcher.endChunk() was never reached (the
+        // failure happened before it) — commit whatever partial granule
+        // progress this chunk made, if any, via processPage calls that
+        // already ran through onDelta before the failure, so the next
+        // chunk's timeline stays consistent with whatever was actually
+        // already written to this response.
+        stitcher.endChunk();
+      }
+      // pos is left at chunkStart — this chunk contributed nothing.
     }
     index++;
   }
