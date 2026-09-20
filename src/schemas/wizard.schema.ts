@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { episodeLengthSchema } from "./common.schema";
 import { personInputSchema } from "./person.schema";
 
 export const podcastOptionSchema = z.object({
@@ -37,6 +38,10 @@ export const episodeDraftSchema = z.object({
   topics: z.string().min(1),
   productionNotes: z.string().min(1),
   guests: z.array(personInputSchema).max(1),
+  // Purely a UI hint — the client pre-selects this length in its picker,
+  // but confirming the episode (episodeCreateSchema below) still requires
+  // an explicit `length`; this is never applied automatically server-side.
+  suggestedLength: episodeLengthSchema,
   predictedChanges: z.array(z.string().min(1)).length(3),
 });
 

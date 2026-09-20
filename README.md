@@ -181,10 +181,13 @@ Three ways to add a source, on the same endpoint:
   "draft": {
     "title": "...", "topics": "...", "productionNotes": "...",
     "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
+    "suggestedLength": "short",   // "short" | "medium" | "long" — a UI hint only, see below
     "predictedChanges": ["...", "...", "..."]
   }
 }
 ```
+
+`suggestedLength` is a pre-selection hint for the client's length picker, based on how much the source material/topics actually cover — it's advisory only. Confirming the episode (`POST .../episodes`) still requires an explicit `length`; nothing here is applied automatically.
 
 **`POST /podcasts/:podcastId/episodes`** (confirm)
 ```json
