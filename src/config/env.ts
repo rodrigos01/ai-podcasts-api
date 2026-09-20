@@ -7,7 +7,13 @@ dotenv.config({ quiet: true });
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
-  GEMINI_API_KEY: z.string().min(1, "GEMINI_API_KEY is required"),
+  // Text generation (geminiClient.ts) runs through the Vertex AI API using
+  // this project + location, authenticated the same way as Firebase Admin
+  // and Cloud TTS (service-account JSON locally, ADC when deployed) — no
+  // API key needed. The GCP project backing Firebase IS the Vertex AI
+  // project, so this deliberately reuses FIREBASE_PROJECT_ID rather than
+  // introducing a second project id.
+  VERTEX_AI_LOCATION: z.string().min(1).default("global"),
   FIREBASE_PROJECT_ID: z.string().min(1, "FIREBASE_PROJECT_ID is required"),
   // Local dev only — a downloaded service-account JSON key. Left unset in
   // any deployed environment (Cloud Run, Cloud Functions, GKE); firebase.ts

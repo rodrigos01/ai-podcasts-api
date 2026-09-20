@@ -15,12 +15,29 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 // import/require conditions, which trips up TS's Node16 module resolution
 // for a static `require`. A dynamic import sidesteps that entirely. Only
 // used for text generation now — TTS moved to @google-cloud/text-to-speech
-// (see streamSpeech), which is plain CommonJS and has a much cheaper cost
-// basis for the same underlying models.
+// (see streamSpeech), which is plain CommonJS.
+//
+// Routed through the Vertex AI API (`vertexai: true` + project/location),
+// not the API-key-based Generative Language API ("AI Studio") this client
+// used before 2026-09-20 — AI Studio bills through a separate, pre-paid
+// path, whereas Vertex bills the same GCP project (standard metered
+// billing) that Firebase Admin and Cloud TTS already use below, so this
+// reuses the same credentials resolution: the loaded service-account object
+// locally, Application Default Credentials (the runtime's attached service
+// account) in any deployed environment. The GCP project backing Firebase IS
+// the Vertex AI project (see env.ts), so no separate project id or API key
+// is needed — but the service account/runtime identity does need the
+// `roles/aiplatform.user` role for Vertex AI calls to succeed.
 function getClient(): Promise<GoogleGenAIClient> {
   if (!clientPromise) {
     clientPromise = import("@google/genai").then(
-      ({ GoogleGenAI }) => new GoogleGenAI({ apiKey: env.GEMINI_API_KEY }),
+      ({ GoogleGenAI }) =>
+        new GoogleGenAI({
+          vertexai: true,
+          project: env.FIREBASE_PROJECT_ID,
+          location: env.VERTEX_AI_LOCATION,
+          googleAuthOptions: serviceAccount ? { credentials: serviceAccount } : undefined,
+        }),
     );
   }
   return clientPromise;
@@ -179,11 +196,20 @@ export interface SpeakerVoice {
  */
 // Cloud TTS's speakerAlias is far stricter than our own speaker names:
 // "cannot contain whitespace or non-alphanumeric characters" (confirmed
-// empirically — rejects e.g. "Ray Sterling" outright). Real names
-// (host/guest/cast names) routinely contain spaces, apostrophes, etc., so
-// we sanitize into an alphanumeric-only alias for the wire format and map
-// back internally — callers (audio.service.ts, audiobookAudio.service.ts)
-// keep using real display names throughout and never see this constraint.
+// empirically — rejects e.g. "Ray Sterling" outright). Beyond that hard
+// requirement, Gemini TTS's own multi-speaker examples consistently use
+// short, single-word aliases (e.g. "Joe") — a sanitized-but-still-
+// multi-word alias like "DrEmilyChen" is legal but not what the model was
+// tuned on, and empirically hurts speaker attribution in longer multi-turn
+// scripts. Each speaker's assigned voice ID (Puck, Kore, ...) is already
+// exactly that: one simple word, and — since voice casting is prompted to
+// avoid collisions within a cast (podcastWizard/episodeWizard prompts) —
+// already unique per speaker in an episode. So we use the voice ID itself
+// as the wire-level alias instead of deriving one from the display name.
+// Callers (audio.service.ts, audiobookAudio.service.ts) keep using real
+// display names throughout and never see this. `sanitizeSpeakerAlias` below
+// is only a defensive fallback for a turn whose speaker isn't in the known
+// cast list (shouldn't happen, but shouldn't crash generation either).
 function sanitizeSpeakerAlias(name: string): string {
   const alias = name.replace(/[^A-Za-z0-9]/g, "");
   return alias || "Speaker";
@@ -195,7 +221,7 @@ export async function streamSpeech(
   speakers: SpeakerVoice[],
   onChunk: (chunk: Buffer) => void,
 ): Promise<void> {
-  const aliasByName = new Map(speakers.map((s) => [s.speaker, sanitizeSpeakerAlias(s.speaker)]));
+  const aliasByName = new Map(speakers.map((s) => [s.speaker, s.voiceName]));
   const aliasedTurns = turns.map((turn) => ({
     speaker: aliasByName.get(turn.speaker) ?? sanitizeSpeakerAlias(turn.speaker),
     text: turn.text,
@@ -243,7 +269,7 @@ export async function streamSpeech(
               modelName: TTS_MODEL,
               multiSpeakerVoiceConfig: {
                 speakerVoiceConfigs: speakers.map((s) => ({
-                  speakerAlias: aliasByName.get(s.speaker),
+                  speakerAlias: s.voiceName,
                   speakerId: s.voiceName,
                 })),
               },

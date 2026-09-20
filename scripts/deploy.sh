@@ -21,13 +21,15 @@ cd "$(dirname "$0")/.."
 #     ever used for manual local testing (minting ID tokens from a
 #     terminal), not by the running server.
 #
-# The remaining values (GEMINI_API_KEY, FIREBASE_WEB_API_KEY excluded
-# above, project id, storage bucket, Firestore database ids) are passed as
-# plain Cloud Run env vars for simplicity. That means they're visible to
-# anyone who can read this Cloud Run service's config (`gcloud run
-# services describe`) — fine for a personal project, but if that ever
-# matters, move GEMINI_API_KEY to Secret Manager and use
-# `--set-secrets` instead of putting it in the env file below.
+# The remaining values (FIREBASE_WEB_API_KEY excluded above, project id,
+# storage bucket, Firestore database ids) are passed as plain Cloud Run env
+# vars for simplicity. That means they're visible to anyone who can read
+# this Cloud Run service's config (`gcloud run services describe`) — fine
+# for a personal project. Text generation and TTS both authenticate via
+# Application Default Credentials (the runtime's attached service account)
+# rather than an API key, so there's no secret env var to move to Secret
+# Manager here — but that service account does need the
+# `roles/aiplatform.user` role for Vertex AI (text generation) to work.
 
 ENV_FILE=".env"
 SERVICE_NAME="${SERVICE_NAME:-ai-podcast-api}"
@@ -37,7 +39,7 @@ SERVICE_NAME="${SERVICE_NAME:-ai-podcast-api}"
 # override with REGION= if you want somewhere else.
 REGION="${REGION:-us-central1}"
 EXCLUDED_KEYS="PORT FIREBASE_SERVICE_ACCOUNT_PATH FIREBASE_WEB_API_KEY"
-REQUIRED_KEYS="GEMINI_API_KEY FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET"
+REQUIRED_KEYS="FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "No $ENV_FILE found in $(pwd) — nothing to deploy from." >&2

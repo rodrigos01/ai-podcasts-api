@@ -16,7 +16,7 @@ Product behavior is fully described in [specs.md](specs.md); this document cover
 
 - Node 20+, TypeScript, Express
 - Firebase Firestore (a **named database**, not the default one — see Setup) + Firebase Storage, via `firebase-admin`
-- Google Gemini `gemini-3.8-flash` for text (via `@google/genai`) and `gemini-3.1-flash-tts-preview` for speech (via `@google-cloud/text-to-speech`'s `streamingSynthesize`, for real incremental audio streaming at a much cheaper cost basis than the same model through `@google/genai`'s Interactions API)
+- Google Gemini `gemini-3.8-flash` for text (via `@google/genai`, routed through the **Vertex AI API** — not an API key) and `gemini-3.1-flash-tts-preview` for speech (via `@google-cloud/text-to-speech`'s `streamingSynthesize`, for real incremental audio streaming — and it's the one place that stays off Vertex AI's `generateContent`, since that path only returns raw PCM with no OGG_OPUS option)
 - zod for request validation and for validating every piece of LLM-generated JSON before it's trusted
 - vitest for unit tests
 
@@ -38,21 +38,25 @@ You need a Firebase/GCP project with:
     "https://firebasestorage.googleapis.com/v1beta/projects/<your-project>/buckets/<your-bucket>:addFirebase"
   ```
 - A **service account key** (JSON), for local dev only — see Environment below. In any deployed environment (Cloud Run, etc.) this is omitted entirely and the app uses Application Default Credentials via the runtime's own attached service account instead.
+- The **Vertex AI API enabled**, and the service account (local key or the deployed runtime's own attached one) granted the `roles/aiplatform.user` role — needed for text generation, which runs through Vertex AI rather than an API key:
+  ```bash
+  gcloud services enable aiplatform.googleapis.com --project <your-project>
+  ```
 
 ### 2. Environment
 
 Create a `.env` file (never commit it):
 
 ```bash
-GEMINI_API_KEY=...
 FIREBASE_PROJECT_ID=...
 FIREBASE_SERVICE_ACCOUNT_PATH=./path-to-service-account.json
 FIREBASE_STORAGE_BUCKET=your-bucket-name
 FIRESTORE_DATABASE_ID=podcasts
+VERTEX_AI_LOCATION=global
 PORT=3000
 ```
 
-`FIREBASE_SERVICE_ACCOUNT_PATH` is optional — set it for local dev (pointing at a downloaded service-account JSON key); leave it unset in any deployed environment.
+`FIREBASE_SERVICE_ACCOUNT_PATH` is optional — set it for local dev (pointing at a downloaded service-account JSON key); leave it unset in any deployed environment. `VERTEX_AI_LOCATION` is also optional (defaults to `global`). `FIREBASE_PROJECT_ID` doubles as the Vertex AI project — Firebase projects are GCP projects, and text generation runs against this same project.
 
 ### 3. Install & run
 
