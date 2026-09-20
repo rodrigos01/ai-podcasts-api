@@ -27,6 +27,7 @@ export async function createEpisode(
     transcript: null,
     ttsPrompt: null,
     ttsChunks: null,
+    generatedAudioSeconds: 0,
     condensedSummaries: null,
     error: null,
     createdAt: now,
@@ -97,4 +98,28 @@ export async function patchEpisodeState(
   patch: Partial<Episode>,
 ): Promise<void> {
   await episodesCollection(podcastId).doc(episodeId).update({ ...patch, updatedAt: Date.now() });
+}
+
+/**
+ * Advances `generatedAudioSeconds` to `seconds`, but never backward. Chunk
+ * generation is causally ordered (a chunk is never generated until the one
+ * before it is already cached — see audio.service.ts's streamEpisodeAudio),
+ * so out-of-order writes shouldn't happen in practice; the transaction is a
+ * cheap guarantee against it anyway (e.g. a delayed retry landing after a
+ * later chunk's write) rather than a load-bearing assumption.
+ */
+export async function bumpGeneratedAudioSeconds(
+  podcastId: string,
+  episodeId: string,
+  seconds: number,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const current = (snap.data()?.generatedAudioSeconds as number | undefined) ?? 0;
+    if (seconds > current) {
+      tx.update(ref, { generatedAudioSeconds: seconds, updatedAt: Date.now() });
+    }
+  });
 }

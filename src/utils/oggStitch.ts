@@ -15,6 +15,8 @@
 // re-encoding — only fixed-width header fields are patched and the page's
 // CRC-32 is recomputed, so the underlying Opus audio is untouched.
 
+import { OPUS_GRANULE_RATE } from "./oggOpus";
+
 const CAPTURE_PATTERN = "OggS";
 const OPUS_HEAD_MAGIC = Buffer.from("OpusHead", "ascii");
 const OPUS_TAGS_MAGIC = Buffer.from("OpusTags", "ascii");
@@ -157,6 +159,16 @@ export class OggStitcher {
   endChunk(): void {
     this.cumulativeGranule += this.chunkMaxGranule;
     this.chunkMaxGranule = 0n;
+  }
+
+  /**
+   * The episode's total audio duration generated so far, in seconds —
+   * accurate as of the last completed `endChunk()`/`deriveFromCachedBuffer`
+   * call. Used to persist `Episode.generatedAudioSeconds` after each chunk
+   * actually finishes generating (see audio.service.ts).
+   */
+  getCumulativeSeconds(): number {
+    return Number(this.cumulativeGranule) / OPUS_GRANULE_RATE;
   }
 
   /**

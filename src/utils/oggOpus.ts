@@ -14,7 +14,9 @@
 const CAPTURE_PATTERN = "OggS";
 // Ogg Opus granule positions are always expressed in units of 1/48000s —
 // fixed by the Opus spec, independent of the stream's actual sample rate.
-const OPUS_GRANULE_RATE = 48000;
+// Exported so oggStitch.ts's running cumulative-duration tracking uses the
+// exact same rate rather than a second copy of this spec-fixed constant.
+export const OPUS_GRANULE_RATE = 48000;
 
 /**
  * Parses the last Ogg page in a buffer and returns the time in seconds

@@ -76,6 +76,13 @@ export const episodeSchema = z.object({
   transcript: z.string().nullable(),
   ttsPrompt: z.string().nullable(),
   ttsChunks: z.array(ttsChunkSchema).nullable(),
+  // Total audio duration generated and cached so far, in seconds — updated
+  // in Firestore once per chunk as it finishes generating (audio.service.ts),
+  // not computed at request time, so polling clients (GET .../status) can
+  // build a "how far can I scrub" UI without probing GCS themselves. Reads
+  // of episodes created before this field existed get `undefined` here
+  // (Firestore is schemaless and this isn't backfilled) — treat as 0.
+  generatedAudioSeconds: z.number().nonnegative(),
   condensedSummaries: z.record(z.string(), z.string()).nullable(),
   error: z.string().nullable(),
   createdAt: z.number(),

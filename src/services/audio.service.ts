@@ -6,7 +6,7 @@ import {
   putCachedChunk,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
-import { getEpisode } from "../data/episode.repository";
+import { bumpGeneratedAudioSeconds, getEpisode } from "../data/episode.repository";
 import { CHUNK_LOCK_POLL_INTERVAL_MS, EPISODE_CHUNK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
@@ -99,6 +99,12 @@ function chunkKey(podcastId: string, episodeId: string, index: number): string {
  * cache-poll fallback), `stitcher`'s state is guaranteed correct by the
  * time this returns, so a caller processing chunks strictly in order can
  * always trust it for the next chunk.
+ *
+ * Only the real-generation path persists `Episode.generatedAudioSeconds`
+ * (via bumpGeneratedAudioSeconds) — the cache-poll fallback relays a chunk
+ * some other instance already generated and accounted for, and callers
+ * relaying an already-cached chunk from streamEpisodeAudio's main loop
+ * never call this function at all for it.
  */
 async function generateOrJoin(
   podcastId: string,
@@ -132,6 +138,7 @@ async function generateOrJoin(
         stitcher.endChunk();
         const full = Buffer.concat(parts);
         await putCachedChunk(podcastId, episodeId, index, full);
+        await bumpGeneratedAudioSeconds(podcastId, episodeId, stitcher.getCumulativeSeconds());
         return full;
       } finally {
         await releaseChunkLock(podcastId, episodeId, index);

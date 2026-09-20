@@ -71,7 +71,14 @@ export async function status(req: Request, res: Response) {
   await requireOwnedPodcast(podcastId, requireUserId(req));
   const episode = await getEpisode(podcastId, requireParam(req.params, "episodeId"));
   if (!episode) throw HttpError.notFound("Episode not found");
-  res.json({ status: episode.status, progress: episode.progress, error: episode.error });
+  res.json({
+    status: episode.status,
+    progress: episode.progress,
+    error: episode.error,
+    // Undefined for an episode created before this field existed (no
+    // backfill) — coalesce so polling clients always get a usable number.
+    generatedAudioSeconds: episode.generatedAudioSeconds ?? 0,
+  });
 }
 
 export async function update(req: Request, res: Response) {
