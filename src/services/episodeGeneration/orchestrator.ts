@@ -13,6 +13,7 @@ import { chunkTranscript, sealedChunksSoFar } from "./chunker";
 import { condenseForAllHosts } from "./condensation.service";
 import { runConversation } from "./conversationLoop";
 import { generateBaseTtsPrompt } from "./producerPrompt.service";
+import { assignSources } from "./sourceAssignment.service";
 import { selectCast, type Speaker } from "./speakerSelection";
 
 export async function runEpisodeGeneration(podcastId: string, episodeId: string): Promise<void> {
@@ -40,8 +41,13 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // conversation turn exists (see producerPrompt.service.ts) — this and
     // the token budget it yields are what let chunk boundaries start
     // sealing from turn 1 onward, instead of waiting for the whole
-    // transcript to exist first.
-    const ttsPrompt = await generateBaseTtsPrompt(podcast, episode, cast.speakers);
+    // transcript to exist first. Run alongside source assignment (also
+    // metadata-only, no transcript needed) rather than sequentially —
+    // neither depends on the other.
+    const [ttsPrompt, sourcesBySpeakerId] = await Promise.all([
+      generateBaseTtsPrompt(podcast, episode, cast.speakers),
+      assignSources(cast.speakers, episode, sources),
+    ]);
     const basePromptTokens = await countTokens(ttsPrompt);
 
     await patchEpisodeState(podcastId, episodeId, {
@@ -61,7 +67,8 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       agentsBySpeakerId[speaker.id] = new AgentSession(speaker, {
         podcast,
         episode,
-        sources,
+        sources: sourcesBySpeakerId.get(speaker.id) ?? [],
+        episodeHasSources: sources.length > 0,
         otherSpeakerName: otherSpeakerName(speaker.id),
         condensedHistory: condensedHistory.length > 0 ? condensedHistory.join("\n\n") : undefined,
       });

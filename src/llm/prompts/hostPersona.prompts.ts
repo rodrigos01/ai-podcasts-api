@@ -6,15 +6,26 @@ import type { Speaker } from "../../services/episodeGeneration/speakerSelection"
 export interface AgentContext {
   podcast: Podcast;
   episode: Episode;
+  /** This speaker's own assigned subset — see sourceAssignment.service.ts. May be empty even when the episode has sources. */
   sources: Source[];
+  /** Whether the episode has *any* source material at all, regardless of what this speaker was assigned. Distinguishes "nothing exists" from "nothing was assigned to you" in the rendered block below. */
+  episodeHasSources: boolean;
   otherSpeakerName: string;
   /** Only ever populated for hosts — condensed continuity from past episodes they were in. */
   condensedHistory?: string;
 }
 
-function sourceBlock(sources: Source[]): string {
-  if (sources.length === 0) return "(no source material was provided for this episode)";
-  return sources.map((s) => `### ${s.title}\n${s.contents}`).join("\n\n");
+function sourceBlock(sources: Source[], episodeHasSources: boolean): string {
+  if (sources.length > 0) {
+    return sources.map((s) => `### ${s.title}\n${s.contents}`).join("\n\n");
+  }
+  // Not the same situation: one means nothing to know episode-wide, the
+  // other means the other speaker has material you personally don't — the
+  // agent needs to know which, so it doesn't act like the episode has zero
+  // background just because *its own* share of it happens to be empty.
+  return episodeHasSources
+    ? "(none — for this episode, any source material that was provided went to your co-host/guest instead, not you)"
+    : "(no source material was provided for this episode)";
 }
 
 /**
@@ -46,7 +57,7 @@ This episode's topics: ${ctx.episode.topics}
 Production notes for this episode: ${ctx.episode.productionNotes}
 
 Pre-production source material for this episode:
-${sourceBlock(ctx.sources)}${historyBlock}
+${sourceBlock(ctx.sources, ctx.episodeHasSources)}${historyBlock}
 
 You are speaking with ${ctx.otherSpeakerName}. You only know what's in your persona, the material above, \
 and whatever has actually been said aloud so far in this conversation — you do NOT know what the other \
@@ -62,7 +73,12 @@ it should be the exception, not the default.
 
 When you write your line, you may include short bracketed delivery cues inline (e.g. [laughs], \
 [thoughtful pause], [sighs], [excitedly]) where they help a text-to-speech performer read the line \
-naturally — but don't overuse them.`;
+naturally — but don't overuse them.
+
+Never start a new paragraph with a word or short phrase immediately followed by a colon, like "Watch \
+this: ..." or "Funny thing: ...". Our system reads anything shaped like "Word:" at the start of a \
+paragraph as a change of speaker, and it will scramble the recording. If you want that kind of framing, \
+phrase it without the colon instead (e.g. "Watch this —" or "Funny thing, actually,").`;
 }
 
 // A per-turn call used to request structured JSON ({speech, endEpisode}) —

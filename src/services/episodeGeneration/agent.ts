@@ -14,14 +14,30 @@ export interface AgentTurn {
 }
 
 /**
+ * A turn's own text must never contain a blank-line paragraph break —
+ * transcriptBuilder.ts joins turns with "\n\n", and every downstream
+ * consumer (chunker.ts, scriptText.ts's parseScriptTurns) re-splits the
+ * transcript on that exact separator to find turn boundaries. If a single
+ * turn's text had an internal "\n\n" whose next paragraph happened to start
+ * with something shaped like "Word:" (a plausible way to open a sentence —
+ * "Watch this: ..."), it would be misread as a brand new speaker label,
+ * scrambling voice attribution. The prompt asks the model not to do this,
+ * but instructions aren't guarantees — collapsing internal paragraph
+ * breaks here makes the invariant hold regardless of compliance.
+ */
+function sanitizeSpeech(text: string): string {
+  return text.replace(/\n{2,}/g, " ").trim();
+}
+
+/**
  * `rawText` is plain dialogue, optionally followed by a trailing
  * END_EPISODE_MARKER line (see hostPersona.prompts.ts). Not a zod schema
  * anymore — there's no JSON to validate, just a marker to strip.
  */
-function parseAgentTurn(rawText: string): AgentTurn {
+export function parseAgentTurn(rawText: string): AgentTurn {
   const markerIndex = rawText.lastIndexOf(END_EPISODE_MARKER);
   const endEpisode = markerIndex !== -1;
-  const speech = (endEpisode ? rawText.slice(0, markerIndex) : rawText).trim();
+  const speech = sanitizeSpeech(endEpisode ? rawText.slice(0, markerIndex) : rawText);
   if (!speech) {
     throw new Error("Gemini returned an empty turn");
   }
@@ -44,8 +60,8 @@ export class AgentSession {
       prompt: buildKickoffTurnPrompt(wordTarget),
     });
     // The kickoff prompt never offers the end-episode marker (opening turn
-    // can't end the episode) — no marker-stripping needed, just trim.
-    const speech = text.trim();
+    // can't end the episode) — no marker-stripping needed.
+    const speech = sanitizeSpeech(text);
     if (!speech) throw new Error("Gemini returned an empty turn");
     return { speech, endEpisode: false };
   }
