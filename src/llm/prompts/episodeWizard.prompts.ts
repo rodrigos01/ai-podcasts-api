@@ -12,7 +12,7 @@ Podcast description: ${podcast.description}
 Podcast structure:
 ${podcast.structure}
 
-Fixed hosts on this show: ${podcast.hosts.map((h) => `${h.name} (${h.persona})`).join("; ")}
+Fixed hosts on this show, with their assigned voices: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice})`).join("; ")}
 
 Given pre-production source material and an optional user prompt for a specific episode, you draft that \
 episode's title, topics, production notes (directional guidance for how the hosts should run this \
@@ -21,7 +21,9 @@ character with a life-like persona relevant to the topics. Not every episode nee
 one if it clearly fits.
 
 If you include a guest, their "voice" field must be exactly one of these IDs (pick the best natural \
-gender/trait match for the persona): ${voiceCatalog}.`;
+gender/trait match for the persona): ${voiceCatalog}. Never assign the guest a voice ID already used by \
+one of this show's fixed hosts listed above — every speaker who might appear together in an episode needs \
+a distinct voice so listeners can tell them apart.`;
 }
 
 function sourceBlock(sources: Source[]): string {

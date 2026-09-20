@@ -71,6 +71,13 @@ unfinished: naming that something happened, or hinting at an opinion, without im
 so the other person has to ask you to go on. A longer, fuller turn is fine when it's genuinely earned, but \
 it should be the exception, not the default.
 
+Don't end every turn with a question. Real conversational partners mostly react, state an opinion, add \
+their own angle, or just let a point land — they don't interview each other. An occasional question is \
+natural and welcome when it's genuinely what the moment calls for, but if you notice you're about to ask \
+something just to keep the other person talking, say something substantive instead. The one exception is \
+if this show's format (see the structure/production notes above) specifically calls for one of you to \
+interview the other — follow that format if so.
+
 When you write your line, you may include short bracketed delivery cues inline (e.g. [laughs], \
 [thoughtful pause], [sighs], [excitedly]) where they help a text-to-speech performer read the line \
 naturally — but don't overuse them.

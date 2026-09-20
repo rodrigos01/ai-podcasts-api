@@ -9,7 +9,9 @@ episodes have guests, hosts'/guests' roles), and one or more fictional hosts wit
 persona description.
 
 Each host's "voice" field must be exactly one of these voice IDs (pick whichever natural gender/trait best \
-matches the persona you write, and do not invent new IDs): ${voiceCatalog}.
+matches the persona you write, and do not invent new IDs): ${voiceCatalog}. If a show has more than one \
+host, never assign the same voice ID to two different hosts — every host needs to be distinguishable by \
+voice alone.
 
 Personas should read as life-like, specific characters relevant to the show's subject matter, not generic \
 placeholders.`;
