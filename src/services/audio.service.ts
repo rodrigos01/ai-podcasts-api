@@ -221,9 +221,13 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, start: numb
  * never a real Range header — see streamEpisodeAudio). In that case, its
  * OpusHead/OpusTags pages are written unconditionally first, since they're
  * the *only* copy anywhere in the episode: every later chunk's own copy was
- * already dropped by the stitcher.
+ * already dropped by the stitcher — regardless of whether `start` lands
+ * inside chunk 0's own remaining bytes or well past it, into some later
+ * chunk entirely (the overwhelmingly common real case for a `?t=` seek).
+ * Skipping the header injection there produces a headerless, unparseable
+ * Ogg stream with no way for a player to identify its format at all.
  */
-function writeChunk(
+export function writeChunk(
   res: Response,
   data: Buffer,
   chunkStart: number,
@@ -232,12 +236,14 @@ function writeChunk(
 ): void {
   if (mayNeedHeader && start > chunkStart) {
     const header = extractHeaderPages(data);
+    if (!res.destroyed && !res.writableEnded) res.write(header);
     const headerEnd = chunkStart + header.length;
-    if (start < headerEnd) {
-      if (!res.destroyed && !res.writableEnded) res.write(header);
-      writeSlice(res, data, chunkStart, headerEnd);
-      return;
-    }
+    // Whatever of chunk 0's own audio content still falls at-or-after
+    // `start` still needs to go out too (relevant when `start` landed
+    // inside chunk 0 itself, before its end) — clamped to headerEnd so a
+    // `start` that landed *inside* the header doesn't rewind into it.
+    writeSlice(res, data, chunkStart, Math.max(start, headerEnd));
+    return;
   }
   writeSlice(res, data, chunkStart, start);
 }
