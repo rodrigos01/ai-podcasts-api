@@ -28,15 +28,27 @@ export async function wizardOptions(req: Request, res: Response) {
     await Promise.all(input.sourceIds.map((sourceId) => getSource(podcastId, sourceId)))
   ).filter((s): s is NonNullable<typeof s> => s !== null);
 
-  const draft = await episodeWizardService.generateDraft(podcast, sources, input.prompt);
-  res.json({ draft });
+  const result = await episodeWizardService.generateSuggestions(
+    podcast,
+    sources,
+    input.length,
+    input.prompt,
+  );
+  res.json(result);
 }
 
 export async function wizardRevise(req: Request, res: Response) {
   const podcast = await requireOwnedPodcast(requireParam(req.params, "podcastId"), requireUserId(req));
   const input = episodeWizardReviseRequestSchema.parse(req.body);
-  const draft = await episodeWizardService.reviseDraft(podcast, input.draft, input.instruction);
-  res.json({ draft });
+  const result = await episodeWizardService.reviseSuggestions(
+    podcast,
+    input.suggestions,
+    input.length,
+    input.targetSuggestionIndex,
+    input.targetEpisodeIndex,
+    input.instruction,
+  );
+  res.json(result);
 }
 
 export async function create(req: Request, res: Response) {

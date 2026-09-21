@@ -34,11 +34,12 @@ Users will be able to create podcasts, and then episodes, by following a wizard-
 After the podcast is created, users will still bew able to modify it the same way they could on step 3 of the creation process. Changes to the podcast will only take effect on future episodes.
 
 ### Episode Creation
-1. User uploads the material the episode should focus on and optionally adds a prompt on how the material should be aproached. Users can also select from previously uploaded material in the same podcast.
-2. The app suggests the initial episode title, topics, and prodiction notes, based on the user's material and prompt, along with any guests the episode might have. The app will also provide 3 predicted changes the user might want to make to the episode.
+1. User picks a target episode length (short/medium/long — see Episode duration below), uploads the material the episode should focus on, and optionally adds a prompt on how the material should be aproached. Users can also select from previously uploaded material in the same podcast.
+2. The app suggests the initial episode title, topics, and prodiction notes, based on the user's material, prompt, and chosen length, along with any guests the episode might have. The app will also provide 3 predicted changes the user might want to make to the episode.
     2.a. If the user decides to make any changes, either by selecting one of the predicted ones or inputing their own, the app will re-generate the episode based on the response.
+    2.b. If the chosen length is too short to do the material justice, the app will also suggest splitting it into two episodes ("Part 1"/"Part 2"), each individually fitting the chosen length — the user sees both the single-episode suggestion and the split side by side and picks which to go with.
 3. Users will be able to edit the episode information before it's created by editing the title, topics, produiction notes and each of the guests.
-4. When the user makes the final confirmation on the episode the app will begin the generation process (See Episode generation on the technical specifications)
+4. When the user makes the final confirmation on an episode (one at a time, even for a two-part split) the app will begin the generation process for it (See Episode generation on the technical specifications). For a split, the second part should only be confirmed once the first part has finished generating, so it can build on the first part's continuity.
 
 ## Technical Specifications
 
@@ -78,17 +79,17 @@ The app will use Firebase Firestore as its database with the following structure
         - contents
 
 ### Episode Generation
-This app will aim for maximum realism by making use of multiple LLMs to generate an episode's transcript.
-* **Hosts and Guests:** Each host and guest in an episode will be controlled by an individual LLM agent. All agents will be provided with the podcast and episode information as context, including the source material selected. Hosts will also be provided with condensed past episodes' transcript for continuity. Due to TTS limitations, each episode can only have 2 voices, being either 2 hosts or 1 host and one guest
+This app generates an episode's transcript with a single LLM call that writes both speakers' lines itself, given the podcast and episode information as context, including the source material selected. Hosts are also given condensed past episodes' transcripts for continuity. Due to TTS limitations, each episode can only have 2 voices, being either 2 hosts or 1 host and one guest.
+* **Hosts and Guests:** The two speakers are written as independent individuals as far as the generated dialogue goes — each only reacts to their own persona, their own background material, and whatever the other has actually said aloud — even though a single model is authoring both sides. This is a prompting goal, not a structural guarantee the way giving each speaker its own separately-scoped generation call would be.
 * **Realistic Conversation:** 
-    * **Kickoff**: The Episode's host (or one of them, decided randomly, if the podcast has more than one), will start the episode following the podcast's structure and the production notes
-    * **Conversation Rounds:** The other host, or the guest, will then respond to what the previous speaker said. And may or may not prompt a follow up response from the other. The other speaker will then respond if needed, or move the episode along in its program. Even if the second speaker has prompted a response, the first one might choose to quickly address it and still move the conversation along, in the interest of time.
-* **Episode duration:** Episodes will aim for a range of spoken words that will losely correspond to a target time, based on their expected lenghts. Hosts will be the ones responsible by keeping this range, but both hosts and guests will be aware of the limits and the current word count as they speak.
+    * **Kickoff**: The Episode's host (or one of them, decided randomly, if the podcast has more than one), opens the episode following the podcast's structure and the production notes.
+    * **Conversation Rounds:** The other host, or the guest, responds to what the previous speaker said, and may or may not prompt a follow-up. Turns aren't required to strictly alternate or be evenly sized — a natural conversation has short reactions, interjections, and unevenly-sized turns rather than balanced back-and-forth statements.
+* **Episode duration:** Episodes will aim for a range of spoken words that will losely correspond to a target time, based on their expected lenghts, chosen up front before drafting (see Episode Creation above). This is a target for the generation to aim for, not a hard guarantee — see Known limitations in README.md.
     * short: 3500 to 5000 words, approximately 20 to 35 minutes.
     * medium: 6500 to 8000 words, approximately 40 to 50 minutes
     * long: 9000 words max, approximately a little over one hour.
-* **Transcript production:** The Episode's transcript will be created by concatenating all the speaker's speeches in the order they were generated, following the prompting-guide.md on how to format audio tags.
-* **Prompt Generation** The producer (another independent LLM) will take the full transcript and generate a base TTS prompt based on the documentation on the prompting-guide. The app will then break the transcript down into chunks that can be sent to the TTS service based on its defined token limit per submission. The combination of the base prompt plus the transcript chunk must be under the limit.
+* **Transcript production:** The Episode's transcript is the single script-writing LLM call's own output, parsed into per-speaker turns, following the prompting-guide.md on how to format audio tags.
+* **Prompt Generation** The producer (another independent LLM) generates a base TTS prompt from the podcast/episode/persona metadata — not the transcript — based on the documentation on the prompting-guide, so it can run before (and in parallel with) the transcript being written. The app then breaks the transcript down into chunks that can be sent to the TTS service based on its defined token limit per submission. The combination of the base prompt plus the transcript chunk must be under the limit.
 
 ### Audio Delivery
 * **Generation:** Audio will be generated by sending one prompt for each transcript chunk plus the base prompt to the TTS service. Audio generation will happen on-demand, as the user listens to the episode, using the TTS service's stream capabilities and be streamed back.

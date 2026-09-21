@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunkTranscript, sealedChunksSoFar } from "../src/services/episodeGeneration/chunker";
+import { chunkTranscript } from "../src/services/episodeGeneration/chunker";
 
 const MAX_TTS_INPUT_TOKENS = 12_000;
 
@@ -62,47 +62,5 @@ describe("chunkTranscript", () => {
 
     const rebuilt = chunks.map((c) => labeledTranscript.slice(c.startOffset, c.endOffset)).join("");
     expect(rebuilt).toBe(labeledTranscript);
-  });
-});
-
-describe("sealedChunksSoFar", () => {
-  it("drops the still-growing trailing chunk", () => {
-    const basePromptTokens = MAX_TTS_INPUT_TOKENS - 100; // budget ~400 chars
-    const transcript = [turn("A", 300), turn("B", 300), turn("A", 300)].join("\n\n");
-    const full = chunkTranscript(transcript, basePromptTokens);
-    const sealed = sealedChunksSoFar(transcript, basePromptTokens);
-
-    expect(full.length).toBeGreaterThan(1);
-    expect(sealed).toEqual(full.slice(0, -1));
-  });
-
-  it("returns nothing while the whole transcript still fits in one (open) chunk", () => {
-    const transcript = [turn("A", 40), turn("B", 40)].join("\n\n");
-    expect(sealedChunksSoFar(transcript, 0)).toEqual([]);
-  });
-
-  it("never revises a chunk it already sealed as more turns are appended (the invariant /stream depends on)", () => {
-    const basePromptTokens = MAX_TTS_INPUT_TOKENS - 100; // budget ~400 chars
-    const turns = Array.from({ length: 12 }, (_, i) => turn(i % 2 === 0 ? "A" : "B", 120));
-
-    let transcript = "";
-    let previousSealed: ReturnType<typeof sealedChunksSoFar> = [];
-    for (const t of turns) {
-      transcript = transcript.length === 0 ? t : `${transcript}\n\n${t}`;
-      const sealed = sealedChunksSoFar(transcript, basePromptTokens);
-
-      // Every chunk sealed on a shorter prefix must still appear, unchanged,
-      // once more turns have been appended — this is what makes it safe for
-      // /stream to start generating audio for a sealed chunk before the
-      // conversation (and therefore the transcript) has finished.
-      expect(sealed.slice(0, previousSealed.length)).toEqual(previousSealed);
-      previousSealed = sealed;
-    }
-
-    // Once the conversation actually ends, the final full chunking pass
-    // must agree with everything already sealed, plus exactly the last
-    // (previously withheld) chunk.
-    const final = chunkTranscript(transcript, basePromptTokens);
-    expect(final.slice(0, -1)).toEqual(previousSealed);
   });
 });

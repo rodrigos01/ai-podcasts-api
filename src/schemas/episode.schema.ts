@@ -65,12 +65,12 @@ export const episodeSchema = z.object({
   participantHostIds: z.array(z.string().min(1)),
   guests: z.array(personSchema),
   productionNotes: z.string().min(1),
-  // "streamable" sits between "generating" and "ready": at least one TTS
-  // chunk has been sealed (see chunker.ts's sealedChunksSoFar), so
-  // /stream will serve audio, but the conversation/condensation may still
-  // be in progress. Clients should treat both "streamable" and "ready" as
-  // "go ahead and hit /stream" — the difference is only whether more is
-  // still being generated.
+  // "streamable" sits between "generating" and "ready": the episode's
+  // script has been written and chunked (see
+  // episodeGeneration/scriptGeneration.service.ts and chunker.ts), so
+  // /stream will serve audio, but condensation may still be in progress.
+  // Clients should treat both "streamable" and "ready" as "go ahead and hit
+  // /stream" — the difference is only whether more is still being generated.
   status: z.enum(["generating", "streamable", "ready", "failed"]),
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),

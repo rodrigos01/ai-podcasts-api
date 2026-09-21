@@ -4,30 +4,39 @@ import {
   buildEpisodeRevisePrompt,
   episodeWizardSystemInstruction,
 } from "../llm/prompts/episodeWizard.prompts";
+import type { EpisodeLength } from "../constants/lengthRanges";
 import type { Podcast } from "../schemas/podcast.schema";
 import type { Source } from "../schemas/source.schema";
-import { episodeDraftSchema, type EpisodeDraft } from "../schemas/wizard.schema";
+import {
+  episodeWizardOptionsResponseSchema,
+  type EpisodeSuggestion,
+  type EpisodeWizardSuggestionsResponse,
+} from "../schemas/wizard.schema";
 
-export async function generateDraft(
+export async function generateSuggestions(
   podcast: Podcast,
   sources: Source[],
+  length: EpisodeLength,
   prompt?: string,
-): Promise<EpisodeDraft> {
+): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast),
+    systemInstruction: episodeWizardSystemInstruction(podcast, length),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
-    schema: episodeDraftSchema,
+    schema: episodeWizardOptionsResponseSchema,
   });
 }
 
-export async function reviseDraft(
+export async function reviseSuggestions(
   podcast: Podcast,
-  draft: EpisodeDraft,
+  suggestions: EpisodeSuggestion[],
+  length: EpisodeLength,
+  targetSuggestionIndex: number,
+  targetEpisodeIndex: number | undefined,
   instruction: string,
-): Promise<EpisodeDraft> {
+): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast),
-    prompt: buildEpisodeRevisePrompt(draft, instruction),
-    schema: episodeDraftSchema,
+    systemInstruction: episodeWizardSystemInstruction(podcast, length),
+    prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
+    schema: episodeWizardOptionsResponseSchema,
   });
 }

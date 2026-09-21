@@ -8,13 +8,11 @@ import {
 import { getPodcast } from "../../data/podcast.repository";
 import { getSource } from "../../data/source.repository";
 import type { Person } from "../../schemas/person.schema";
-import { AgentSession } from "./agent";
-import { chunkTranscript, sealedChunksSoFar } from "./chunker";
+import { chunkTranscript } from "./chunker";
 import { condenseForAllHosts } from "./condensation.service";
-import { runConversation } from "./conversationLoop";
 import { generateBaseTtsPrompt } from "./producerPrompt.service";
-import { assignSources } from "./sourceAssignment.service";
-import { selectCast, type Speaker } from "./speakerSelection";
+import { generateEpisodeScript } from "./scriptGeneration.service";
+import { selectCast } from "./speakerSelection";
 
 export async function runEpisodeGeneration(podcastId: string, episodeId: string): Promise<void> {
   try {
@@ -37,17 +35,20 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget },
     });
 
-    // Generated from persona/podcast/episode metadata alone, before any
-    // conversation turn exists (see producerPrompt.service.ts) — this and
-    // the token budget it yields are what let chunk boundaries start
-    // sealing from turn 1 onward, instead of waiting for the whole
-    // transcript to exist first. Run alongside source assignment (also
-    // metadata-only, no transcript needed) rather than sequentially —
-    // neither depends on the other.
-    const [ttsPrompt, sourcesBySpeakerId] = await Promise.all([
-      generateBaseTtsPrompt(podcast, episode, cast.speakers),
-      assignSources(cast.speakers, episode, sources),
-    ]);
+    // Condensed continuity is fetched once up front for both hosts (a guest
+    // never has one) — the single script-writing call below needs both
+    // speakers' histories in the same prompt, unlike the old per-agent
+    // pipeline where each independent AgentSession fetched only its own.
+    const condensedHistoryBySpeakerId = new Map<string, string>();
+    for (const speaker of cast.speakers) {
+      if (!speaker.isHost) continue;
+      const history = await getRecentCondensedSummariesForHost(podcastId, speaker.id, episodeId);
+      if (history.length > 0) condensedHistoryBySpeakerId.set(speaker.id, history.join("\n\n"));
+    }
+
+    // Generated from persona/podcast/episode metadata alone — never needed
+    // the transcript.
+    const ttsPrompt = await generateBaseTtsPrompt(podcast, episode, cast.speakers);
     const basePromptTokens = await countTokens(ttsPrompt);
 
     await patchEpisodeState(podcastId, episodeId, {
@@ -56,58 +57,32 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       progress: { stage: "producer_prompt", targetWordRange: wordTarget },
     });
 
-    const otherSpeakerName = (speakerId: string) =>
-      cast.speakers.find((s) => s.id !== speakerId)?.name ?? "the other speaker";
+    await patchEpisodeState(podcastId, episodeId, {
+      progress: { stage: "conversation", targetWordRange: wordTarget },
+    });
 
-    const agentsBySpeakerId: Record<string, AgentSession> = {};
-    for (const speaker of cast.speakers) {
-      const condensedHistory = speaker.isHost
-        ? await getRecentCondensedSummariesForHost(podcastId, speaker.id, episodeId)
-        : [];
-      agentsBySpeakerId[speaker.id] = new AgentSession(speaker, {
-        podcast,
-        episode,
-        sources: sourcesBySpeakerId.get(speaker.id) ?? [],
-        episodeHasSources: sources.length > 0,
-        otherSpeakerName: otherSpeakerName(speaker.id),
-        condensedHistory: condensedHistory.length > 0 ? condensedHistory.join("\n\n") : undefined,
-      });
-    }
-
-    const conversation = await runConversation(
+    // A single LLM call writes the whole episode's script itself — see
+    // AGENTS.md's migration note for why this replaced the old per-turn,
+    // two-independent-agent conversation loop. Unlike that loop, this
+    // doesn't persist progress incrementally: nothing is written until the
+    // whole script comes back, so a crash mid-call loses the whole
+    // not-yet-persisted episode (recoverable via /regenerate), not just an
+    // in-flight turn.
+    const script = await generateEpisodeScript(
       cast,
-      agentsBySpeakerId,
+      { podcast, episode, sources, condensedHistoryBySpeakerId },
       wordTarget,
-      async ({ wordCount, transcript }) => {
-        // Persisted after every turn (not just at the end) so a crash or
-        // restart mid-conversation loses at most the in-flight turn, not
-        // the whole episode's progress. Chunk boundaries are sealed
-        // incrementally in the same patch — sealedChunksSoFar drops the
-        // still-growing trailing chunk, so every chunk written here is
-        // final and safe for /stream to generate audio for immediately,
-        // even while the conversation is still going. Once the first chunk
-        // seals, status flips to "streamable" so polling clients know
-        // /stream is usable without waiting for the whole episode — sealed
-        // chunk count only ever grows (see chunker.ts's sealedChunksSoFar),
-        // so this never needs to flip back.
-        const sealed = sealedChunksSoFar(transcript, basePromptTokens);
-        await patchEpisodeState(podcastId, episodeId, {
-          transcript,
-          ttsChunks: sealed,
-          status: sealed.length > 0 ? "streamable" : "generating",
-          progress: { stage: "conversation", currentWordCount: wordCount, targetWordRange: wordTarget },
-        });
-      },
     );
 
-    const ttsChunks = chunkTranscript(conversation.transcript, basePromptTokens);
+    const ttsChunks = chunkTranscript(script.transcript, basePromptTokens);
 
     await patchEpisodeState(podcastId, episodeId, {
-      transcript: conversation.transcript,
+      transcript: script.transcript,
       ttsChunks,
+      status: "streamable",
       progress: {
         stage: "chunking",
-        currentWordCount: conversation.finalWordCount,
+        currentWordCount: script.wordCount,
         targetWordRange: wordTarget,
       },
     });
@@ -115,7 +90,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     const participatingHosts = hosts;
     const condensedSummaries =
       participatingHosts.length > 0
-        ? await condenseForAllHosts(participatingHosts, conversation.transcript)
+        ? await condenseForAllHosts(participatingHosts, script.transcript)
         : {};
 
     await patchEpisodeState(podcastId, episodeId, {

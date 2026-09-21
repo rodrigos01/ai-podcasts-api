@@ -11,7 +11,7 @@
 // name-shaped character set (letters/digits/space/'.-) — this is what
 // keeps an incidental colon in ordinary prose ("Note: ...", "3:00 came and
 // went") from being mistaken for a label, now that brackets no longer mark
-// the boundary for us. This must match what hostPersona.prompts.ts's
+// the boundary for us. This must match what scriptGeneration.prompts.ts's
 // transcript-building and sceneDirector.prompts.ts's format instruction
 // actually produce — if you change the turn format, update this too.
 const NAME_PATTERN = "[A-Z][A-Za-z0-9 .'-]{0,59}";

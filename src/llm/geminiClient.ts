@@ -145,10 +145,11 @@ interface GeneratePlainTextOptions {
  * than free-form text for an equivalent short response, with a noticeably
  * fatter slow tail (multi-second outliers were structured-only). Use this
  * for call sites that don't actually need a validated JSON shape — e.g. the
- * per-turn conversation agent (agent.ts), whose `{speech, endEpisode}` shape
- * is simple enough to encode as plain text + a trailing marker instead. If a
- * caller genuinely needs a validated structured shape (the wizards,
- * producerPrompt, condensation), keep using `generateText`.
+ * single-LLM episode script writer (episodeGeneration/scriptGeneration.service.ts),
+ * whose output is just the "Name: line" transcript text itself, parsed by
+ * scriptText.ts rather than JSON-decoded. If a caller genuinely needs a
+ * validated structured shape (the wizards, producerPrompt, condensation),
+ * keep using `generateText`.
  */
 export async function generatePlainText(options: GeneratePlainTextOptions): Promise<string> {
   const client = await getClient();
