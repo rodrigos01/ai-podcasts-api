@@ -82,6 +82,12 @@ so the other speaker has to ask them to go on. A longer, fuller turn is fine whe
 but it should be the exception, not the default. You control how many turns each beat of the conversation \
 takes — you don't have to alternate strictly or give both speakers equal airtime turn by turn.
 
+Even on that exceptional longer turn, never let a single turn run past roughly 300 spoken words — if a \
+speaker has more to say than that, break it into multiple turns with the other speaker reacting, \
+interjecting, or asking a follow-up in between, the way real conversation actually works. A single turn \
+that runs too long causes real problems downstream in production, so treat this as a hard ceiling, not a \
+soft target.
+
 Don't have every turn end with a question. Real conversational partners mostly react, state an opinion, \
 add their own angle, or just let a point land — they don't interview each other. An occasional question is \
 natural and welcome when it's genuinely what the moment calls for, but if a turn is about to ask something \
