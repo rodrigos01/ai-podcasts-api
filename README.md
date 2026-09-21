@@ -8,7 +8,7 @@ Product behavior is fully described in [specs.md](specs.md); this document cover
 
 1. **Create a podcast** via a 3-option wizard: describe what you want, pick (and iteratively revise) one of three generated concepts — title, description, structure, and fictional hosts with voices and personas.
 2. **Upload source material** (text or PDF) for a podcast — background reading the hosts and guests will actually reference.
-3. **Create an episode** via a wizard: pick a target length up front, point it at some sources, get back one or two suggested drafts (title, topics, production notes, an optional guest) — a second, 2-episode-split suggestion only appears when the target length is too short for the material. Revise and confirm a suggestion (both its drafts, for a split) as a whole.
+3. **Create an episode** via a wizard: pick a target length up front, point it at some sources, get back one or two suggestions — each either a single episode draft or a natural 2-episode split, whichever fits it best (a lone suggestion can itself be a split, e.g. if your prompt asked for one; a second suggestion only appears when there's a genuine alternative worth offering). Revise and confirm a suggestion (both its drafts, for a split) as a whole.
 4. Confirming a suggestion kicks off **generation in the background** for every episode in it at once: a single LLM call writes each episode's full transcript (both speakers), a "producer" LLM turns episode metadata into a TTS direction sheet, and the transcript is chunked for synthesis. Poll each episode's own status endpoint until it's `ready`. For a confirmed 2-part split, the server generates the parts sequentially behind the scenes — part 2 only starts once part 1 is `ready`, so it inherits part 1's continuity notes — transparently to the caller.
 5. **Stream the audio** from a single endpoint that behaves like a normal seekable audio file once fully generated, and like a live/growing stream (playable, but not seekable ahead of what exists yet) while still being synthesized.
 
@@ -195,17 +195,24 @@ Three ways to add a source, on the same endpoint:
   ]
 }
 
-// ...but when the requested length is genuinely too short for the material, a second
-// suggestion appears — a natural 2-episode split covering the same material:
+// ...but when a split is the right call, a suggestion's own "episodes" array has 2 entries
+// instead of 1 — either as the only suggestion (e.g. the prompt explicitly asked for a
+// split), or alongside a single-episode alternative worth offering side by side:
 {
   "suggestions": [
-    { "episodes": [ /* single-episode best-effort fit, same shape as above */ ] },
+    { "episodes": [ /* "Part 1" draft */, /* "Part 2" draft */ ] }
+  ]
+}
+// or, when there's a genuine choice worth presenting:
+{
+  "suggestions": [
+    { "episodes": [ /* single-episode best-effort fit */ ] },
     { "episodes": [ /* "Part 1" draft */, /* "Part 2" draft */ ] }
   ]
 }
 ```
 
-`suggestions[0]` is always the single-episode option; `suggestions[1]`, when present, is always the 2-episode split — clients can rely on this shape rather than inspecting `episodes.length` themselves. There is no more `suggestedLength` output hint — length is an input now, not something suggested after the fact. To confirm a suggestion (single or split), pass its whole `episodes` array to the confirm endpoint below in one call — the server sequences the actual generation itself (see below), so this is exactly the same call whether you picked the single-episode suggestion or the split.
+There's no positional convention here — a suggestion's shape is entirely described by its own `episodes.length` (1 = single episode, 2 = split); don't assume `suggestions[0]` is always the single-episode option or that `suggestions[1]`, if present, is always the split. It's equally valid for the lone suggestion to be a split, or for two suggestions to both have the same episode count. There is no more `suggestedLength` output hint — length is an input now, not something suggested after the fact. To confirm any one suggestion, pass its whole `episodes` array to the confirm endpoint below in one call — the server sequences the actual generation itself (see below), so this is exactly the same call regardless of how many episodes that suggestion contains.
 
 **`POST /podcasts/:podcastId/episodes/wizard/revise`**
 ```json

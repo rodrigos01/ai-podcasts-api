@@ -43,24 +43,28 @@ export const episodeDraftSchema = z.object({
   predictedChanges: z.array(z.string().min(1)).length(3),
 });
 
-// One suggestion is either a single episode (the drafter's best-effort fit
-// to the requested length) or, when that length is genuinely too short for
-// the source material, a natural 2-episode split.
+// One suggestion is either a single episode or a natural 2-episode split —
+// whichever the drafter judges right for it (see
+// episodeWizard.prompts.ts for when each applies, e.g. the user's own
+// prompt asking for the material to be split). There is no positional
+// convention: a suggestion's episode count says nothing about whether it's
+// the first or second entry in the array below, and a lone suggestion is
+// just as free to be a split as a single episode.
 export const episodeSuggestionSchema = z.object({
   episodes: z.array(episodeDraftSchema).min(1).max(2),
 });
 
-// Always an array of 1-2 suggestions. The intended shape is exactly 1
-// suggestion (a single episode) when the requested length comfortably fits
-// the material, or exactly 2 — the first a single-episode best-effort fit,
-// the second a 2-episode split — when it doesn't. That cross-entry
-// convention (which entry has which episode count, and in what order)
-// can't be expressed in Gemini's structured-output schema — only each
-// suggestion's own per-draft shape can be grammar-constrained — so it isn't
-// enforced here; a `.check()` refinement that hard-rejected a
-// schema-valid-but-misordered response used to live here and caused real
-// request failures on revise (see episodeWizard.service.ts's
-// `normalizeSuggestions`, which repairs this after the fact instead).
+// Always an array of 1-2 independent suggestions, each itself either a
+// single episode or a 2-episode split — see episodeSuggestionSchema above.
+// A second suggestion, when present, is just a genuinely useful alternative
+// worth offering side by side with the first (e.g. a tight single episode
+// vs. a fuller two-part treatment) — it is NOT required to differ in
+// episode count from the first, and the first is NOT required to be the
+// single-episode option. Don't reintroduce a positional invariant here (an
+// earlier version did, via a `.check()` refinement, and it hard-rejected
+// perfectly valid responses that just didn't match that assumed
+// convention) — every entry's shape is fully described by its own
+// `episodes.length`, which is all a client should ever key off.
 export const episodeWizardOptionsResponseSchema = z.object({
   suggestions: z.array(episodeSuggestionSchema).min(1).max(2),
 });

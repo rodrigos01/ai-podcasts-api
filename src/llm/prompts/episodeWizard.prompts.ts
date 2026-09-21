@@ -40,17 +40,28 @@ gender/trait match for the persona): ${voiceCatalog}. Never assign the guest a v
 one of this show's fixed hosts listed above — every speaker who might appear together in an episode needs \
 a distinct voice so listeners can tell them apart.
 
-You return an array of "suggestions". Always include exactly one suggestion containing your single best \
-episode draft, written to fit within the ${length} target as well as it genuinely can. Only if the source \
-material and topics are truly too broad or deep to do justice to within that target — not merely "could \
-say more", but a genuine mismatch of scope — also include a second suggestion containing a natural \
-2-episode split: two drafts, each with its own title/topics/production notes/guest, dividing the material \
-into a sensible "Part 1" and "Part 2" (name them accordingly in their titles) that could each individually \
-fit the ${length} target. If a single episode can cover the material well, do not include a second \
-suggestion at all — most drafts should NOT need one; use it sparingly, only for a genuine mismatch. When \
-you do split, keep the same guest across both parts unless the material genuinely calls for a different \
-one, and make each part's production notes aware it's one half of a two-part episode (e.g. what the other \
-part covers) so the eventual recording reads as a coherent pair, not two unrelated episodes.`;
+You return an array of 1 or 2 "suggestions". There is no fixed pattern of which suggestion has how many \
+episodes — decide each suggestion's shape independently, on its own merits.
+
+Always include at least one suggestion: your best plan for this request. That's usually a single episode \
+written to fit within the ${length} target as well as it genuinely can — but make it a natural 2-episode \
+split instead when a split is clearly the right call: either because the user's own prompt explicitly \
+asked for the material to be split into multiple episodes, or because the material and topics are \
+genuinely too broad or deep to do justice to within the ${length} target as one episode (not merely "could \
+say more", but a real mismatch of scope). A lone suggestion is just as free to be a split as a single \
+episode — don't force a single-episode option into existence when a split is what's actually called for.
+
+Only include a second suggestion when there's a genuinely useful alternative worth offering side by side \
+with the first — e.g. a tight single episode versus a fuller two-part treatment. Most requests don't need \
+a second suggestion at all; use it sparingly, and never just to pad the array out to 2. The second \
+suggestion, when you do include one, does not need to differ in episode count from the first.
+
+Whenever any suggestion contains a 2-episode split: give each part its own title/topics/production \
+notes/guest, dividing the material into a sensible "Part 1" and "Part 2" (name them accordingly in their \
+titles) that could each individually fit the ${length} target; keep the same guest across both parts \
+unless the material genuinely calls for a different one; and make each part's production notes aware it's \
+one half of a two-part episode (e.g. what the other part covers) so the eventual recording reads as a \
+coherent pair, not two unrelated episodes.`;
 }
 
 function sourceBlock(sources: Source[]): string {
@@ -62,9 +73,10 @@ export function buildEpisodeDraftPrompt(sources: Source[], prompt?: string): str
   const promptBlock = prompt ? `\n\nUser's prompt for this episode: "${prompt}"` : "";
   return `Pre-production source material for this episode:\n\n${sourceBlock(sources)}${promptBlock}
 
-Draft this episode (or, if warranted, this episode plus a 2-part split alternative — see the rules above). \
-For every draft, return exactly 3 "predictedChanges" — plausible follow-up edits the user might want (e.g. \
-"Add a guest", "Narrow the topics to just X", "Make the production notes more casual").`;
+Draft your suggestion(s) for this episode request — see the rules above for when a suggestion should be a \
+single episode vs. a split, and when a second alternative suggestion is worth including. For every draft, \
+return exactly 3 "predictedChanges" — plausible follow-up edits the user might want (e.g. "Add a guest", \
+"Narrow the topics to just X", "Make the production notes more casual").`;
 }
 
 export function buildEpisodeRevisePrompt(
@@ -84,8 +96,9 @@ export function buildEpisodeRevisePrompt(
 The user's revision instruction: "${instruction}"
 
 Apply the instruction to ${scopeLine}. Keep whatever the instruction doesn't ask to change. Return the \
-full suggestions array again in the same shape (1 suggestion, or 2 if a split is present/warranted — \
-reconsider whether a split is still appropriate if the instruction changes how much there is to cover, \
-e.g. narrowing or expanding the topics). Return exactly 3 new "predictedChanges" for every draft you \
-return, appropriate to its revised content.`;
+full suggestions array again — 1 or 2 suggestions, each independently a single episode or a split, \
+whichever is right for it (no fixed pattern of which entry has how many episodes); reconsider whether the \
+suggestion(s) you're revising should switch between single-episode and split if the instruction changes \
+how much there is to cover, e.g. narrowing or expanding the topics, or explicitly asking for a split. \
+Return exactly 3 new "predictedChanges" for every draft you return, appropriate to its revised content.`;
 }
