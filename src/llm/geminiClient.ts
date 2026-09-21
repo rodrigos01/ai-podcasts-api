@@ -1,4 +1,4 @@
-import type { GoogleGenAI as GoogleGenAIClient } from "@google/genai" with { "resolution-mode": "import" };
+import type { ApiError, GoogleGenAI as GoogleGenAIClient } from "@google/genai" with { "resolution-mode": "import" };
 import textToSpeech from "@google-cloud/text-to-speech";
 import type { ZodType } from "zod";
 import { z } from "zod";
@@ -87,6 +87,17 @@ interface GenerateTextOptions<T> {
   schema: ZodType<T>;
 }
 
+// Vertex AI's per-minute quota for TEXT_MODEL trips under bursts of
+// concurrent calls (confirmed empirically: 1/30 concurrent requests came
+// back 429 RESOURCE_EXHAUSTED while the other 29 succeeded) — the flat
+// `attempt * 500ms` backoff below isn't built for that, since it barely
+// spaces out retries before quota has a chance to free up. A 429 gets a
+// much longer exponential delay (2s, 4s, 8s, ...) instead; every other
+// error keeps the original short linear backoff.
+function isRateLimitError(err: unknown): err is ApiError {
+  return err instanceof Error && "status" in err && (err as ApiError).status === 429;
+}
+
 async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -95,7 +106,8 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
     } catch (err) {
       lastError = err;
       if (attempt < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+        const delay = isRateLimitError(err) ? 2 ** attempt * 1000 : attempt * 500;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
