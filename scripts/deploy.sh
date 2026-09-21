@@ -32,7 +32,26 @@ cd "$(dirname "$0")/.."
 # `roles/aiplatform.user` role for Vertex AI (text generation) to work.
 
 ENV_FILE=".env"
-SERVICE_NAME="${SERVICE_NAME:-ai-podcast-api}"
+
+# First positional arg selects which Cloud Run service to deploy to.
+# Defaults to production for backwards compatibility with existing callers
+# that don't pass anything.
+TARGET="${1:-production}"
+case "$TARGET" in
+  production)
+    DEFAULT_SERVICE_NAME="ai-podcast-api"
+    ;;
+  staging)
+    DEFAULT_SERVICE_NAME="ai-podcasts-api-staging"
+    ;;
+  *)
+    echo "Unknown deploy target: $TARGET (expected 'production' or 'staging')" >&2
+    exit 1
+    ;;
+esac
+# SERVICE_NAME env var still wins if explicitly set, same as before.
+SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
+
 # Firestore (both named databases) and the Storage bucket are provisioned
 # in the "US" / "nam5" multi-region, not a specific single region — pick a
 # central single region for the Cloud Run service rather than guessing;
@@ -82,7 +101,7 @@ done
 
 PROJECT_ID="$(grep '^FIREBASE_PROJECT_ID:' "$TMP_ENV_YAML" | cut -d' ' -f2- | tr -d "'\"")"
 
-echo "Deploying $SERVICE_NAME to Cloud Run"
+echo "Deploying $SERVICE_NAME to Cloud Run (target: $TARGET)"
 echo "  project: $PROJECT_ID"
 echo "  region:  $REGION"
 echo "  env vars forwarded: $(cut -d: -f1 "$TMP_ENV_YAML" | tr '\n' ' ')"
