@@ -36,17 +36,23 @@ describe("episodeWizardOptionsResponseSchema suggestions shape", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects a first suggestion with 2 episodes (must be the single-episode option)", () => {
+  // The schema itself no longer enforces which entry has which episode
+  // count, or their order — that cross-entry convention can't be expressed
+  // in Gemini's structured-output schema, so a schema-valid-but-misordered
+  // response (e.g. a 2-episode suggestion first, or two 1-episode
+  // suggestions) is accepted here and repaired afterward instead — see
+  // episodeWizard.service.test.ts's normalizeSuggestions tests.
+  it("accepts a 2-episode suggestion first (order not schema-enforced)", () => {
     const result = episodeWizardOptionsResponseSchema.safeParse({
       suggestions: [{ episodes: [draft, draft] }],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
-  it("rejects a second suggestion that isn't a 2-episode split", () => {
+  it("accepts two 1-episode suggestions (uniqueness not schema-enforced)", () => {
     const result = episodeWizardOptionsResponseSchema.safeParse({
       suggestions: [{ episodes: [draft] }, { episodes: [draft] }],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 });

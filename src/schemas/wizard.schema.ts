@@ -50,33 +50,20 @@ export const episodeSuggestionSchema = z.object({
   episodes: z.array(episodeDraftSchema).min(1).max(2),
 });
 
-// Always an array: exactly 1 suggestion (a single episode) when the
-// requested length comfortably fits the material, or exactly 2 — the first
-// a single-episode best-effort fit, the second a 2-episode split — when it
-// doesn't. Enforced here (not left to prompting alone) so clients can rely
-// on the shape: suggestions[0] is always the single-episode option;
-// suggestions[1], if present, is always the split.
-function suggestionsShape(ctx: {
-  value: { suggestions: { episodes: unknown[] }[] };
-  issues: z.core.$ZodRawIssue[];
-}) {
-  const { suggestions } = ctx.value;
-  const invalid =
-    suggestions.length < 1 ||
-    suggestions.length > 2 ||
-    suggestions[0]?.episodes.length !== 1 ||
-    (suggestions.length === 2 && suggestions[1]?.episodes.length !== 2);
-  if (invalid) {
-    ctx.issues.push({
-      code: "custom",
-      message:
-        "suggestions must be [singleEpisode] or [singleEpisode, twoEpisodeSplit] — 1 or 2 entries, " +
-        "the first with exactly 1 episode and the (optional) second with exactly 2.",
-      path: ["suggestions"],
-      input: ctx.value,
-    });
-  }
-}
+// Always an array of 1-2 suggestions. The intended shape is exactly 1
+// suggestion (a single episode) when the requested length comfortably fits
+// the material, or exactly 2 — the first a single-episode best-effort fit,
+// the second a 2-episode split — when it doesn't. That cross-entry
+// convention (which entry has which episode count, and in what order)
+// can't be expressed in Gemini's structured-output schema — only each
+// suggestion's own per-draft shape can be grammar-constrained — so it isn't
+// enforced here; a `.check()` refinement that hard-rejected a
+// schema-valid-but-misordered response used to live here and caused real
+// request failures on revise (see episodeWizard.service.ts's
+// `normalizeSuggestions`, which repairs this after the fact instead).
+export const episodeWizardOptionsResponseSchema = z.object({
+  suggestions: z.array(episodeSuggestionSchema).min(1).max(2),
+});
 
 export const episodeWizardOptionsRequestSchema = z.object({
   prompt: z.string().optional(),
@@ -87,10 +74,6 @@ export const episodeWizardOptionsRequestSchema = z.object({
   // material and offer a split suggestion instead.
   length: episodeLengthSchema,
 });
-
-export const episodeWizardOptionsResponseSchema = z
-  .object({ suggestions: z.array(episodeSuggestionSchema).min(1).max(2) })
-  .check(suggestionsShape);
 
 export const episodeWizardReviseRequestSchema = z.object({
   suggestions: z.array(episodeSuggestionSchema).min(1).max(2),
