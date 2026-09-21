@@ -1,6 +1,6 @@
 # AI Podcast API
 
-A REST API that generates realistic, fully-produced podcast episodes: fictional hosts and guests hold a real back-and-forth conversation (each driven by an independent LLM agent), and the resulting transcript is synthesized to streamable audio — all from a short prompt and whatever source material you give it.
+A REST API that generates realistic, fully-produced podcast episodes: a single LLM call writes a full back-and-forth conversation between fictional hosts and guests (2 voices per episode — never more, never fewer), and the resulting transcript is synthesized to streamable audio — all from a short prompt and whatever source material you give it.
 
 Product behavior is fully described in [specs.md](specs.md); this document covers how to run the service and how to call it.
 
@@ -8,8 +8,8 @@ Product behavior is fully described in [specs.md](specs.md); this document cover
 
 1. **Create a podcast** via a 3-option wizard: describe what you want, pick (and iteratively revise) one of three generated concepts — title, description, structure, and fictional hosts with voices and personas.
 2. **Upload source material** (text or PDF) for a podcast — background reading the hosts and guests will actually reference.
-3. **Create an episode** via a single-draft wizard: point it at some sources, get a draft (title, topics, production notes, an optional guest), revise it, confirm it.
-4. Confirming an episode kicks off **generation in the background**: two independent LLM agents (2 hosts, or 1 host + 1 guest — never more, never fewer) hold a real conversation turn by turn, a "producer" LLM turns the transcript into a TTS direction sheet, and the transcript is chunked for synthesis. Poll a status endpoint until it's `ready`.
+3. **Create an episode** via a wizard: pick a target length up front, point it at some sources, get back one or two suggestions — each either a single episode draft or a natural 2-episode split, whichever fits it best (a lone suggestion can itself be a split, e.g. if your prompt asked for one; a second suggestion only appears when there's a genuine alternative worth offering). Revise and confirm a suggestion (both its drafts, for a split) as a whole.
+4. Confirming a suggestion kicks off **generation in the background** for every episode in it at once: a single LLM call writes each episode's full transcript (both speakers), a "producer" LLM turns episode metadata into a TTS direction sheet, and the transcript is chunked for synthesis. Poll each episode's own status endpoint until it's `ready`. For a confirmed 2-part split, the server generates the parts sequentially behind the scenes — part 2 only starts once part 1 is `ready`, so it inherits part 1's continuity notes — transparently to the caller.
 5. **Stream the audio** from a single endpoint that behaves like a normal seekable audio file once fully generated, and like a live/growing stream (playable, but not seekable ahead of what exists yet) while still being synthesized.
 
 ## Tech stack
@@ -165,9 +165,9 @@ Three ways to add a source, on the same endpoint:
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/podcasts/:podcastId/episodes/wizard/options` | Generate a single episode draft from sources (+ optional prompt) |
-| POST | `/podcasts/:podcastId/episodes/wizard/revise` | Revise the draft from a free-text instruction |
-| POST | `/podcasts/:podcastId/episodes` | Confirm a draft — creates the episode and starts generation (`202`) |
+| POST | `/podcasts/:podcastId/episodes/wizard/options` | Generate 1-2 episode suggestions from a target length + sources (+ optional prompt) |
+| POST | `/podcasts/:podcastId/episodes/wizard/revise` | Revise one draft within the suggestions from a free-text instruction |
+| POST | `/podcasts/:podcastId/episodes` | Confirm a whole suggestion (1 or 2 episodes) — creates all of them and starts generation (`202`) |
 | GET | `/podcasts/:podcastId/episodes` | List episodes |
 | GET | `/podcasts/:podcastId/episodes/:episodeId` | Get one episode (includes transcript/ttsPrompt once ready) |
 | GET | `/podcasts/:podcastId/episodes/:episodeId/status` | Lightweight status poll (no transcript payload) |
@@ -175,36 +175,81 @@ Three ways to add a source, on the same endpoint:
 | DELETE | `/podcasts/:podcastId/episodes/:episodeId` | Delete an episode and its cached audio |
 | POST | `/podcasts/:podcastId/episodes/:episodeId/regenerate` | Restart generation for a stuck/failed episode (from scratch) |
 
-**`POST /podcasts/:podcastId/episodes/wizard/options`**
+**`POST /podcasts/:podcastId/episodes/wizard/options`** — `length` is chosen up front here, before drafting, so the drafter can shape the episode for it from the start (and detect when it's the wrong fit for the material).
 ```json
 // request
-{ "sourceIds": ["<source-id>"], "prompt": "optional steering prompt" }
+{ "sourceIds": ["<source-id>"], "prompt": "optional steering prompt", "length": "short" }
 
-// response
+// response — always an array. Usually just one suggestion:
 {
-  "draft": {
-    "title": "...", "topics": "...", "productionNotes": "...",
-    "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
-    "suggestedLength": "short",   // "short" | "medium" | "long" — a UI hint only, see below
-    "predictedChanges": ["...", "...", "..."]
-  }
+  "suggestions": [
+    {
+      "episodes": [
+        {
+          "title": "...", "topics": "...", "productionNotes": "...",
+          "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
+          "predictedChanges": ["...", "...", "..."]
+        }
+      ]
+    }
+  ]
+}
+
+// ...but when a split is the right call, a suggestion's own "episodes" array has 2 entries
+// instead of 1 — either as the only suggestion (e.g. the prompt explicitly asked for a
+// split), or alongside a single-episode alternative worth offering side by side:
+{
+  "suggestions": [
+    { "episodes": [ /* "Part 1" draft */, /* "Part 2" draft */ ] }
+  ]
+}
+// or, when there's a genuine choice worth presenting:
+{
+  "suggestions": [
+    { "episodes": [ /* single-episode best-effort fit */ ] },
+    { "episodes": [ /* "Part 1" draft */, /* "Part 2" draft */ ] }
+  ]
 }
 ```
 
-`suggestedLength` is a pre-selection hint for the client's length picker, based on how much the source material/topics actually cover — it's advisory only. Confirming the episode (`POST .../episodes`) still requires an explicit `length`; nothing here is applied automatically.
+There's no positional convention here — a suggestion's shape is entirely described by its own `episodes.length` (1 = single episode, 2 = split); don't assume `suggestions[0]` is always the single-episode option or that `suggestions[1]`, if present, is always the split. It's equally valid for the lone suggestion to be a split, or for two suggestions to both have the same episode count. There is no more `suggestedLength` output hint — length is an input now, not something suggested after the fact. To confirm any one suggestion, pass its whole `episodes` array to the confirm endpoint below in one call — the server sequences the actual generation itself (see below), so this is exactly the same call regardless of how many episodes that suggestion contains.
 
-**`POST /podcasts/:podcastId/episodes`** (confirm)
+**`POST /podcasts/:podcastId/episodes/wizard/revise`**
 ```json
+// request
 {
-  "title": "...",
-  "topics": "...",
-  "length": "short",            // "short" | "medium" | "long"
-  "sourceIds": ["<source-id>"],
-  "participantHostIds": ["<host-id>"],
-  "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
-  "productionNotes": "..."
+  "suggestions": [ /* the suggestions array as returned above */ ],
+  "length": "short",
+  "targetSuggestionIndex": 0,
+  "targetEpisodeIndex": 1,   // optional — omit to revise every draft within that suggestion; set to revise just one (e.g. only "Part 2")
+  "instruction": "Make this part more comedic"
 }
+// response: same shape as /wizard/options
 ```
+
+**`POST /podcasts/:podcastId/episodes`** (confirm — takes a whole suggestion's `episodes` array, 1 or 2 entries)
+```json
+// request — same shape for a single-episode suggestion (1 entry) or a confirmed split (2 entries)
+{
+  "episodes": [
+    {
+      "title": "...",
+      "topics": "...",
+      "length": "short",            // "short" | "medium" | "long"
+      "sourceIds": ["<source-id>"],
+      "participantHostIds": ["<host-id>"],
+      "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
+      "productionNotes": "..."
+    }
+    // a second entry here, for a confirmed split
+  ]
+}
+
+// response (202) — every episode is created immediately
+{ "episodes": [ /* created Episode objects, in the same order */ ] }
+```
+
+For a split, both episodes are created right away, but generation runs sequentially behind the scenes: the second one's script generation doesn't actually start until the first reaches `ready`, so it can inherit the first's `condensedSummaries` — the same continuity any other follow-up episode gets. This is entirely transparent to the caller: poll each episode's own `/status` as usual, and the second one just shows no progress yet until its turn comes.
 
 **Important constraint**: `participantHostIds.length + guests.length` must equal exactly **2** — every episode is voiced by either 2 hosts or 1 host + 1 guest, never more or fewer. A single-host podcast therefore requires a guest on every episode.
 
@@ -216,7 +261,7 @@ Episode length word/time targets:
 | `medium` | 6500-8000 | 40-50 min |
 | `long` | 8000-9000 | ~50-65 min |
 
-**Episode status lifecycle**: `generating` → `streamable` → `ready` (or `failed`, with `error` set). `streamable` means at least one TTS chunk has been sealed and `/stream` will serve audio, even though the conversation may still be in progress — treat it the same as `ready` for "go ahead and play this," and only wait for `ready` specifically if you need the episode fully finished. Poll `/status` (returns `{status, progress, error, generatedAudioSeconds}`, where `progress` includes the current stage and running word count, and `generatedAudioSeconds` is the total audio duration generated/cached so far) rather than the full episode while waiting.
+**Episode status lifecycle**: `generating` → `streamable` → `ready` (or `failed`, with `error` set). The transcript is written by a single LLM call and chunked for TTS in one pass, not incrementally — `streamable` means that pass has finished (all TTS chunks are known) and `/stream` will serve audio, even though the per-host continuity summary (`condensedSummaries`) may still be generating. Treat `streamable` the same as `ready` for "go ahead and play this," and only wait for `ready` specifically if you need the episode fully finished. Poll `/status` (returns `{status, progress, error, generatedAudioSeconds}`, where `progress` includes the current stage and word count, and `generatedAudioSeconds` is the total audio duration generated/cached so far) rather than the full episode while waiting.
 
 ### Audio
 
@@ -240,6 +285,9 @@ This is a single audio resource for the whole episode (not per-chunk), designed 
 
 ## Known limitations
 
-- No automatic resume if the process restarts mid-episode-generation; the transcript-so-far is preserved, but `/regenerate` restarts the whole conversation from scratch rather than continuing it.
+- No automatic resume if the process restarts mid-episode-generation. The whole transcript is written by one LLM call, not incrementally, so a crash mid-call loses the whole not-yet-persisted episode (not just an in-flight turn); `/regenerate` restarts it from scratch.
+- No hard word-count guarantee. The single LLM call that writes the transcript has no mid-generation checkpoint, so it can overshoot the target `length`'s word range — especially when the source material is genuinely denser than the target, since the model tends to track the material's real scope over the literal target. Splitting into multiple episodes (see the episode wizard above) is the main mitigation today.
+- No structural guarantee that each speaker only knows their own material. One LLM call writes both speakers' lines, so "each speaker only knows what's in their own persona/material/what's been said aloud" is prompted for, not enforced the way giving each speaker an independent, separately-scoped LLM call would.
+- A multi-part episode (from a 2-episode split suggestion) has no persisted link between its parts — each is an ordinary, independent `Episode` document. Grouping is conveyed only through their drafted `title`/`topics`/`productionNotes` text, not a schema-level relationship.
 - `GET /podcasts` (list) scans every podcast in the database and filters by owner in memory, rather than a Firestore-indexed query — fine at today's scale, but worth revisiting if the number of users/podcasts grows significantly.
 - Every call to the wizard, episode generation, and audio endpoints makes real, billed calls to the Gemini API.

@@ -7,16 +7,29 @@
 // config (a Person's `name` / a SpeakerVoice's `speaker`), since that's
 // what the TTS call matches against — see geminiClient.ts's streamSpeech.
 //
-// The name is required to start with a capital letter and stay within a
-// name-shaped character set (letters/digits/space/'.-) — this is what
+// The name is required to start with an uppercase letter and stay within a
+// name-shaped character set (letters/marks/digits/space/'.-) — this is what
 // keeps an incidental colon in ordinary prose ("Note: ...", "3:00 came and
 // went") from being mistaken for a label, now that brackets no longer mark
-// the boundary for us. This must match what hostPersona.prompts.ts's
-// transcript-building and sceneDirector.prompts.ts's format instruction
-// actually produce — if you change the turn format, update this too.
-const NAME_PATTERN = "[A-Z][A-Za-z0-9 .'-]{0,59}";
-export const SPEAKER_LABEL_RE = new RegExp(`^(${NAME_PATTERN}):`);
-const SPEAKER_LABEL_GLOBAL_RE = new RegExp(`^(${NAME_PATTERN}):`, "gm");
+// the boundary for us. Uses Unicode property escapes (\p{Lu}, \p{L}, \p{M})
+// rather than [A-Z]/[A-Za-z] — a plain ASCII class silently broke on any
+// accented name (e.g. "Chloé Moreau"): the match stopped dead at "é",
+// found no ":" immediately after, and failed the whole label match, so
+// that speaker's lines got folded into the previous turn's text as an
+// unlabeled continuation instead of recognized as their own turn — which
+// then surfaced downstream as "the generated script never gives Chloé
+// Moreau a line" (scriptGeneration.service.ts's validateSpeakerTurns),
+// a confusing symptom of this regex bug, not of the model actually
+// dropping her. \p{M} (combining marks) is included alongside \p{L} in
+// case a name arrives NFD-decomposed (base letter + separate combining
+// accent) rather than NFC-precomposed. Every RegExp built from this
+// pattern needs the "u" flag for the \p{} escapes to work at all. This
+// must match what scriptGeneration.prompts.ts's transcript-building and
+// sceneDirector.prompts.ts's format instruction actually produce — if you
+// change the turn format, update this too.
+const NAME_PATTERN = "\\p{Lu}[\\p{L}\\p{M}0-9 .'-]{0,59}";
+export const SPEAKER_LABEL_RE = new RegExp(`^(${NAME_PATTERN}):`, "u");
+const SPEAKER_LABEL_GLOBAL_RE = new RegExp(`^(${NAME_PATTERN}):`, "gmu");
 
 /**
  * Every distinct speaker labeled in a "Name: text" formatted script, in
@@ -40,7 +53,7 @@ export function extractSpeakerNames(script: string): string[] {
 
 /** The "Name:" prefix (including trailing whitespace) at the very start of `text`, if any. */
 export function matchLabelPrefix(text: string): string | null {
-  const match = text.match(new RegExp(`^${NAME_PATTERN}:\\s*`));
+  const match = text.match(new RegExp(`^${NAME_PATTERN}:\\s*`, "u"));
   return match ? match[0] : null;
 }
 
@@ -75,7 +88,7 @@ export interface ScriptTurn {
  */
 export function parseScriptTurns(script: string): ScriptTurn[] {
   const turns: ScriptTurn[] = [];
-  const re = new RegExp(`^(${NAME_PATTERN}):\\s*([\\s\\S]*)$`);
+  const re = new RegExp(`^(${NAME_PATTERN}):\\s*([\\s\\S]*)$`, "u");
   for (const part of script.split("\n\n")) {
     const match = part.match(re);
     if (match?.[1] !== undefined && match[2] !== undefined) {

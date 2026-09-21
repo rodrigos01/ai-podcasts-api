@@ -30,6 +30,17 @@ export const episodeCreateSchema = z
   })
   .check(twoVoiceCast);
 
+// Confirming an episode always takes the whole wizard suggestion at once —
+// 1 entry for a single episode, or 2 for a confirmed split — never a bare
+// single-episode object. The server creates all of them immediately and
+// generates them sequentially in the background (see
+// episodeGeneration/orchestrator.ts's runEpisodeGenerationSequence); the
+// sequencing is transparent to the caller, who just gets back every created
+// episode in one response and polls each one's own status as usual.
+export const episodeCreateRequestSchema = z.object({
+  episodes: z.array(episodeCreateSchema).min(1).max(2),
+});
+
 export const episodeUpdateSchema = z.object({
   title: z.string().min(1).optional(),
   topics: z.string().min(1).optional(),
@@ -65,12 +76,12 @@ export const episodeSchema = z.object({
   participantHostIds: z.array(z.string().min(1)),
   guests: z.array(personSchema),
   productionNotes: z.string().min(1),
-  // "streamable" sits between "generating" and "ready": at least one TTS
-  // chunk has been sealed (see chunker.ts's sealedChunksSoFar), so
-  // /stream will serve audio, but the conversation/condensation may still
-  // be in progress. Clients should treat both "streamable" and "ready" as
-  // "go ahead and hit /stream" — the difference is only whether more is
-  // still being generated.
+  // "streamable" sits between "generating" and "ready": the episode's
+  // script has been written and chunked (see
+  // episodeGeneration/scriptGeneration.service.ts and chunker.ts), so
+  // /stream will serve audio, but condensation may still be in progress.
+  // Clients should treat both "streamable" and "ready" as "go ahead and hit
+  // /stream" — the difference is only whether more is still being generated.
   status: z.enum(["generating", "streamable", "ready", "failed"]),
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),
@@ -90,6 +101,7 @@ export const episodeSchema = z.object({
 });
 
 export type EpisodeCreateInput = z.infer<typeof episodeCreateSchema>;
+export type EpisodeCreateRequest = z.infer<typeof episodeCreateRequestSchema>;
 export type EpisodeUpdateInput = z.infer<typeof episodeUpdateSchema>;
 export type Episode = z.infer<typeof episodeSchema>;
 export type EpisodeProgress = z.infer<typeof episodeProgressSchema>;

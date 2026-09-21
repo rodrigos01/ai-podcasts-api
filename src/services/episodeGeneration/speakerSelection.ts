@@ -37,3 +37,20 @@ export function selectCast(hosts: Person[], guests: Person[]): Cast {
 
   return { speakers: [a, b], kickoffSpeakerId };
 }
+
+/**
+ * The label a speaker is referred to by in the generated transcript, the
+ * TTS voice-alias mapping (audio.service.ts's resolveCastVoices), and the
+ * script-writer's own output-format instructions (scriptGeneration.prompts.ts)
+ * — first name only, since a shorter, simpler label is both what real
+ * podcast attribution looks like and easier for a single LLM call to stay
+ * consistent with across a whole episode than a full name. Falls back to
+ * the full name only when the two cast members share a first name, since
+ * two speakers can't both be labeled "Maya" and stay distinguishable to a
+ * listener or to the TTS voice mapping.
+ */
+export function speakerLabel(name: string, otherName: string): string {
+  const firstNameOf = (n: string) => n.trim().split(/\s+/)[0] ?? n;
+  const mine = firstNameOf(name);
+  return mine.toLowerCase() === firstNameOf(otherName).toLowerCase() ? name : mine;
+}

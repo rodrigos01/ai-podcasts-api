@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { episodeCreateSchema } from "../src/schemas/episode.schema";
+import { episodeCreateRequestSchema, episodeCreateSchema } from "../src/schemas/episode.schema";
 
 const base = {
   title: "Ep 1",
@@ -71,6 +71,34 @@ describe("episodeCreateSchema two-voice cast constraint", () => {
       ...base,
       participantHostIds: [],
       guests: [guest, guest],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+const validEpisode = { ...base, participantHostIds: ["h1", "h2"], guests: [] };
+
+describe("episodeCreateRequestSchema", () => {
+  it("accepts a single confirmed episode", () => {
+    const result = episodeCreateRequestSchema.safeParse({ episodes: [validEpisode] });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a confirmed 2-episode split, in order", () => {
+    const result = episodeCreateRequestSchema.safeParse({
+      episodes: [validEpisode, { ...validEpisode, title: "Ep 2" }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty episodes array", () => {
+    const result = episodeCreateRequestSchema.safeParse({ episodes: [] });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects more than 2 episodes", () => {
+    const result = episodeCreateRequestSchema.safeParse({
+      episodes: [validEpisode, validEpisode, validEpisode],
     });
     expect(result.success).toBe(false);
   });

@@ -1,7 +1,7 @@
 import { VOICES } from "../../constants/voices";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
-import type { Speaker } from "../../services/episodeGeneration/speakerSelection";
+import { speakerLabel, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 const SYSTEM_INSTRUCTION = `You are an audio producer preparing a two-voice podcast for a text-to-speech \
 performance, following this prompting structure: a shared SCENE (location, time, atmosphere for the \
@@ -21,11 +21,14 @@ export function buildProducerPromptRequest(
   episode: Episode,
   speakers: [Speaker, Speaker],
 ): string {
+  const [a, b] = speakers;
+  const labelA = speakerLabel(a.name, b.name);
+  const labelB = speakerLabel(b.name, a.name);
   const speakerBlocks = speakers
-    .map(
-      (s) =>
-        `- ${s.name} (${s.isHost ? "host" : "guest"}): persona: "${s.persona}"; assigned voice trait: ${voiceTrait(s.voice)}`,
-    )
+    .map((s) => {
+      const label = s === a ? labelA : labelB;
+      return `- ${label} (${s.isHost ? "host" : "guest"}): persona: "${s.persona}"; assigned voice trait: ${voiceTrait(s.voice)}`;
+    })
     .join("\n");
 
   return `Podcast: "${podcast.title}"
@@ -35,11 +38,13 @@ Structure (how episodes of this show are built): ${podcast.structure}
 This episode's topics: ${episode.topics}
 Production notes for this episode: ${episode.productionNotes}
 
-The two speakers, in the order they should appear in your output:
+The two speakers, in the order they should appear in your output — labeled here exactly as they'll be \
+labeled in the actual recording (first name only, unless a shared first name required the full name for \
+this pair):
 ${speakerBlocks}
 
-Produce the "scene", a "speakerProfiles" entry for each of these two speakers (in that order, matching \
-their names exactly), and a "sampleContext" line.`;
+Produce the "scene", a "speakerProfiles" entry for each of these two speakers (in that order, using their \
+label above as that entry's "name" field, exactly as given), and a "sampleContext" line.`;
 }
 
 export const producerSystemInstruction = SYSTEM_INSTRUCTION;

@@ -27,6 +27,17 @@ describe("SPEAKER_LABEL_RE / extractSpeakerNames", () => {
     const script = "Marcus: Hey.\n\nPriya: Hi.\n\nMarcus: Again.";
     expect(extractSpeakerNames(script)).toEqual(["Marcus", "Priya"]);
   });
+
+  it("matches a label containing an accented/non-ASCII letter", () => {
+    // Regression test: a plain [A-Za-z] character class stops matching at
+    // the first non-ASCII letter, so "Chloé:" would fail to match at all —
+    // the whole line then gets folded into the previous turn as an
+    // unlabeled continuation instead of recognized as Chloé's own turn,
+    // which surfaced as "the generated script never gives Chloé Moreau a
+    // line" even though her lines were genuinely present in the script.
+    expect(SPEAKER_LABEL_RE.test("Chloé: Bonjour!")).toBe(true);
+    expect(extractSpeakerNames("Chloé: Hey.\n\nMarcus: Hi.")).toEqual(["Chloé", "Marcus"]);
+  });
 });
 
 describe("parseScriptTurns", () => {
@@ -48,6 +59,14 @@ describe("parseScriptTurns", () => {
     expect(parseScriptTurns(script)).toEqual([
       { speaker: "Marcus", text: "First part.\n\nStill part of the same turn." },
       { speaker: "Priya", text: "Reply." },
+    ]);
+  });
+
+  it("parses a turn labeled with an accented/non-ASCII name", () => {
+    const script = "Chloé: Bonjour!\n\nMarcus: Hey.";
+    expect(parseScriptTurns(script)).toEqual([
+      { speaker: "Chloé", text: "Bonjour!" },
+      { speaker: "Marcus", text: "Hey." },
     ]);
   });
 });

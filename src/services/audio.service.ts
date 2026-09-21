@@ -10,6 +10,7 @@ import { bumpGeneratedAudioSeconds, getEpisode } from "../data/episode.repositor
 import { CHUNK_LOCK_POLL_INTERVAL_MS, EPISODE_CHUNK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
+import { speakerLabel } from "./episodeGeneration/speakerSelection";
 import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
 import { resolveTimeToByteOffset } from "../utils/oggOpus";
 import { extractHeaderPages, OggPageAccumulator, OggStitcher } from "../utils/oggStitch";
@@ -32,23 +33,37 @@ function getChunkText(transcript: string, chunk: TtsChunk): string {
   return label ? `${label} ${raw}` : raw;
 }
 
+/**
+ * The `speaker` field returned here must match, byte-for-byte, the label
+ * scriptGeneration.prompts.ts told the writer to use for that person (first
+ * name only, unless the cast shares a first name — see speakerSelection.ts's
+ * speakerLabel) — the transcript's turn labels, this mapping, and
+ * geminiClient.ts's `aliasByName` all have to agree on the same string for
+ * a chunk's speaker to route to the right voice.
+ */
 function resolveCastVoices(
   podcast: Podcast,
   episode: Episode,
 ): { speaker: string; voiceName: string }[] {
   const hosts = podcast.hosts.filter((h) => episode.participantHostIds.includes(h.id));
-  return [...hosts, ...episode.guests].map((p) => ({ speaker: p.name, voiceName: p.voice }));
+  const [p1, p2] = [...hosts, ...episode.guests];
+  if (!p1 || !p2) return [];
+  return [
+    { speaker: speakerLabel(p1.name, p2.name), voiceName: p1.voice },
+    { speaker: speakerLabel(p2.name, p1.name), voiceName: p2.voice },
+  ];
 }
 
 /**
  * The producer prompt (see producerPrompt.service.ts) is generated from
- * persona/podcast/episode metadata before the conversation starts, and chunk
- * boundaries are sealed incrementally as the conversation progresses (see
- * chunker.ts's sealedChunksSoFar, wired up in orchestrator.ts) — so audio
- * can start streaming as soon as the first chunk is sealed, well before the
- * episode reaches status "ready". This only rules out the cases where there
- * is nothing to stream at all: generation hasn't produced a prompt yet, or
- * it failed outright.
+ * persona/podcast/episode metadata alone, in parallel with the single-LLM
+ * script-writing call (see scriptGeneration.service.ts) — neither needs the
+ * other. All TTS chunks are known as soon as that script call returns and
+ * gets chunked (orchestrator.ts), at which point status flips straight to
+ * "streamable", well before the episode reaches "ready" (condensation may
+ * still be running). This only rules out the cases where there is nothing
+ * to stream at all: generation hasn't produced a prompt yet, or it failed
+ * outright.
  */
 function assertAudioAvailable(episode: Episode): asserts episode is Episode & { ttsPrompt: string } {
   if (episode.status === "failed") {
@@ -271,21 +286,21 @@ export function writeChunk(
  *   the full body from byte 0 with a plain `200`, exactly what an HTTP
  *   client expects when its Range request wasn't honored, and it
  *   self-skips accordingly.
- * - While the episode is still in progress (`status: "generating"` before
- *   any chunk is sealed, `"streamable"` once at least one is), chunk
- *   boundaries keep being sealed by the orchestrator as the conversation
- *   progresses (see chunker.ts's sealedChunksSoFar). Once this stream has
- *   generated audio for every chunk sealed so far, it re-fetches the
- *   episode doc and waits for more to appear instead of ending the
- *   response — so a listener who started playback early rides straight
- *   through into newly-generated audio without a second request. Since a
- *   chunk generated while the episode isn't yet `"ready"` can never be
- *   trusted as the episode's true final chunk (sealing always holds back
- *   the still-growing tail until generation completes), only a chunk
- *   processed once `status` has already confirmed `"ready"` — meaning
- *   `chunks` is now the complete, final list — gets its Ogg `EOS` page
- *   preserved; every other chunk has it cleared, even if it's the last one
- *   sealed *so far*.
+ * - While the episode is still in progress (`status: "generating"` while the
+ *   script is being written/chunked, `"streamable"` once chunking is done —
+ *   at that point `ttsChunks` is already the full, final list, since the
+ *   single-LLM script call and its chunking pass both happen in one shot
+ *   rather than incrementally; only `condensedSummaries`/`status: "ready"`
+ *   are still pending), this stream re-fetches the episode doc and waits
+ *   for `status` to reach a terminal value instead of ending the response
+ *   the moment it runs out of already-known chunks — so a listener who
+ *   started playback the instant the episode became `"streamable"` rides
+ *   straight through without a second request. Only a chunk processed once
+ *   `status` has already confirmed `"ready"` gets its Ogg `EOS` page
+ *   preserved; every chunk processed before that has it cleared, even
+ *   though (unlike the old incrementally-sealed pipeline) it may already be
+ *   the true final chunk — this is a narrow, cosmetic gap, not a
+ *   correctness issue, since stream termination doesn't depend on it.
  *
  * A real `Range` header is only ever sent by a client resuming a
  * connection it already established from byte 0 earlier (a network retry,
@@ -401,14 +416,14 @@ export async function streamEpisodeAudio(
   let index = 0;
   while (!stopped) {
     if (index >= chunks.length) {
-      // Caught up to every chunk sealed as of our last look. If the episode
-      // is still in progress ("generating" — nothing sealed yet — or
-      // "streamable" — some chunks sealed, more turns still to come), more
-      // chunk boundaries may land in Firestore as the conversation
-      // continues — poll for them instead of ending the stream early.
-      // "ready" here means we've genuinely reached the end (possibly the
-      // episode finished while we were mid-stream); "failed" means there's
-      // nothing more coming.
+      // Caught up to every chunk known as of our last look. If the episode
+      // is still "generating" (the script hasn't been written/chunked yet,
+      // so `chunks` may currently be empty), poll for it instead of ending
+      // the stream early — once it flips to "streamable" or "ready",
+      // `ttsChunks` is already the complete, final list (chunking happens
+      // in one pass right after the single-LLM script call, not
+      // incrementally), so this poll only ever needs to fire while nothing
+      // has been chunked yet. "failed" means there's nothing more coming.
       if (status === "ready" || status === "failed") break;
       await sleep(EPISODE_CHUNK_POLL_INTERVAL_MS);
       const fresh = await getEpisode(podcastId, episodeId);
