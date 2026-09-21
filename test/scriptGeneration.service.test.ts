@@ -1,93 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSpeakerTurns } from "../src/services/episodeGeneration/scriptGeneration.service";
-import type { Speaker } from "../src/services/episodeGeneration/speakerSelection";
+import { validateSpeakerTurns } from "../src/services/episodeGeneration/scriptGeneration.service";
 
-function speaker(name: string, isHost = true): Speaker {
-  return { id: name.toLowerCase(), name, voice: "Puck", persona: "p", isHost };
-}
-
-describe("normalizeSpeakerTurns", () => {
-  const maya = speaker("Maya Cruz");
-  const camille = speaker("Camille Laurent", false);
-  const speakers: [Speaker, Speaker] = [maya, camille];
-
-  it("keeps an already-exact label unchanged", () => {
-    const result = normalizeSpeakerTurns(
-      [
-        { speaker: "Maya Cruz", text: "Hey." },
-        { speaker: "Camille Laurent", text: "Hi." },
-      ],
-      speakers,
-    );
-    expect(result).toEqual([
-      { speaker: "Maya Cruz", text: "Hey." },
-      { speaker: "Camille Laurent", text: "Hi." },
-    ]);
-  });
-
-  it("normalizes a case-insensitive exact match to the canonical casing", () => {
-    const result = normalizeSpeakerTurns(
-      [
-        { speaker: "maya cruz", text: "Hey." },
-        { speaker: "Camille Laurent", text: "Hi." },
-      ],
-      speakers,
-    );
-    expect(result[0]?.speaker).toBe("Maya Cruz");
-  });
-
-  it("normalizes an abbreviated first-name label (the label-drift finding)", () => {
-    // Regression case from the single-LLM experiment: stricter word-count
-    // prompting drifted full names ("Maya Cruz") down to first names only
-    // ("Maya") — chunker.ts/geminiClient.ts key off the exact full name, so
-    // this has to be resolved back to the canonical form.
-    const result = normalizeSpeakerTurns(
-      [
-        { speaker: "Maya", text: "Hey." },
-        { speaker: "Camille", text: "Hi." },
-      ],
-      speakers,
-    );
-    expect(result).toEqual([
-      { speaker: "Maya Cruz", text: "Hey." },
-      { speaker: "Camille Laurent", text: "Hi." },
-    ]);
-  });
-
-  it("throws on a label that matches neither speaker", () => {
+describe("validateSpeakerTurns", () => {
+  it("accepts turns that only use the two expected labels", () => {
     expect(() =>
-      normalizeSpeakerTurns(
+      validateSpeakerTurns(
         [
+          { speaker: "Maya", text: "Hey." },
+          { speaker: "Camille", text: "Hi." },
+          { speaker: "Maya", text: "Anyway." },
+        ],
+        "Maya",
+        "Camille",
+      ),
+    ).not.toThrow();
+  });
+
+  it("throws on a label that isn't one of the two expected ones", () => {
+    expect(() =>
+      validateSpeakerTurns(
+        [
+          { speaker: "Maya", text: "Hey." },
           { speaker: "Narrator", text: "Once upon a time." },
-          { speaker: "Camille Laurent", text: "Hi." },
         ],
-        speakers,
+        "Maya",
+        "Camille",
       ),
-    ).toThrow(/Could not match speaker label/);
+    ).toThrow(/unexpected speaker label "Narrator"/);
   });
 
-  it("throws on a label that ambiguously matches more than one speaker's first name", () => {
-    const ambiguousSpeakers: [Speaker, Speaker] = [speaker("Cam Rivera"), speaker("Cam Chen", false)];
+  it("throws on a full name where only the first name was asked for", () => {
+    // The whole point of the exact-format contract: no fuzzy tolerance for
+    // "close enough" labels — either the model followed the instruction, or
+    // the caller retries the generation.
     expect(() =>
-      normalizeSpeakerTurns(
-        [
-          { speaker: "Cam", text: "Hey." },
-          { speaker: "Cam Chen", text: "Hi." },
-        ],
-        ambiguousSpeakers,
-      ),
-    ).toThrow(/Could not match speaker label/);
-  });
-
-  it("throws if one of the two cast members never gets a line", () => {
-    expect(() =>
-      normalizeSpeakerTurns(
+      validateSpeakerTurns(
         [
           { speaker: "Maya Cruz", text: "Hey." },
-          { speaker: "Maya Cruz", text: "Still me." },
+          { speaker: "Camille", text: "Hi." },
         ],
-        speakers,
+        "Maya",
+        "Camille",
       ),
-    ).toThrow(/never gives Camille Laurent a line/);
+    ).toThrow(/unexpected speaker label "Maya Cruz"/);
+  });
+
+  it("throws if one of the two expected speakers never gets a line", () => {
+    expect(() =>
+      validateSpeakerTurns(
+        [
+          { speaker: "Maya", text: "Hey." },
+          { speaker: "Maya", text: "Still me." },
+        ],
+        "Maya",
+        "Camille",
+      ),
+    ).toThrow(/never gives Camille a line/);
   });
 });

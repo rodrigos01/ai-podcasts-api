@@ -1,7 +1,7 @@
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import type { Cast, Speaker } from "../../services/episodeGeneration/speakerSelection";
+import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
   podcast: Podcast;
@@ -45,6 +45,8 @@ export function buildScriptSystemInstruction(
   ctx: ScriptGenerationContext,
 ): string {
   const [a, b] = cast.speakers;
+  const labelA = speakerLabel(a.name, b.name);
+  const labelB = speakerLabel(b.name, a.name);
   const speakerBlocks = cast.speakers.map((s) => speakerBlock(s, ctx)).join("\n\n");
 
   return `You are writing the complete script for one episode of the podcast "${ctx.podcast.title}", \
@@ -103,26 +105,33 @@ shaped like "Word:" at the very start of a line as a change of speaker, and it w
 attribution. If you want that kind of framing, phrase it without the colon instead (e.g. "Watch this —" or \
 "Funny thing, actually,").
 
-## Output format
+## Output format — this feeds Gemini TTS's multi-speaker synthesis directly, exactly as you write it
 
 Write the entire episode as a sequence of turns in this exact format, one turn per block, separated by a \
 single blank line:
 
-${a.name}: <the line ${a.name} speaks>
+${labelA}: <the line ${a.name} speaks>
 
-${b.name}: <the line ${b.name} speaks>
+${labelB}: <the line ${b.name} speaks>
 
-Use each speaker's name EXACTLY as given above, spelled out in full, every single time a turn starts — \
-never abbreviate it, shorten it to a first name only, or use a nickname. The exact strings you must use as \
-labels are "${a.name}" and "${b.name}".
+The ONLY two valid labels, spelled and capitalized exactly like this, are "${labelA}" and "${labelB}" — \
+use each one's first name alone (not their full name, a nickname, or a title) at the start of every single \
+turn, with nothing else on that line before the colon. This is a strict format requirement, not a style \
+preference: the system reading your output matches turn labels byte-for-byte against these two exact \
+strings to route each line to the correct voice, so any other form (a full name, a shortened or misspelled \
+version, a different capitalization) will make that turn's line fail to reach the right voice.
 
 Respond with ONLY the transcript itself in that format — no preamble, no headers, no commentary before or \
 after it.`;
 }
 
 export function buildScriptGenerationPrompt(cast: Cast, wordTarget: WordTarget): string {
-  const kickoff = cast.speakers.find((s) => s.id === cast.kickoffSpeakerId) ?? cast.speakers[0];
-  return `${kickoff.name} opens the episode, following the podcast's structure and this episode's \
+  const [a, b] = cast.speakers;
+  const kickoff = cast.speakers.find((s) => s.id === cast.kickoffSpeakerId) ?? a;
+  const other = cast.speakers.find((s) => s.id !== kickoff.id) ?? b;
+  const kickoffLabel = speakerLabel(kickoff.name, other.name);
+
+  return `${kickoffLabel} opens the episode, following the podcast's structure and this episode's \
 production notes — there is no prior conversation before this.
 
 The whole episode should land between ${wordTarget.min} and ${wordTarget.max} spoken words in total. Pace \

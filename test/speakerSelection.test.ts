@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectCast } from "../src/services/episodeGeneration/speakerSelection";
+import { selectCast, speakerLabel } from "../src/services/episodeGeneration/speakerSelection";
 import type { Person } from "../src/schemas/person.schema";
 
 function person(id: string, name: string): Person {
@@ -44,5 +44,24 @@ describe("selectCast", () => {
     expect(() =>
       selectCast([person("h1", "A"), person("h2", "B")], [person("g1", "C")]),
     ).toThrow();
+  });
+});
+
+describe("speakerLabel", () => {
+  it("returns the first name when the two speakers' first names differ", () => {
+    expect(speakerLabel("Maya Cruz", "Camille Laurent")).toBe("Maya");
+  });
+
+  it("returns the first name unchanged for an already-single-word name", () => {
+    expect(speakerLabel("Marcus", "Priya")).toBe("Marcus");
+  });
+
+  it("falls back to the full name when both speakers share a first name", () => {
+    expect(speakerLabel("Cam Rivera", "Cam Chen")).toBe("Cam Rivera");
+    expect(speakerLabel("Cam Chen", "Cam Rivera")).toBe("Cam Chen");
+  });
+
+  it("treats the first-name collision check case-insensitively", () => {
+    expect(speakerLabel("cam Rivera", "Cam Chen")).toBe("cam Rivera");
   });
 });

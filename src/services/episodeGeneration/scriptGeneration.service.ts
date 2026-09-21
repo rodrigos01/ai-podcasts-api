@@ -8,7 +8,7 @@ import {
 import { countWords } from "../../utils/wordCount";
 import { parseScriptTurns, type ScriptTurn } from "../../utils/scriptText";
 import { buildTranscript } from "./transcriptBuilder";
-import type { Cast, Speaker } from "./speakerSelection";
+import { speakerLabel, type Cast } from "./speakerSelection";
 
 const MAX_GENERATION_ATTEMPTS = 3;
 
@@ -30,53 +30,32 @@ function sanitizeTurnText(text: string): string {
 }
 
 /**
- * Resolves a possibly-drifted speaker label (see AGENTS.md's migration note —
- * a single-LLM script occasionally abbreviates a full name like "Maya Cruz"
- * down to "Maya") against the known 2-speaker cast. Accepts an exact match
- * first, then a case-insensitive exact match, then a case-insensitive
- * prefix/first-name match against exactly one speaker. Throws on anything
- * ambiguous or unmatched — chunker.ts and geminiClient.ts's TTS voice
- * assignment both key off the exact name string, so a wrong guess here is
- * worse than failing loudly and letting the caller retry the whole
- * generation.
+ * Validates that every parsed turn uses one of the two labels we told the
+ * model to use (see scriptGeneration.prompts.ts — first name only, unless
+ * the cast shares a first name) and that both actually appear at least
+ * once. No fuzzy resolution (case-insensitive/prefix/abbreviation matching)
+ * — we ask for an exact, simple format and trust the model to produce it;
+ * this only checks that it did, so a genuine miss surfaces as a clean
+ * retry instead of a guessed-at correction. A script that used the wrong
+ * label, or that collapses onto one voice, would otherwise reach Cloud
+ * TTS's `multiSpeakerMarkup.turns` with an unrecognized or missing speaker
+ * — the latter trips the documented "single-speaker chunk + 2-voice TTS
+ * config" bug (MultiSpeakerVoiceConfig requires exactly two speaker
+ * configs regardless of who actually speaks).
  */
-function resolveSpeakerLabel(rawLabel: string, speakers: [Speaker, Speaker]): string {
-  const exact = speakers.find((s) => s.name === rawLabel);
-  if (exact) return exact.name;
-
-  const lower = rawLabel.toLowerCase();
-  const caseInsensitive = speakers.filter((s) => s.name.toLowerCase() === lower);
-  if (caseInsensitive.length === 1) return caseInsensitive[0]!.name;
-
-  const prefixMatches = speakers.filter((s) => s.name.toLowerCase().startsWith(lower));
-  if (prefixMatches.length === 1) return prefixMatches[0]!.name;
-
-  const firstNameMatches = speakers.filter((s) => s.name.toLowerCase().split(/\s+/)[0] === lower);
-  if (firstNameMatches.length === 1) return firstNameMatches[0]!.name;
-
-  throw new Error(`Could not match speaker label "${rawLabel}" to a known cast member`);
-}
-
-/**
- * Normalizes every turn's speaker label against the known cast and throws if
- * either cast member never actually appears — a script that collapses onto
- * one voice would trip the "single-speaker chunk + 2-voice TTS config" bug
- * AGENTS.md documents (Cloud TTS's MultiSpeakerVoiceConfig requires exactly
- * two speaker configs regardless of who actually speaks in a chunk).
- */
-export function normalizeSpeakerTurns(turns: ScriptTurn[], speakers: [Speaker, Speaker]): ScriptTurn[] {
-  const normalized = turns.map((turn) => ({
-    speaker: resolveSpeakerLabel(turn.speaker, speakers),
-    text: turn.text,
-  }));
-
-  for (const speaker of speakers) {
-    if (!normalized.some((turn) => turn.speaker === speaker.name)) {
-      throw new Error(`Generated script never gives ${speaker.name} a line`);
-    }
+export function validateSpeakerTurns(turns: ScriptTurn[], labelA: string, labelB: string): void {
+  const unexpected = turns.find((turn) => turn.speaker !== labelA && turn.speaker !== labelB);
+  if (unexpected) {
+    throw new Error(
+      `Script used an unexpected speaker label "${unexpected.speaker}" (expected only "${labelA}" or "${labelB}")`,
+    );
   }
-
-  return normalized;
+  if (!turns.some((turn) => turn.speaker === labelA)) {
+    throw new Error(`Generated script never gives ${labelA} a line`);
+  }
+  if (!turns.some((turn) => turn.speaker === labelB)) {
+    throw new Error(`Generated script never gives ${labelB} a line`);
+  }
 }
 
 async function generateOnce(
@@ -84,6 +63,10 @@ async function generateOnce(
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
 ): Promise<EpisodeScript> {
+  const [a, b] = cast.speakers;
+  const labelA = speakerLabel(a.name, b.name);
+  const labelB = speakerLabel(b.name, a.name);
+
   const raw = await generatePlainText({
     systemInstruction: buildScriptSystemInstruction(cast, ctx),
     prompt: buildScriptGenerationPrompt(cast, wordTarget),
@@ -93,10 +76,10 @@ async function generateOnce(
   if (turns.length === 0) {
     throw new Error("Gemini returned a script with no recognizable turns");
   }
+  validateSpeakerTurns(turns, labelA, labelB);
 
-  const normalized = normalizeSpeakerTurns(turns, cast.speakers);
   const transcript = buildTranscript(
-    normalized.map((turn) => ({ speakerName: turn.speaker, text: sanitizeTurnText(turn.text) })),
+    turns.map((turn) => ({ speakerName: turn.speaker, text: sanitizeTurnText(turn.text) })),
   );
 
   return { transcript, wordCount: countWords(transcript) };
@@ -106,10 +89,10 @@ async function generateOnce(
  * Replaces the old per-turn `runConversation` loop (conversationLoop.ts) with
  * a single call that writes the whole episode's script itself — see
  * AGENTS.md's migration note for why. Retries the whole generation on a
- * normalization failure (a bad/ambiguous speaker label, or a script that
- * drops one of the two speakers entirely) rather than failing the episode
- * outright: a fresh generation is cheap relative to what it protects against
- * (wrong TTS voice attribution).
+ * validation failure (an unexpected speaker label, or a script that drops
+ * one of the two speakers entirely) rather than failing the episode
+ * outright: a fresh generation is cheap relative to what it protects
+ * against (wrong TTS voice attribution).
  */
 export async function generateEpisodeScript(
   cast: Cast,

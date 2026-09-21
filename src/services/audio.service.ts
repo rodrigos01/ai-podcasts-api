@@ -10,6 +10,7 @@ import { bumpGeneratedAudioSeconds, getEpisode } from "../data/episode.repositor
 import { CHUNK_LOCK_POLL_INTERVAL_MS, EPISODE_CHUNK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
+import { speakerLabel } from "./episodeGeneration/speakerSelection";
 import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
 import { resolveTimeToByteOffset } from "../utils/oggOpus";
 import { extractHeaderPages, OggPageAccumulator, OggStitcher } from "../utils/oggStitch";
@@ -32,12 +33,25 @@ function getChunkText(transcript: string, chunk: TtsChunk): string {
   return label ? `${label} ${raw}` : raw;
 }
 
+/**
+ * The `speaker` field returned here must match, byte-for-byte, the label
+ * scriptGeneration.prompts.ts told the writer to use for that person (first
+ * name only, unless the cast shares a first name — see speakerSelection.ts's
+ * speakerLabel) — the transcript's turn labels, this mapping, and
+ * geminiClient.ts's `aliasByName` all have to agree on the same string for
+ * a chunk's speaker to route to the right voice.
+ */
 function resolveCastVoices(
   podcast: Podcast,
   episode: Episode,
 ): { speaker: string; voiceName: string }[] {
   const hosts = podcast.hosts.filter((h) => episode.participantHostIds.includes(h.id));
-  return [...hosts, ...episode.guests].map((p) => ({ speaker: p.name, voiceName: p.voice }));
+  const [p1, p2] = [...hosts, ...episode.guests];
+  if (!p1 || !p2) return [];
+  return [
+    { speaker: speakerLabel(p1.name, p2.name), voiceName: p1.voice },
+    { speaker: speakerLabel(p2.name, p1.name), voiceName: p2.voice },
+  ];
 }
 
 /**
