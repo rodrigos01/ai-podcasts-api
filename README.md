@@ -8,8 +8,8 @@ Product behavior is fully described in [specs.md](specs.md); this document cover
 
 1. **Create a podcast** via a 3-option wizard: describe what you want, pick (and iteratively revise) one of three generated concepts — title, description, structure, and fictional hosts with voices and personas.
 2. **Upload source material** (text or PDF) for a podcast — background reading the hosts and guests will actually reference.
-3. **Create an episode** via a wizard: pick a target length up front, point it at some sources, get back one or two suggested drafts (title, topics, production notes, an optional guest) — a second, 2-episode-split suggestion only appears when the target length is too short for the material. Revise and confirm one draft at a time.
-4. Confirming an episode kicks off **generation in the background**: a single LLM call writes the full episode's transcript (both speakers), a "producer" LLM turns episode metadata into a TTS direction sheet, and the transcript is chunked for synthesis. Poll a status endpoint until it's `ready`. For a 2-part split, confirm and let part 1 finish generating before confirming part 2, so part 2 picks up part 1's continuity notes.
+3. **Create an episode** via a wizard: pick a target length up front, point it at some sources, get back one or two suggested drafts (title, topics, production notes, an optional guest) — a second, 2-episode-split suggestion only appears when the target length is too short for the material. Revise and confirm a suggestion (both its drafts, for a split) as a whole.
+4. Confirming a suggestion kicks off **generation in the background** for every episode in it at once: a single LLM call writes each episode's full transcript (both speakers), a "producer" LLM turns episode metadata into a TTS direction sheet, and the transcript is chunked for synthesis. Poll each episode's own status endpoint until it's `ready`. For a confirmed 2-part split, the server generates the parts sequentially behind the scenes — part 2 only starts once part 1 is `ready`, so it inherits part 1's continuity notes — transparently to the caller.
 5. **Stream the audio** from a single endpoint that behaves like a normal seekable audio file once fully generated, and like a live/growing stream (playable, but not seekable ahead of what exists yet) while still being synthesized.
 
 ## Tech stack
@@ -167,7 +167,7 @@ Three ways to add a source, on the same endpoint:
 |---|---|---|
 | POST | `/podcasts/:podcastId/episodes/wizard/options` | Generate 1-2 episode suggestions from a target length + sources (+ optional prompt) |
 | POST | `/podcasts/:podcastId/episodes/wizard/revise` | Revise one draft within the suggestions from a free-text instruction |
-| POST | `/podcasts/:podcastId/episodes` | Confirm a single draft — creates the episode and starts generation (`202`) |
+| POST | `/podcasts/:podcastId/episodes` | Confirm a whole suggestion (1 or 2 episodes) — creates all of them and starts generation (`202`) |
 | GET | `/podcasts/:podcastId/episodes` | List episodes |
 | GET | `/podcasts/:podcastId/episodes/:episodeId` | Get one episode (includes transcript/ttsPrompt once ready) |
 | GET | `/podcasts/:podcastId/episodes/:episodeId/status` | Lightweight status poll (no transcript payload) |
@@ -205,7 +205,7 @@ Three ways to add a source, on the same endpoint:
 }
 ```
 
-`suggestions[0]` is always the single-episode option; `suggestions[1]`, when present, is always the 2-episode split — clients can rely on this shape rather than inspecting `episodes.length` themselves. There is no more `suggestedLength` output hint — length is an input now, not something suggested after the fact. To confirm a split, show both of its drafts together, then call the confirm endpoint below once per draft — confirm and let part 1 reach `ready` before confirming part 2, so part 2 inherits part 1's continuity notes (see `condensedSummaries` below).
+`suggestions[0]` is always the single-episode option; `suggestions[1]`, when present, is always the 2-episode split — clients can rely on this shape rather than inspecting `episodes.length` themselves. There is no more `suggestedLength` output hint — length is an input now, not something suggested after the fact. To confirm a suggestion (single or split), pass its whole `episodes` array to the confirm endpoint below in one call — the server sequences the actual generation itself (see below), so this is exactly the same call whether you picked the single-episode suggestion or the split.
 
 **`POST /podcasts/:podcastId/episodes/wizard/revise`**
 ```json
@@ -220,18 +220,29 @@ Three ways to add a source, on the same endpoint:
 // response: same shape as /wizard/options
 ```
 
-**`POST /podcasts/:podcastId/episodes`** (confirm — one draft at a time, even for a 2-part split)
+**`POST /podcasts/:podcastId/episodes`** (confirm — takes a whole suggestion's `episodes` array, 1 or 2 entries)
 ```json
+// request — same shape for a single-episode suggestion (1 entry) or a confirmed split (2 entries)
 {
-  "title": "...",
-  "topics": "...",
-  "length": "short",            // "short" | "medium" | "long"
-  "sourceIds": ["<source-id>"],
-  "participantHostIds": ["<host-id>"],
-  "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
-  "productionNotes": "..."
+  "episodes": [
+    {
+      "title": "...",
+      "topics": "...",
+      "length": "short",            // "short" | "medium" | "long"
+      "sourceIds": ["<source-id>"],
+      "participantHostIds": ["<host-id>"],
+      "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
+      "productionNotes": "..."
+    }
+    // a second entry here, for a confirmed split
+  ]
 }
+
+// response (202) — every episode is created immediately
+{ "episodes": [ /* created Episode objects, in the same order */ ] }
 ```
+
+For a split, both episodes are created right away, but generation runs sequentially behind the scenes: the second one's script generation doesn't actually start until the first reaches `ready`, so it can inherit the first's `condensedSummaries` — the same continuity any other follow-up episode gets. This is entirely transparent to the caller: poll each episode's own `/status` as usual, and the second one just shows no progress yet until its turn comes.
 
 **Important constraint**: `participantHostIds.length + guests.length` must equal exactly **2** — every episode is voiced by either 2 hosts or 1 host + 1 guest, never more or fewer. A single-host podcast therefore requires a guest on every episode.
 

@@ -30,6 +30,17 @@ export const episodeCreateSchema = z
   })
   .check(twoVoiceCast);
 
+// Confirming an episode always takes the whole wizard suggestion at once —
+// 1 entry for a single episode, or 2 for a confirmed split — never a bare
+// single-episode object. The server creates all of them immediately and
+// generates them sequentially in the background (see
+// episodeGeneration/orchestrator.ts's runEpisodeGenerationSequence); the
+// sequencing is transparent to the caller, who just gets back every created
+// episode in one response and polls each one's own status as usual.
+export const episodeCreateRequestSchema = z.object({
+  episodes: z.array(episodeCreateSchema).min(1).max(2),
+});
+
 export const episodeUpdateSchema = z.object({
   title: z.string().min(1).optional(),
   topics: z.string().min(1).optional(),
@@ -90,6 +101,7 @@ export const episodeSchema = z.object({
 });
 
 export type EpisodeCreateInput = z.infer<typeof episodeCreateSchema>;
+export type EpisodeCreateRequest = z.infer<typeof episodeCreateRequestSchema>;
 export type EpisodeUpdateInput = z.infer<typeof episodeUpdateSchema>;
 export type Episode = z.infer<typeof episodeSchema>;
 export type EpisodeProgress = z.infer<typeof episodeProgressSchema>;

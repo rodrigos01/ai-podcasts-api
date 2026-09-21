@@ -39,7 +39,7 @@ After the podcast is created, users will still bew able to modify it the same wa
     2.a. If the user decides to make any changes, either by selecting one of the predicted ones or inputing their own, the app will re-generate the episode based on the response.
     2.b. If the chosen length is too short to do the material justice, the app will also suggest splitting it into two episodes ("Part 1"/"Part 2"), each individually fitting the chosen length — the user sees both the single-episode suggestion and the split side by side and picks which to go with.
 3. Users will be able to edit the episode information before it's created by editing the title, topics, produiction notes and each of the guests.
-4. When the user makes the final confirmation on an episode (one at a time, even for a two-part split) the app will begin the generation process for it (See Episode generation on the technical specifications). For a split, the second part should only be confirmed once the first part has finished generating, so it can build on the first part's continuity.
+4. When the user makes the final confirmation, they confirm the whole chosen suggestion at once — a single episode, or both parts of a split together. The app begins generation for all of them right away (See Episode generation on the technical specifications), but generates a split's parts one after the other behind the scenes, so the second part can build on the first part's continuity — this sequencing is invisible to the user, who just sees both episodes progress in turn.
 
 ## Technical Specifications
 

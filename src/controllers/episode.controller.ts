@@ -8,12 +8,15 @@ import {
 } from "../data/episode.repository";
 import { getSource } from "../data/source.repository";
 import { requireUserId } from "../middleware/requireAuth";
-import { episodeCreateSchema, episodeUpdateSchema } from "../schemas/episode.schema";
+import { episodeCreateRequestSchema, episodeUpdateSchema } from "../schemas/episode.schema";
 import {
   episodeWizardOptionsRequestSchema,
   episodeWizardReviseRequestSchema,
 } from "../schemas/wizard.schema";
-import { runEpisodeGeneration } from "../services/episodeGeneration/orchestrator";
+import {
+  runEpisodeGeneration,
+  runEpisodeGenerationSequence,
+} from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
@@ -54,14 +57,26 @@ export async function wizardRevise(req: Request, res: Response) {
 export async function create(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   await requireOwnedPodcast(podcastId, requireUserId(req));
-  const input = episodeCreateSchema.parse(req.body);
-  const episode = await createEpisode(podcastId, input);
+  const input = episodeCreateRequestSchema.parse(req.body);
 
-  void runEpisodeGeneration(podcastId, episode.id).catch((err: unknown) => {
-    console.error(`Episode generation failed for ${podcastId}/${episode.id}:`, err);
+  const episodes = [];
+  for (const episodeInput of input.episodes) {
+    episodes.push(await createEpisode(podcastId, episodeInput));
+  }
+
+  // Every episode is created and returned immediately; generation itself
+  // runs sequentially in the background (part 2, if any, only actually
+  // starts once part 1 is "ready") — see orchestrator.ts's
+  // runEpisodeGenerationSequence for why. The caller doesn't do anything
+  // differently for a split vs. a single episode.
+  void runEpisodeGenerationSequence(
+    podcastId,
+    episodes.map((episode) => episode.id),
+  ).catch((err: unknown) => {
+    console.error(`Episode generation sequence failed for ${podcastId}:`, err);
   });
 
-  res.status(202).json(episode);
+  res.status(202).json({ episodes });
 }
 
 export async function list(req: Request, res: Response) {

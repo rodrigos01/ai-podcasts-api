@@ -109,3 +109,49 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     throw err;
   }
 }
+
+/**
+ * Runs a confirmed multi-episode suggestion's episodes one at a time, in
+ * order — the product decision behind confirming a 2-episode split in one
+ * request (see episode.controller.ts's `create`): part 2 should inherit
+ * part 1's `condensedSummaries`, which only exist once part 1 has actually
+ * finished (`getRecentCondensedSummariesForHost` only looks at `"ready"`
+ * episodes), so it can't start generating until part 1 does. Callers don't
+ * need to do anything to get this — every episode in the request is created
+ * immediately and returned right away; this just controls when each one's
+ * *generation* actually starts, invisibly from the caller's perspective
+ * (each episode's own `/status` reflects its real state throughout).
+ *
+ * If an earlier episode fails, later ones in the sequence are marked
+ * `"failed"` too rather than left stuck in `"generating"` forever — they
+ * depend on the failed one's continuity, so silently generating them anyway
+ * would be wrong, and leaving them un-generated with no explanation would
+ * just look like a hang. `/regenerate` still works on any of them
+ * individually afterward.
+ */
+export async function runEpisodeGenerationSequence(
+  podcastId: string,
+  episodeIds: string[],
+): Promise<void> {
+  for (let i = 0; i < episodeIds.length; i++) {
+    const episodeId = episodeIds[i];
+    if (!episodeId) continue;
+    try {
+      await runEpisodeGeneration(podcastId, episodeId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const remaining = episodeIds.slice(i + 1);
+      await Promise.all(
+        remaining.map((remainingId) =>
+          patchEpisodeState(podcastId, remainingId, {
+            status: "failed",
+            error: `Not generated: an earlier part of this multi-episode suggestion failed (${message})`,
+          }).catch((patchErr) => {
+            console.error(`Failed to mark episode ${podcastId}/${remainingId} as failed:`, patchErr);
+          }),
+        ),
+      );
+      throw err;
+    }
+  }
+}
