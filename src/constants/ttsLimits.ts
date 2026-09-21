@@ -12,12 +12,13 @@ export const MAX_TTS_INPUT_TOKENS = 12_000;
 // chunker and the audiobook scene chunker.
 //
 // Also doubles as a safety margin against a real, empirically-confirmed
-// limit: Cloud TTS's `streamingSynthesize` (see geminiClient.ts's
-// streamSpeech) resets the connection (`13 INTERNAL: Received RST_STREAM`)
-// once a single call's output audio gets long enough — observed
-// consistently at ~178s of audio for a ~950-token chunk. 1000 tokens
-// (~4 min of speech) was comfortably over that; this is sized to stay
-// well under it, not just for fast first-chunk playback.
+// limit that applied to the old bidi `streamingSynthesize` transport (see
+// git history / AGENTS.md): it reset the connection (`13 INTERNAL: Received
+// RST_STREAM`) once a single call's output audio got long enough — observed
+// consistently at ~178s of audio for a ~950-token chunk. `synthesizeSpeech`
+// (the current unary transport — geminiClient.ts's synthesizeChunkAudio)
+// hasn't shown that failure, but this size is kept anyway since it's also
+// what makes fast first-chunk playback possible in the first place.
 export const TARGET_CHUNK_TOKENS = 350;
 
 // Cross-instance chunk-generation lock (see data/audioLock.repository.ts /

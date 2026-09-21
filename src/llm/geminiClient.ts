@@ -15,7 +15,7 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 // import/require conditions, which trips up TS's Node16 module resolution
 // for a static `require`. A dynamic import sidesteps that entirely. Only
 // used for text generation now — TTS moved to @google-cloud/text-to-speech
-// (see streamSpeech), which is plain CommonJS.
+// (see synthesizeChunkAudio), which is plain CommonJS.
 //
 // Routed through the Vertex AI API (`vertexai: true` + project/location),
 // not the API-key-based Generative Language API ("AI Studio") this client
@@ -176,23 +176,25 @@ export interface SpeakerVoice {
 }
 
 /**
- * Streams raw PCM deltas for `directorPrompt` + `turns` as they're
- * synthesized, via Cloud Text-to-Speech's bidi `streamingSynthesize` gRPC
- * call — genuine incremental streaming, not a one-shot call. `onChunk` is
- * invoked once per delta with its decoded bytes, in order, so callers can
- * pipe straight to an HTTP response while also buffering for caching.
+ * Synthesizes one chunk's complete audio for `directorPrompt` + `turns` via
+ * Cloud Text-to-Speech's unary `synthesizeSpeech` call — a single request,
+ * single full-audio response, no bidirectional streaming session. Returns
+ * the whole chunk's Ogg Opus bytes at once; callers still process/cache each
+ * transcript chunk as its own independent call (see audio.service.ts), so
+ * per-chunk on-demand generation is unaffected — only the transport for a
+ * single chunk's own synthesis changed, from a bidi gRPC stream to one
+ * one-way request/response.
  *
- * Migrated off the Generative Language API's Interactions endpoint to this
- * client: same underlying model, same multi-speaker + free-text-prompt
- * capability (confirmed empirically — `StreamingSynthesisInput` accepts a
- * `prompt` string alongside `multiSpeakerMarkup.turns`), much cheaper
- * billing for it. `audioEncoding: "OGG_OPUS"` compresses far better than
- * raw PCM for the same audio — confirmed empirically that `streamingSynthesize`
- * only accepts a subset of the API's advertised encodings: `LINEAR16` and
- * `MP3` are both rejected outright ("Unsupported audio encoding") even
- * though they're valid for the non-streaming `synthesizeSpeech` call;
- * `PCM` and `OGG_OPUS` are the two confirmed to work. Don't "fix" this back
- * to LINEAR16 or MP3 without re-confirming against the live API first.
+ * Switched (2026-09-21) from the bidi `streamingSynthesize` call this used
+ * before, to test whether quality issues reported against that path
+ * (garbled/inconsistent multi-speaker audio) are specific to bidi streaming.
+ * If this doesn't measurably improve quality, it's fine to revert — see git
+ * history for the previous `streamingSynthesize`-based implementation.
+ *
+ * `audioEncoding: "OGG_OPUS"` compresses far better than raw PCM for the
+ * same audio and, unlike `streamingSynthesize` (which only accepted a
+ * narrow subset of encodings), the unary call supports the full advertised
+ * `AudioEncoding` set — confirmed via the client's own proto definitions.
  */
 // Cloud TTS's speakerAlias is far stricter than our own speaker names:
 // "cannot contain whitespace or non-alphanumeric characters" (confirmed
@@ -215,92 +217,43 @@ function sanitizeSpeakerAlias(name: string): string {
   return alias || "Speaker";
 }
 
-export async function streamSpeech(
+export async function synthesizeChunkAudio(
   directorPrompt: string,
   turns: ScriptTurn[],
   speakers: SpeakerVoice[],
-  onChunk: (chunk: Buffer) => void,
-): Promise<void> {
+): Promise<Buffer> {
   const aliasByName = new Map(speakers.map((s) => [s.speaker, s.voiceName]));
   const aliasedTurns = turns.map((turn) => ({
     speaker: aliasByName.get(turn.speaker) ?? sanitizeSpeakerAlias(turn.speaker),
     text: turn.text,
   }));
 
-  let receivedAnyAudio = false;
-  let lastError: unknown;
-  const attempts = 3;
+  // Unlike the old bidi call, nothing is ever written to a live response
+  // before this resolves — the whole chunk's audio comes back in one shot —
+  // so a clean, unconditional retry-the-whole-call is safe here, same as
+  // withRetry's other callers, with no "did we already emit bytes" tracking
+  // needed.
+  const [response] = await withRetry(() =>
+    ttsClient.synthesizeSpeech({
+      input: { prompt: directorPrompt, multiSpeakerMarkup: { turns: aliasedTurns } },
+      voice: {
+        languageCode: "en-US",
+        modelName: TTS_MODEL,
+        multiSpeakerVoiceConfig: {
+          speakerVoiceConfigs: speakers.map((s) => ({
+            speakerAlias: s.voiceName,
+            speakerId: s.voiceName,
+          })),
+        },
+      },
+      audioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 24000 },
+    }),
+  );
 
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const grpcStream = ttsClient.streamingSynthesize();
-
-        grpcStream.on("data", (response: { audioContent?: Uint8Array | Buffer | string | null }) => {
-          if (!response.audioContent) return;
-          receivedAnyAudio = true;
-          // onChunk is caller-provided processing (page reassembly, Ogg
-          // stitching in audio.service.ts) running synchronously inside
-          // this gRPC event handler — outside the `new Promise` executor's
-          // own call stack, so a throw here would NOT be caught by the
-          // try/catch around it and would instead surface as a raw
-          // uncaught exception deep inside the transport's dispatch, well
-          // past any of our own error handling. Converting it into a
-          // normal rejection here is what actually makes a bad chunk
-          // recoverable instead of destabilizing (or crashing) the whole
-          // process — this was very likely the real mechanism behind
-          // "TTS errors crash the server," not Cloud TTS's own clean
-          // content-moderation error path (which already rejects cleanly
-          // via the "error" event below).
-          try {
-            onChunk(Buffer.from(response.audioContent as Uint8Array));
-          } catch (err) {
-            grpcStream.destroy?.();
-            reject(err instanceof Error ? err : new Error(String(err)));
-          }
-        });
-        grpcStream.on("error", (err: Error) => reject(err));
-        grpcStream.on("end", () => resolve());
-
-        grpcStream.write({
-          streamingConfig: {
-            voice: {
-              languageCode: "en-US",
-              modelName: TTS_MODEL,
-              multiSpeakerVoiceConfig: {
-                speakerVoiceConfigs: speakers.map((s) => ({
-                  speakerAlias: s.voiceName,
-                  speakerId: s.voiceName,
-                })),
-              },
-            },
-            streamingAudioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 24000 },
-          },
-        });
-        grpcStream.write({ input: { prompt: directorPrompt, multiSpeakerMarkup: { turns: aliasedTurns } } });
-        grpcStream.end();
-      });
-      lastError = undefined;
-      break;
-    } catch (err) {
-      lastError = err;
-      // A retry after any audio was already emitted would duplicate bytes
-      // already written to a live HTTP response — only a clean failure
-      // (nothing emitted yet) is safe to retry.
-      if (receivedAnyAudio) break;
-      if (attempt < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
-      }
-    }
+  if (!response.audioContent) {
+    throw new Error("Cloud TTS returned no audio data");
   }
-
-  if (lastError) {
-    const message = lastError instanceof Error ? lastError.message : String(lastError);
-    throw new Error(`Cloud TTS stream failed: ${message}`);
-  }
-  if (!receivedAnyAudio) {
-    throw new Error("Cloud TTS stream produced no audio data");
-  }
+  return Buffer.from(response.audioContent as Uint8Array);
 }
 
 export async function countTokens(text: string): Promise<number> {

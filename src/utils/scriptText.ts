@@ -5,7 +5,7 @@
 // those, not just "bracketed text". The captured name must come out
 // byte-for-byte identical to whatever identifies that speaker in the voice
 // config (a Person's `name` / a SpeakerVoice's `speaker`), since that's
-// what the TTS call matches against — see geminiClient.ts's streamSpeech.
+// what the TTS call matches against — see geminiClient.ts's synthesizeChunkAudio.
 //
 // The name is required to start with a capital letter and stay within a
 // name-shaped character set (letters/digits/space/'.-) — this is what

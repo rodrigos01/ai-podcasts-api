@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import { streamSpeech } from "../llm/geminiClient";
+import { synthesizeChunkAudio } from "../llm/geminiClient";
 import {
   getCachedChunk,
   getCachedChunkSize,
@@ -94,6 +94,12 @@ function chunkKey(podcastId: string, episodeId: string, index: number): string {
  * `onDelta`'s second argument marks a piece that's part of the episode's
  * only OpusHead/OpusTags (always chunk 0) — callers must relay these
  * unconditionally, even into a response that otherwise starts later.
+ * `synthesizeChunkAudio` (geminiClient.ts) returns a chunk's whole audio in
+ * one shot (a unary call, not a bidi stream), so `onDelta` fires once per
+ * Ogg page extracted from that single buffer instead of progressively as
+ * network bytes arrive — the caller still sees pages one at a time either
+ * way, just all at once after the chunk finishes generating rather than
+ * spread out during it.
  *
  * Whichever path this takes (real generation below, or the cross-instance
  * cache-poll fallback), `stitcher`'s state is guaranteed correct by the
@@ -125,15 +131,14 @@ async function generateOrJoin(
         stitcher.startChunk();
         const accumulator = new OggPageAccumulator();
         const parts: Buffer[] = [];
-        await streamSpeech(directorPrompt, parseScriptTurns(chunkText), speakers, (delta) => {
-          for (const rawPage of accumulator.push(delta)) {
-            const rewritten = stitcher.processPage(rawPage, isFirstChunk, isLastChunk);
-            if (rewritten) {
-              parts.push(rewritten.page);
-              onDelta(rewritten.page, rewritten.isHeader);
-            }
+        const audio = await synthesizeChunkAudio(directorPrompt, parseScriptTurns(chunkText), speakers);
+        for (const rawPage of accumulator.push(audio)) {
+          const rewritten = stitcher.processPage(rawPage, isFirstChunk, isLastChunk);
+          if (rewritten) {
+            parts.push(rewritten.page);
+            onDelta(rewritten.page, rewritten.isHeader);
           }
-        });
+        }
         accumulator.assertDrained();
         stitcher.endChunk();
         const full = Buffer.concat(parts);
