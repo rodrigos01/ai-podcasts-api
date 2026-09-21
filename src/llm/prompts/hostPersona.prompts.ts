@@ -82,6 +82,13 @@ When you write your line, you may include short bracketed delivery cues inline (
 [thoughtful pause], [sighs], [excitedly]) where they help a text-to-speech performer read the line \
 naturally — but don't overuse them.
 
+Your line is fed directly to a text-to-speech model, not displayed as text — so write it as plain, clean \
+spoken language, with no markdown formatting of any kind: no **bold**/*italics*, no # headers, no bullet \
+or numbered lists, no inline-code formatting, no [links](url). The TTS model has no concept of markdown \
+styling — it reads those characters as literal spoken words (asterisks, hash signs, and so on), which \
+will ruin the line. Bracketed delivery cues (above) are the one exception, since the TTS model is \
+specifically built to read those as performance direction, not literal text.
+
 Never start a new paragraph with a word or short phrase immediately followed by a colon, like "Watch \
 this: ..." or "Funny thing: ...". Our system reads anything shaped like "Word:" at the start of a \
 paragraph as a change of speaker, and it will scramble the recording. If you want that kind of framing, \
