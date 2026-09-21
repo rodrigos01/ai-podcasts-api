@@ -202,7 +202,16 @@ function getOrStartChunkGeneration(
   );
 
   inFlightGenerations.set(key, promise);
-  promise.finally(() => inFlightGenerations.delete(key));
+  // `.finally()` returns a *new* promise that re-rejects with whatever
+  // `promise` rejected with (e.g. a genuine Cloud TTS content-moderation
+  // block) — that derived promise is never awaited by anyone else, so
+  // without this `.catch()` it becomes its own independent unhandled
+  // rejection (crashing the process by default on modern Node) even
+  // though `promise` itself is properly awaited-and-caught by the leader
+  // in streamEpisodeAudio's main loop below. This `.catch()` only silences
+  // that second, redundant rejection — the real error still propagates
+  // normally to whoever awaits `promise` directly.
+  promise.finally(() => inFlightGenerations.delete(key)).catch(() => {});
   return { promise, isLeader: true };
 }
 
