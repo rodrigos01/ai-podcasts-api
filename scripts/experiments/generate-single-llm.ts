@@ -20,6 +20,7 @@ import type { Source } from "../../src/schemas/source.schema";
 
 const PODCAST_ID = process.argv[2] ?? "a5111d8a-8fa1-4407-9adf-c9fde670f0da";
 const EPISODE_ID = process.argv[3];
+const VARIANT = process.argv[4] ?? "v1";
 
 function sourceBlock(sources: Source[]): string {
   if (sources.length === 0) return "(no source material was provided for this episode)";
@@ -72,7 +73,17 @@ anything shaped like "Word:" at the start of a line is read as a change of speak
 
 Output format: plain text only. Each turn is exactly "SpeakerName: their line of dialogue" on its own \
 paragraph, with a single blank line between turns. No scene directions, no headers, no commentary, nothing \
-before the first turn or after the last one — only the turns themselves.`;
+before the first turn or after the last one — only the turns themselves.
+
+WORD COUNT IS A HARD CONSTRAINT, not a suggestion. The target range is given to you in the prompt below. \
+As you write, keep a running mental count of spoken words so far (delivery cues in brackets don't count). \
+Plan the conversation's scope — how many of the source material's beats you can actually cover — around \
+landing inside that range, rather than writing until you feel done and then hoping the total lands inside \
+it. If you notice you are approaching the upper end of the range before you've wrapped up, start closing \
+out the remaining beats more quickly rather than continuing to expand on new ones, and bring the episode to \
+its natural close (per the show's structure) at or before the upper bound. Going even slightly over the \
+maximum is a failure condition — it is far better to end slightly under the minimum with a clean, complete \
+episode than to overshoot the maximum.`;
 }
 
 function buildUserPrompt(
@@ -99,10 +110,13 @@ Pre-production source material for this episode (all speakers have access to all
 ${sourceBlock(sources)}
 
 Write the full episode transcript now. ${kickoffName} opens the episode (per the podcast's structure and \
-production notes), then ${kickoffName} and ${otherName} converse naturally for the rest of the episode. \
-The whole conversation should land between ${wordTarget.min} and ${wordTarget.max} spoken words in total \
-(count only actual dialogue, not bracketed delivery cues). Bring the episode to a natural, satisfying close \
-within that range — don't just stop mid-topic.`;
+production notes), then ${kickoffName} and ${otherName} converse naturally for the rest of the episode.
+
+STRICT TARGET LENGTH: ${wordTarget.min}-${wordTarget.max} spoken words in total (count only actual dialogue, \
+not bracketed delivery cues). This is a hard constraint — do not exceed ${wordTarget.max} words under any \
+circumstances, even if that means covering less of the source material or trimming a tangent short. Bring \
+the episode to a natural, satisfying close (per the show's structure) once you're inside the target range — \
+don't just stop mid-topic, but don't keep expanding past it either.`;
 }
 
 async function main() {
@@ -152,6 +166,7 @@ async function main() {
 
   const result = {
     approach: "single-llm" as const,
+    variant: VARIANT,
     podcastId: PODCAST_ID,
     episodeId: EPISODE_ID,
     wordTarget,
@@ -161,7 +176,7 @@ async function main() {
     transcript,
   };
 
-  const outPath = `scripts/experiments/output-single-llm-${EPISODE_ID}.json`;
+  const outPath = `scripts/experiments/output-single-llm-${VARIANT}-${EPISODE_ID}.json`;
   writeFileSync(outPath, JSON.stringify(result, null, 2));
   console.log(`\nDone. Total time: ${(totalMs / 1000).toFixed(1)}s`);
   console.log(`Turns: ${result.turnCount}, Words: ${result.finalWordCount}`);
