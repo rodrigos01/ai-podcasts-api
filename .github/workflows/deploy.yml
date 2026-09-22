@@ -1,0 +1,94 @@
+name: Deploy to Cloud Run
+
+# Deploys on every push to main (production: ai-podcast-api, unprefixed) or
+# claude-develop (the shared dev service: claude-develop-ai-podcast-api).
+# Agents should push to claude-develop to get a live URL rather than running
+# `npm run deploy` interactively. Mirrors rodrigos01/ai-audio-book's
+# .github/workflows/deploy.yml -- same GCP project, same Workload Identity
+# Federation pool/provider and deploying service account -- minus the
+# frontend, since this repo is a single API service. See AGENTS.md.
+#
+# Builds directly on the runner with Docker Buildx + its native GitHub
+# Actions cache backend, so an unchanged `npm ci` layer is reused across
+# runs instead of reinstalling every dependency on every deploy.
+on:
+  push:
+    branches:
+      - main
+      - claude-develop
+  workflow_dispatch: {}
+
+# Two overlapping `gcloud run deploy` calls against the same service can
+# finish out of order and leave the wrong revision serving traffic -- cancel
+# the in-flight run for a branch when a newer push to it arrives.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write # required to mint the OIDC token for Workload Identity Federation
+
+env:
+  PROJECT: ai-audio-book
+  REGION: us-central1
+  # The runtime identity the existing ai-podcast-api service already runs as
+  # (Vertex AI, Cloud TTS, Firestore, and Storage all authenticate through
+  # it via Application Default Credentials).
+  RUNTIME_SERVICE_ACCOUNT: 883622140264-compute@developer.gserviceaccount.com
+  # Not secrets -- the same values scripts/deploy.sh forwards from .env, and
+  # already visible in the service's own config. Overridable per repo via
+  # Settings > Secrets and variables > Actions > Variables.
+  FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || 'ai-audio-book' }}
+  FIREBASE_STORAGE_BUCKET: ${{ vars.FIREBASE_STORAGE_BUCKET || 'ai-audio-book-podcast-audio' }}
+  FIRESTORE_DATABASE_ID: ${{ vars.FIRESTORE_DATABASE_ID || 'podcasts' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/883622140264/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+          service_account: player@ai-audio-book.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            service=ai-podcast-api
+          else
+            prefix=$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+|-+$//g' | cut -c1-40)
+            service="${prefix}-ai-podcast-api"
+          fi
+          echo "service=$service" >> "$GITHUB_OUTPUT"
+          echo "image=${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy/${service}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Deploy
+        run: |
+          gcloud run deploy "${{ steps.meta.outputs.service }}" \
+            --image "${{ steps.meta.outputs.image }}" \
+            --project "$PROJECT" \
+            --region "$REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --update-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET},FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE_ID}"
+          url=$(gcloud run services describe "${{ steps.meta.outputs.service }}" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')
+          echo "Deployed ${{ steps.meta.outputs.service }}: $url" >> "$GITHUB_STEP_SUMMARY"
