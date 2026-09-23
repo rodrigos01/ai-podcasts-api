@@ -98,6 +98,32 @@ function isRateLimitError(err: unknown): err is ApiError {
   return err instanceof Error && "status" in err && (err as ApiError).status === 429;
 }
 
+// Cloud TTS's streamingSynthesize occasionally rejects an unproblematic
+// chunk outright with a false-positive content-moderation block — a gRPC
+// INVALID_ARGUMENT (code 3) whose message names Vertex AI's usage
+// guidelines and a numeric support code (see AGENTS.md's `streamSpeech`
+// writeup: this was already investigated once, support code 54702341).
+// Confirmed non-deterministic *per call*, not just per text, in live
+// testing (2026-09-23): the exact same chunk text failed this way on one
+// streamSpeech call, then succeeded on the very next, unmodified. That
+// rules out a fixed classifier verdict on the text itself — but it also
+// means streamSpeech's default flat `attempt * 500ms` backoff (built for
+// ordinary transient errors) doesn't help: all 3 quick retries within one
+// call hit the identical rejection back-to-back in testing, while only a
+// separate, later call got a different verdict. Give this error the same
+// longer exponential backoff already used for a 429 in `withRetry` above,
+// so a retry has more real time between attempts for whatever's behind the
+// non-determinism (rate-limited/cached classifier state, load-dependent
+// model variance, etc.) to actually change.
+export function isModerationRejectionError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    "code" in err &&
+    (err as { code?: number }).code === 3 &&
+    /usage guidelines/i.test(err.message)
+  );
+}
+
 async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -228,6 +254,22 @@ function sanitizeSpeakerAlias(name: string): string {
   return alias || "Speaker";
 }
 
+/**
+ * A chunk where every turn shares one speaker — the common case at
+ * TARGET_CHUNK_TOKENS (ttsLimits.ts), between the kickoff-monologue turn
+ * and the oversized-turn sentence-level fallback (chunker.ts) — must not go
+ * through the 2-voice `multiSpeakerVoiceConfig` shape below with a silent
+ * second voice declared: that mismatch is a confirmed trigger for
+ * hallucinated interjections, repetition loops, and voice misattribution.
+ * Route it through genuine single-voice synthesis instead.
+ */
+export function soloSpeakerVoiceName(turns: ScriptTurn[], aliasByName: Map<string, string>): string | null {
+  if (turns.length === 0) return null;
+  const first = turns[0]!;
+  if (!turns.every((turn) => turn.speaker === first.speaker)) return null;
+  return aliasByName.get(first.speaker) ?? sanitizeSpeakerAlias(first.speaker);
+}
+
 export async function streamSpeech(
   directorPrompt: string,
   turns: ScriptTurn[],
@@ -239,6 +281,7 @@ export async function streamSpeech(
     speaker: aliasByName.get(turn.speaker) ?? sanitizeSpeakerAlias(turn.speaker),
     text: turn.text,
   }));
+  const soloVoiceName = soloSpeakerVoiceName(turns, aliasByName);
 
   let receivedAnyAudio = false;
   let lastError: unknown;
@@ -277,20 +320,26 @@ export async function streamSpeech(
 
         grpcStream.write({
           streamingConfig: {
-            voice: {
-              languageCode: "en-US",
-              modelName: TTS_MODEL,
-              multiSpeakerVoiceConfig: {
-                speakerVoiceConfigs: speakers.map((s) => ({
-                  speakerAlias: s.voiceName,
-                  speakerId: s.voiceName,
-                })),
-              },
-            },
+            voice: soloVoiceName
+              ? { languageCode: "en-US", modelName: TTS_MODEL, name: soloVoiceName }
+              : {
+                  languageCode: "en-US",
+                  modelName: TTS_MODEL,
+                  multiSpeakerVoiceConfig: {
+                    speakerVoiceConfigs: speakers.map((s) => ({
+                      speakerAlias: s.voiceName,
+                      speakerId: s.voiceName,
+                    })),
+                  },
+                },
             streamingAudioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 24000 },
           },
         });
-        grpcStream.write({ input: { prompt: directorPrompt, multiSpeakerMarkup: { turns: aliasedTurns } } });
+        grpcStream.write({
+          input: soloVoiceName
+            ? { prompt: directorPrompt, text: turns.map((t) => t.text).join("\n\n") }
+            : { prompt: directorPrompt, multiSpeakerMarkup: { turns: aliasedTurns } },
+        });
         grpcStream.end();
       });
       lastError = undefined;
@@ -302,7 +351,8 @@ export async function streamSpeech(
       // (nothing emitted yet) is safe to retry.
       if (receivedAnyAudio) break;
       if (attempt < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+        const delay = isModerationRejectionError(err) ? 2 ** attempt * 1000 : attempt * 500;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
