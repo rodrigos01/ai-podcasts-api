@@ -131,6 +131,14 @@ npm run smoke    # scripts/smoke-test.ts — full real HTTP flow, costs real Gem
 
 `npm run deploy` (`scripts/deploy.sh`) deploys to Cloud Run via `gcloud run deploy --source`, forwarding `.env` as env vars (minus `PORT`, `FIREBASE_SERVICE_ACCOUNT_PATH`, and anything not read by `config/env.ts`).
 
+**CI deploy (preferred): `.github/workflows/deploy.yml`** deploys on every push to `main` (production `ai-podcast-api`) or `claude-develop` (shared dev service `claude-develop-ai-podcast-api`). To get a live URL for a change, push there instead of running `npm run deploy`:
+```bash
+git push origin HEAD:claude-develop --force
+```
+(force, since `claude-develop` is a disposable pointer to "whatever's being tested right now.") It mirrors `rodrigos01/ai-audio-book`'s workflow — same GCP project (`ai-audio-book`), same Workload Identity Federation pool/provider (`github-actions-pool` / `github-actions-provider`), same deploying service account (`player@ai-audio-book.iam.gserviceaccount.com`), no stored key and no GitHub secrets needed. It builds the root `Dockerfile` on the runner with Docker Buildx + the GitHub Actions layer cache, pushes to Artifact Registry (`cloud-run-source-deploy`), and deploys with `--image`, running as the same runtime service account the service already used (`883622140264-compute@developer.gserviceaccount.com`). `FIREBASE_PROJECT_ID` / `FIREBASE_STORAGE_BUCKET` / `FIRESTORE_DATABASE_ID` default to the production values inline and can be overridden via repository **variables** (not secrets — none are sensitive).
+
+For WIF to accept this repo's tokens, the provider's `--attribute-condition` must allow `assertion.repository == 'rodrigos01/ai-podcasts-api'` on `refs/heads/main` / `refs/heads/claude-develop`, and `player@` must grant `roles/iam.workloadIdentityUser` to this repo's `principalSet://.../attribute.repository/rodrigos01/ai-podcasts-api` — both live in the `ai-audio-book` project, shared with the audio-book repo.
+
 **Manual E2E testing convention used throughout development**: start the dev server in the background (`nohup npx tsx src/index.ts > /tmp/....log 2>&1 &`), drive it with `curl` against the real Gemini API, poll `GET .../episodes/:id/status` until `ready`/`failed`. This is real, billed API usage — be deliberate about how many full episodes/audio chunks you generate while testing; a full episode is 5-10 minutes of wall-clock time and multiple LLM + TTS calls. Always `fuser -k 3000/tcp` (or kill by PID) before restarting — a half-killed dev server left listening on port 3000 has caused confusing "stale server" debugging sessions before.
 
 ## Testing philosophy in this codebase
