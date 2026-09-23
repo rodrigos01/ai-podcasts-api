@@ -45,12 +45,13 @@ export const MAX_TTS_INPUT_TOKENS = 12_000;
 // plain single-voice requests) — confirmed live (2026-09-23): the
 // single-voice shape does measurably fail more often (moderation
 // false-positives, and separately `RST_STREAM`) than the multi-speaker
-// shape. `audio.service.ts`'s `generateOrJoin` deliberately never allows
-// solo-voice routing for chunk 0 specifically, regardless of speaker count
-// — chunk 0 carries the episode's only Ogg header, so unlike every other
-// chunk (which just gets silently skipped on failure), a chunk-0 failure
-// can't be shrugged off and surfaces as a real error to the listener. Don't
-// let solo-voice's higher failure rate near that unrecoverable case.
+// shape. That higher failure rate used to be an unacceptable risk
+// specifically for chunk 0 (the one chunk whose failure couldn't be
+// silently skipped, since it carried the episode's only Ogg header) —
+// fixed instead by decoupling the header from any chunk's own output (see
+// OGG_HEADER_PAGES in oggStitch.ts), so every chunk's failure, chunk 0
+// included, is equally recoverable now and the single-voice path's
+// reliability tradeoff applies uniformly everywhere.
 export const TARGET_CHUNK_TOKENS = 350;
 
 // A single TTS call's synthesized audio is killed (the underlying gRPC

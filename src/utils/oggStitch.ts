@@ -8,12 +8,15 @@
 // duration, and Android's ExoPlayer doesn't support it at all.
 //
 // This module rewrites each chunk's pages, as they're produced, into a
-// single continuous, non-chained logical stream: one OpusHead/OpusTags, one
-// serial number, monotonically increasing page sequence numbers, a
-// continuous granule (sample-position) timeline across chunk boundaries,
-// and exactly one true EOS page at the real end of the episode. No
-// re-encoding — only fixed-width header fields are patched and the page's
-// CRC-32 is recomputed, so the underlying Opus audio is untouched.
+// single continuous, non-chained logical stream: every chunk's own
+// OpusHead/OpusTags are dropped (the episode's one true header is the fixed
+// OGG_HEADER_PAGES constant below, written once by audio.service.ts before
+// any chunk synthesis starts — see its own comment for why), one serial
+// number, monotonically increasing page sequence numbers, a continuous
+// granule (sample-position) timeline across chunk boundaries, and exactly
+// one true EOS page at the real end of the episode. No re-encoding — only
+// fixed-width header fields are patched and the page's CRC-32 is
+// recomputed, so the underlying Opus audio is untouched.
 
 import { OPUS_GRANULE_RATE } from "./oggOpus";
 
@@ -23,6 +26,44 @@ const OPUS_TAGS_MAGIC = Buffer.from("OpusTags", "ascii");
 // Ogg's "no packet completes on this page" sentinel — must be left as-is,
 // never offset, per RFC 3533.
 const NO_GRANULE = 0xffffffffffffffffn;
+
+/**
+ * A fixed, hardcoded OpusHead+OpusTags page pair, captured live from a real
+ * Cloud TTS `streamingSynthesize` response (2026-09-23) — confirmed
+ * byte-for-byte identical across several separate calls with different
+ * director prompts, text, and voices, including the serial number (0) and
+ * page sequence numbers (0, 1), not just the payload. Cloud TTS's header
+ * only depends on the fixed request config (`audioEncoding: "OGG_OPUS"`,
+ * `sampleRateHertz: 24000` — see geminiClient.ts's streamSpeech), never on
+ * the actual synthesized content, so it doesn't need to come from any
+ * particular chunk's real output.
+ *
+ * audio.service.ts writes these exact bytes once, unconditionally, before
+ * any chunk synthesis starts — every chunk's own OpusHead/OpusTags (which
+ * OggStitcher drops below) are therefore always redundant, not just every
+ * chunk after the first. That decouples the episode's header from chunk
+ * 0's success: a chunk-0 TTS failure is exactly as recoverable (silently
+ * skippable) as any other chunk's, instead of the unrecoverable special
+ * case it used to be when the header came from chunk 0's own output.
+ *
+ * If Cloud TTS's encoder output ever changes (a different
+ * audioEncoding/sampleRateHertz, or a backend change to the encoder
+ * itself), these bytes — and HEADER_SERIAL below — would need recapturing.
+ */
+export const OGG_HEADER_PAGES = Buffer.from(
+  "4f676753000200000000000000000000000000000000435ec1a101134f7075734865616401013801c05d0000000000" +
+    "4f6767530000000000000000000000000000010000004ac238f2012b4f707573546167731b000000476f6f676c6520" +
+    "537065656368207573696e67206c69626f70757300000000",
+  "hex",
+);
+
+// The serial number embedded in OGG_HEADER_PAGES above, and OpusTags'
+// (the header's second page) own sequence number — processPage's
+// pre-increment pattern (`nextSequence += 1` then assign) means starting
+// here makes the first real audio page land on sequence 2, right after the
+// header's own 0 and 1.
+const HEADER_SERIAL = 0;
+const HEADER_TAGS_SEQUENCE = 1;
 
 const CRC_LOOKUP = buildCrcLookup();
 
@@ -144,11 +185,9 @@ export class OggPageAccumulator {
  * audio.service.ts's streamEpisodeAudio loop).
  */
 export class OggStitcher {
-  private initialSerial: number | null = null;
-  private nextSequence = 0;
+  private nextSequence = HEADER_TAGS_SEQUENCE;
   private cumulativeGranule = 0n;
   private chunkMaxGranule = 0n;
-  private firstChunkHeaderDone = false;
 
   /** Call before feeding any pages of a new chunk. */
   startChunk(): void {
@@ -184,42 +223,17 @@ export class OggStitcher {
   }
 
   /**
-   * Rewrites one raw page from the chunk currently being processed into its
-   * place in the single continuous output. Returns null for a page that
-   * should be dropped entirely — a later chunk's duplicate OpusHead/OpusTags.
-   * `isHeader` marks the two pages the whole episode's OpusHead/OpusTags
-   * live on (only ever true for chunk 0) — callers must relay these
-   * unconditionally, even into a response that otherwise starts mid-stream
-   * (a `?t=` resume), since they're the *only* copy of the stream's header
-   * anywhere in the episode; every later chunk's own copy gets dropped here.
+   * Rewrites one raw audio page from the chunk currently being processed
+   * into its place in the single continuous output. Returns null for a
+   * page that should be dropped entirely — every chunk's own
+   * OpusHead/OpusTags, always redundant now that the episode's one and only
+   * header is the fixed OGG_HEADER_PAGES constant, written once by the
+   * caller before any chunk synthesis even starts (see audio.service.ts).
+   * That makes chunk 0 structurally identical to every other chunk here —
+   * there's no first-chunk special case left in this class at all.
    */
-  processPage(
-    rawPage: Buffer,
-    isFirstChunk: boolean,
-    isLastChunk: boolean,
-  ): { page: Buffer; isHeader: boolean } | null {
-    const isHead = isMagicAt(rawPage, OPUS_HEAD_MAGIC);
-    const isTags = isMagicAt(rawPage, OPUS_TAGS_MAGIC);
-
-    if (isFirstChunk && !this.firstChunkHeaderDone) {
-      if (isHead) {
-        this.initialSerial = getSerial(rawPage);
-        this.nextSequence = getSequence(rawPage);
-        return { page: rawPage, isHeader: true };
-      }
-      if (isTags) {
-        this.firstChunkHeaderDone = true;
-        this.nextSequence = getSequence(rawPage);
-        return { page: rawPage, isHeader: true };
-      }
-      this.firstChunkHeaderDone = true;
-    }
-
-    if (isHead || isTags) return null;
-
-    if (this.initialSerial === null) {
-      throw new Error("OggStitcher received an audio page before any OpusHead");
-    }
+  processPage(rawPage: Buffer, isLastChunk: boolean): Buffer | null {
+    if (isMagicAt(rawPage, OPUS_HEAD_MAGIC) || isMagicAt(rawPage, OPUS_TAGS_MAGIC)) return null;
 
     const page = Buffer.from(rawPage);
     const rawGranule = getGranule(page);
@@ -237,7 +251,7 @@ export class OggStitcher {
     headerType &= ~0x02;
     page[5] = headerType;
 
-    setSerial(page, this.initialSerial);
+    setSerial(page, HEADER_SERIAL);
     this.nextSequence += 1;
     setSequence(page, this.nextSequence);
 
@@ -246,7 +260,7 @@ export class OggStitcher {
     }
 
     setChecksum(page, calculateOggCrc(page));
-    return { page, isHeader: false };
+    return page;
   }
 
   /**
@@ -258,46 +272,19 @@ export class OggStitcher {
    * absolute (stitched) form, its last page's sequence/granule are used
    * directly rather than accumulated.
    */
-  deriveFromCachedBuffer(buffer: Buffer, isFirstChunk: boolean): void {
+  deriveFromCachedBuffer(buffer: Buffer): void {
     let offset = 0;
-    let firstPage: Buffer | null = null;
     let lastPage: Buffer | null = null;
     while (offset < buffer.length) {
       const length = readPageLength(buffer, offset);
       if (length === null) throw new Error("Cached Ogg chunk is truncated");
       lastPage = buffer.subarray(offset, offset + length);
-      firstPage ??= lastPage;
       offset += length;
     }
-    if (!firstPage || !lastPage) throw new Error("Cached Ogg chunk contains no pages");
+    if (!lastPage) throw new Error("Cached Ogg chunk contains no pages");
 
-    if (isFirstChunk) {
-      this.initialSerial = getSerial(firstPage);
-    }
-    this.firstChunkHeaderDone = true;
     this.nextSequence = getSequence(lastPage);
     this.cumulativeGranule = getGranule(lastPage);
     this.chunkMaxGranule = 0n;
   }
-}
-
-/**
- * Extracts just the leading OpusHead+OpusTags pages from an already-cached,
- * already-stitched chunk 0 buffer. Used to inject the stream's only header
- * into a response that would otherwise start beyond it (a `?t=` resume
- * landing past chunk 0) — without it, the receiving player has no way to
- * identify the stream's format at all.
- */
-export function extractHeaderPages(chunk0Buffer: Buffer): Buffer {
-  const headerPages: Buffer[] = [];
-  let offset = 0;
-  while (offset < chunk0Buffer.length) {
-    const length = readPageLength(chunk0Buffer, offset);
-    if (length === null) throw new Error("Chunk 0 buffer is truncated");
-    const page = chunk0Buffer.subarray(offset, offset + length);
-    if (!isMagicAt(page, OPUS_HEAD_MAGIC) && !isMagicAt(page, OPUS_TAGS_MAGIC)) break;
-    headerPages.push(page);
-    offset += length;
-  }
-  return Buffer.concat(headerPages);
 }

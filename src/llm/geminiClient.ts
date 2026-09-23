@@ -270,32 +270,26 @@ export function soloSpeakerVoiceName(turns: ScriptTurn[], aliasByName: Map<strin
   return aliasByName.get(first.speaker) ?? sanitizeSpeakerAlias(first.speaker);
 }
 
-export interface StreamSpeechOptions {
-  /**
-   * false for chunk 0 only (see audio.service.ts's `generateOrJoin`): the
-   * single-voice request shape fails measurably more often than the
-   * multi-speaker one (confirmed live, 2026-09-23 — moderation
-   * false-positives and RST_STREAM), which is an acceptable tradeoff for a
-   * chunk whose failure just gets silently skipped, but not for chunk 0,
-   * the one chunk whose failure can't be recovered from (it carries the
-   * episode's only Ogg header). Defaults to true everywhere else.
-   */
-  allowSoloVoice?: boolean;
-}
-
 export async function streamSpeech(
   directorPrompt: string,
   turns: ScriptTurn[],
   speakers: SpeakerVoice[],
   onChunk: (chunk: Buffer) => void,
-  options?: StreamSpeechOptions,
 ): Promise<void> {
   const aliasByName = new Map(speakers.map((s) => [s.speaker, s.voiceName]));
   const aliasedTurns = turns.map((turn) => ({
     speaker: aliasByName.get(turn.speaker) ?? sanitizeSpeakerAlias(turn.speaker),
     text: turn.text,
   }));
-  const soloVoiceName = options?.allowSoloVoice === false ? null : soloSpeakerVoiceName(turns, aliasByName);
+  // Every chunk — chunk 0 included — is free to use the single-voice path
+  // when it's genuinely solo-speaker: the episode's Ogg header no longer
+  // depends on any particular chunk's output (see OGG_HEADER_PAGES in
+  // oggStitch.ts), so a chunk-0 TTS failure is exactly as recoverable
+  // (silently skippable — see audio.service.ts) as any other chunk's,
+  // removing the one case where the single-voice path's higher failure
+  // rate (confirmed live, 2026-09-23 — moderation false-positives and
+  // RST_STREAM) used to be an unacceptable risk instead of a tolerable one.
+  const soloVoiceName = soloSpeakerVoiceName(turns, aliasByName);
 
   let receivedAnyAudio = false;
   let lastError: unknown;
