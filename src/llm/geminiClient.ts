@@ -281,6 +281,14 @@ export async function streamSpeech(
     speaker: aliasByName.get(turn.speaker) ?? sanitizeSpeakerAlias(turn.speaker),
     text: turn.text,
   }));
+  // Every chunk — chunk 0 included — is free to use the single-voice path
+  // when it's genuinely solo-speaker: the episode's Ogg header no longer
+  // depends on any particular chunk's output (see OGG_HEADER_PAGES in
+  // oggStitch.ts), so a chunk-0 TTS failure is exactly as recoverable
+  // (silently skippable — see audio.service.ts) as any other chunk's,
+  // removing the one case where the single-voice path's higher failure
+  // rate (confirmed live, 2026-09-23 — moderation false-positives and
+  // RST_STREAM) used to be an unacceptable risk instead of a tolerable one.
   const soloVoiceName = soloSpeakerVoiceName(turns, aliasByName);
 
   let receivedAnyAudio = false;

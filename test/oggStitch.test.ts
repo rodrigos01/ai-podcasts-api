@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OggPageAccumulator, OggStitcher } from "../src/utils/oggStitch";
+import { OGG_HEADER_PAGES, OggPageAccumulator, OggStitcher } from "../src/utils/oggStitch";
 
 /** Builds a minimal, spec-valid single-page Ogg page for the given fields. */
 function buildPage(opts: {
@@ -88,24 +88,35 @@ function readPages(buffer: Buffer): ParsedPage[] {
 }
 
 /** Runs a whole chunk's raw pages through the stitcher, mirroring audio.service.ts's usage. */
-function stitchChunk(
-  stitcher: OggStitcher,
-  rawPages: Buffer[],
-  isFirstChunk: boolean,
-  isLastChunk: boolean,
-): Buffer[] {
+function stitchChunk(stitcher: OggStitcher, rawPages: Buffer[], isLastChunk: boolean): Buffer[] {
   stitcher.startChunk();
   const out: Buffer[] = [];
   for (const page of rawPages) {
-    const rewritten = stitcher.processPage(page, isFirstChunk, isLastChunk);
-    if (rewritten) out.push(rewritten.page);
+    const rewritten = stitcher.processPage(page, isLastChunk);
+    if (rewritten) out.push(rewritten);
   }
   stitcher.endChunk();
   return out;
 }
 
+describe("OGG_HEADER_PAGES", () => {
+  it("is a well-formed OpusHead + OpusTags page pair matching OggStitcher's own numbering", () => {
+    const pages = readPages(OGG_HEADER_PAGES);
+    expect(pages).toHaveLength(2);
+    expect(pages[0]!.isHead).toBe(true);
+    expect(pages[0]!.bos).toBe(true);
+    expect(pages[0]!.sequence).toBe(0);
+    expect(pages[1]!.isTags).toBe(true);
+    expect(pages[1]!.sequence).toBe(1);
+    // Same serial on both pages of the header, and OggStitcher rewrites
+    // every audio page to this exact serial (see the "drops every chunk's
+    // own header" test below) — they must always agree.
+    expect(pages[0]!.serial).toBe(pages[1]!.serial);
+  });
+});
+
 describe("OggStitcher", () => {
-  it("passes a single-chunk episode through unchanged", () => {
+  it("drops every chunk's own OpusHead/OpusTags and continues numbering from the fixed header", () => {
     const raw = [
       opusHeadPage(111, 0),
       opusTagsPage(111, 1),
@@ -113,9 +124,21 @@ describe("OggStitcher", () => {
       audioPage(111, 3, 96000n, true),
     ];
     const stitcher = new OggStitcher();
-    const out = stitchChunk(stitcher, raw, true, true).flatMap(readPages);
+    const out = stitchChunk(stitcher, raw, true).flatMap(readPages);
 
-    expect(out).toEqual(raw.flatMap(readPages));
+    const headerSerial = readPages(OGG_HEADER_PAGES)[0]!.serial;
+
+    // Header pages are always dropped — the episode's one true header is
+    // the separate, fixed OGG_HEADER_PAGES constant, never derived from any
+    // chunk's own output (this used to only be true for chunks after the
+    // first; chunk 0 isn't special anymore).
+    expect(out).toHaveLength(2);
+    expect(out.every((p) => !p.isHead && !p.isTags)).toBe(true);
+    // Audio pages continue numbering right after the fixed header's own
+    // two pages (sequence 0, 1).
+    expect(out.map((p) => p.sequence)).toEqual([2, 3]);
+    expect(out.every((p) => p.serial === headerSerial)).toBe(true);
+    expect(out.map((p) => p.granule)).toEqual([48000n, 96000n]);
   });
 
   it("stitches two chunks into one continuous, non-chained stream", () => {
@@ -133,36 +156,30 @@ describe("OggStitcher", () => {
     ];
 
     const stitcher = new OggStitcher();
-    const out = [
-      ...stitchChunk(stitcher, chunk0, true, false),
-      ...stitchChunk(stitcher, chunk1, false, true),
-    ];
+    const out = [...stitchChunk(stitcher, chunk0, false), ...stitchChunk(stitcher, chunk1, true)];
     const pages = out.flatMap(readPages);
 
-    // Exactly one header pair, from chunk 0 only.
-    expect(pages.filter((p) => p.isHead)).toHaveLength(1);
-    expect(pages.filter((p) => p.isTags)).toHaveLength(1);
+    // No header pages at all from either chunk — both are always dropped.
+    expect(pages.filter((p) => p.isHead || p.isTags)).toHaveLength(0);
 
-    // One consistent serial across every page.
+    // One consistent serial across every page (the fixed header's own).
     expect(new Set(pages.map((p) => p.serial)).size).toBe(1);
-    expect(pages[0]!.serial).toBe(111);
 
-    // Gapless, monotonic sequence numbers.
-    expect(pages.map((p) => p.sequence)).toEqual(pages.map((_, i) => i));
+    // Gapless, monotonic sequence numbers continuing from the fixed
+    // header's own two pages.
+    expect(pages.map((p) => p.sequence)).toEqual([2, 3, 4, 5]);
 
     // Continuous granule timeline: chunk 1's audio pages continue from
     // chunk 0's max granule (96000).
-    const audioGranules = pages.filter((p) => !p.isHead && !p.isTags).map((p) => p.granule);
-    expect(audioGranules).toEqual([48000n, 96000n, 24000n + 96000n, 72000n + 96000n]);
+    expect(pages.map((p) => p.granule)).toEqual([48000n, 96000n, 24000n + 96000n, 72000n + 96000n]);
 
     // Exactly one EOS page, on the true final page of the true final chunk.
     expect(pages.filter((p) => p.eos)).toHaveLength(1);
     expect(pages.at(-1)!.eos).toBe(true);
 
-    // No BOS on anything but chunk 0's OpusHead is naturally already the
-    // only page that had it; stitching never introduces a new one.
-    expect(pages.filter((p) => p.bos)).toHaveLength(1);
-    expect(pages[0]!.bos).toBe(true);
+    // No BOS on any audio page — only the fixed header's own OpusHead ever
+    // carries it, and that's written separately, never through the stitcher.
+    expect(pages.filter((p) => p.bos)).toHaveLength(0);
   });
 
   it("leaves the Ogg 'no packet completes on this page' granule sentinel untouched", () => {
@@ -171,37 +188,31 @@ describe("OggStitcher", () => {
     const chunk1 = [opusHeadPage(2, 0), opusTagsPage(2, 1), audioPage(2, 2, NO_GRANULE, true)];
 
     const stitcher = new OggStitcher();
-    stitchChunk(stitcher, chunk0, true, false);
-    const out1 = stitchChunk(stitcher, chunk1, false, true);
+    stitchChunk(stitcher, chunk0, false);
+    const out1 = stitchChunk(stitcher, chunk1, true);
     const pages = out1.flatMap(readPages);
 
     expect(pages[0]!.granule).toBe(NO_GRANULE);
   });
 
-  it("continues correctly from a chunk 0 already served from cache", () => {
+  it("continues correctly from a chunk already served from cache", () => {
     // Simulates: this request only needs to generate chunk 1; chunk 0's
-    // already-rewritten bytes came straight from the cache.
+    // already-rewritten bytes came straight from the cache. Cached chunk
+    // bytes never contain a header (any chunk's, not just chunk 0's), so
+    // deriveFromCachedBuffer no longer needs to know which chunk this is.
     const cachedChunk0 = Buffer.concat(
-      stitchChunk(
-        new OggStitcher(),
-        [opusHeadPage(111, 0), opusTagsPage(111, 1), audioPage(111, 2, 96000n, true)],
-        true,
-        false,
-      ),
+      stitchChunk(new OggStitcher(), [opusHeadPage(111, 0), opusTagsPage(111, 1), audioPage(111, 2, 96000n, true)], false),
     );
 
     const stitcher = new OggStitcher();
-    stitcher.deriveFromCachedBuffer(cachedChunk0, true);
+    stitcher.deriveFromCachedBuffer(cachedChunk0);
 
-    const chunk1Raw = [
-      opusHeadPage(222, 0),
-      opusTagsPage(222, 1),
-      audioPage(222, 2, 48000n, true),
-    ];
-    const out = stitchChunk(stitcher, chunk1Raw, false, true).flatMap(readPages);
+    const chunk1Raw = [opusHeadPage(222, 0), opusTagsPage(222, 1), audioPage(222, 2, 48000n, true)];
+    const out = stitchChunk(stitcher, chunk1Raw, true).flatMap(readPages);
 
+    const headerSerial = readPages(OGG_HEADER_PAGES)[0]!.serial;
     expect(out.filter((p) => p.isHead || p.isTags)).toHaveLength(0);
-    expect(out[0]!.serial).toBe(111);
+    expect(out[0]!.serial).toBe(headerSerial);
     expect(out[0]!.sequence).toBe(3); // continues past cached chunk 0's last sequence (2)
     expect(out[0]!.granule).toBe(48000n + 96000n);
     expect(out[0]!.eos).toBe(true);
@@ -219,7 +230,7 @@ describe("OggStitcher", () => {
     const chunk2 = [opusHeadPage(333, 0), opusTagsPage(333, 1), audioPage(333, 2, 48000n, true)];
 
     const stitcher = new OggStitcher();
-    stitchChunk(stitcher, chunk0, true, false);
+    stitchChunk(stitcher, chunk0, false);
 
     // Chunk 1 fails before any page ever arrives — exactly what
     // audio.service.ts's catch block does: startChunk() already ran
@@ -228,7 +239,7 @@ describe("OggStitcher", () => {
     stitcher.startChunk();
     stitcher.endChunk();
 
-    const out = stitchChunk(stitcher, chunk2, false, true).flatMap(readPages);
+    const out = stitchChunk(stitcher, chunk2, true).flatMap(readPages);
 
     // Chunk 2 continues from chunk 0's granule (96000) — the skipped
     // chunk 1 contributed nothing, not a gap and not a rollback.
@@ -244,21 +255,48 @@ describe("OggStitcher", () => {
     const chunk2 = [opusHeadPage(333, 0), opusTagsPage(333, 1), audioPage(333, 2, 48000n, true)];
 
     const stitcher = new OggStitcher();
-    stitchChunk(stitcher, chunk0, true, false);
+    stitchChunk(stitcher, chunk0, false);
 
     // Chunk 1 emits one real audio page (already streamed to the client
     // via onDelta) before failing partway through — that granule progress
     // is irreversible (the client already has those bytes) and must be
     // committed, not discarded, when the failure is caught.
     stitcher.startChunk();
-    const rewritten = stitcher.processPage(audioPage(222, 2, 24000n), false, false);
+    const rewritten = stitcher.processPage(audioPage(222, 2, 24000n), false);
     expect(rewritten).not.toBeNull();
     stitcher.endChunk();
 
-    const out = stitchChunk(stitcher, chunk2, false, true).flatMap(readPages);
+    const out = stitchChunk(stitcher, chunk2, true).flatMap(readPages);
 
     // Continues from 96000 (chunk 0) + 24000 (chunk 1's partial progress).
     expect(out[0]!.granule).toBe(48000n + 96000n + 24000n);
+  });
+
+  // audio.service.ts's generateOrJoin uses this to detect a chunk whose
+  // synthesis has run away (see MAX_CHUNK_AUDIO_SECONDS in ttsLimits.ts) —
+  // it needs a *live*, mid-chunk reading, unlike getCumulativeSeconds()
+  // which only advances once the whole chunk finishes via endChunk().
+  it("getCurrentChunkSeconds tracks the in-progress chunk live, separately from getCumulativeSeconds", () => {
+    const stitcher = new OggStitcher();
+    stitchChunk(stitcher, [opusHeadPage(111, 0), opusTagsPage(111, 1), audioPage(111, 2, 96000n)], false);
+    expect(stitcher.getCumulativeSeconds()).toBe(2); // 96000 / 48000
+
+    stitcher.startChunk();
+    expect(stitcher.getCurrentChunkSeconds()).toBe(0);
+    // getCumulativeSeconds only reflects completed chunks — unaffected by
+    // the new chunk starting, unlike getCurrentChunkSeconds.
+    expect(stitcher.getCumulativeSeconds()).toBe(2);
+
+    stitcher.processPage(audioPage(222, 0, 24000n), false);
+    expect(stitcher.getCurrentChunkSeconds()).toBe(0.5); // 24000 / 48000
+    expect(stitcher.getCumulativeSeconds()).toBe(2); // still not advanced
+
+    stitcher.processPage(audioPage(222, 1, 72000n, true), true);
+    expect(stitcher.getCurrentChunkSeconds()).toBe(1.5); // 72000 / 48000
+
+    stitcher.endChunk();
+    expect(stitcher.getCumulativeSeconds()).toBe(3.5); // 2 + 1.5, now committed
+    expect(stitcher.getCurrentChunkSeconds()).toBe(0); // reset for the next chunk
   });
 });
 

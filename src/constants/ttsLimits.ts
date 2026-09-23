@@ -42,10 +42,31 @@ export const MAX_TTS_INPUT_TOKENS = 12_000;
 // there's no silent second voice for the model to hallucinate onto. This
 // reverses an earlier evaluation of that same approach (rejected then for
 // an observed increase in false-positive content-moderation rejections on
-// plain single-voice requests) — if single-speaker chunks start showing
-// elevated moderation-rejection rates, that's the known tradeoff to
-// investigate first.
+// plain single-voice requests) — confirmed live (2026-09-23): the
+// single-voice shape does measurably fail more often (moderation
+// false-positives, and separately `RST_STREAM`) than the multi-speaker
+// shape. That higher failure rate used to be an unacceptable risk
+// specifically for chunk 0 (the one chunk whose failure couldn't be
+// silently skipped, since it carried the episode's only Ogg header) —
+// fixed instead by decoupling the header from any chunk's own output (see
+// OGG_HEADER_PAGES in oggStitch.ts), so every chunk's failure, chunk 0
+// included, is equally recoverable now and the single-voice path's
+// reliability tradeoff applies uniformly everywhere.
 export const TARGET_CHUNK_TOKENS = 350;
+
+// A single TTS call's synthesized audio is killed (the underlying gRPC
+// stream destroyed, the call treated as a failure) once it exceeds this
+// length — a safety net against Gemini TTS's own documented "degenerate
+// repetition loop" behavior (see AGENTS.md/this file's history above):
+// confirmed live (2026-09-23) that a chunk can, rarely, just never stop
+// generating (no error, no natural end-of-stream), which without a cap
+// would stream to a live listener indefinitely. Set comfortably above what
+// a real ~350-token chunk should ever need (well under 3 minutes per the
+// TARGET_CHUNK_TOKENS reasoning above) so this only ever fires on a
+// genuine runaway, never a normal chunk. A killed chunk goes through the
+// exact same retry/skip handling as any other TTS failure — see
+// `generateOrJoin` in audio.service.ts.
+export const MAX_CHUNK_AUDIO_SECONDS = 180;
 
 // Cross-instance chunk-generation lock (see data/audioLock.repository.ts /
 // audiobookAudioLock.repository.ts): how long a lock is honored before a

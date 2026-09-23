@@ -7,13 +7,17 @@ import {
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
 import { bumpGeneratedAudioSeconds, getEpisode } from "../data/episode.repository";
-import { CHUNK_LOCK_POLL_INTERVAL_MS, EPISODE_CHUNK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
+import {
+  CHUNK_LOCK_POLL_INTERVAL_MS,
+  EPISODE_CHUNK_POLL_INTERVAL_MS,
+  MAX_CHUNK_AUDIO_SECONDS,
+} from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
 import { findLastSpeakerLabel, parseScriptTurns, SPEAKER_LABEL_RE } from "../utils/scriptText";
 import { resolveTimeToByteOffset } from "../utils/oggOpus";
-import { extractHeaderPages, OggPageAccumulator, OggStitcher } from "../utils/oggStitch";
+import { OGG_HEADER_PAGES, OggPageAccumulator, OggStitcher } from "../utils/oggStitch";
 import { HttpError } from "../utils/HttpError";
 
 function sleep(ms: number): Promise<void> {
@@ -99,16 +103,13 @@ function chunkKey(podcastId: string, episodeId: string, index: number): string {
 
 /**
  * Generates one chunk (or joins another instance's in-flight generation of
- * it) and rewrites its Ogg pages in place via `stitcher` — dropping
- * duplicate headers, unifying the serial number, and continuing the page
- * sequence/granule timeline from wherever the episode's previous chunks
- * left off — so what gets cached and relayed is always a fragment of one
- * continuous logical Ogg bitstream, never a standalone chained chunk. See
- * utils/oggStitch.ts.
- *
- * `onDelta`'s second argument marks a piece that's part of the episode's
- * only OpusHead/OpusTags (always chunk 0) — callers must relay these
- * unconditionally, even into a response that otherwise starts later.
+ * it) and rewrites its Ogg pages in place via `stitcher` — dropping every
+ * chunk's own OpusHead/OpusTags (the episode's one true header is the fixed
+ * OGG_HEADER_PAGES constant, written separately — see streamEpisodeAudio),
+ * unifying the serial number, and continuing the page sequence/granule
+ * timeline from wherever the episode's previous chunks left off — so what
+ * gets cached and relayed is always a fragment of one continuous logical
+ * Ogg bitstream, never a standalone chained chunk. See utils/oggStitch.ts.
  *
  * Whichever path this takes (real generation below, or the cross-instance
  * cache-poll fallback), `stitcher`'s state is guaranteed correct by the
@@ -129,9 +130,8 @@ async function generateOrJoin(
   chunkText: string,
   speakers: { speaker: string; voiceName: string }[],
   stitcher: OggStitcher,
-  isFirstChunk: boolean,
   isLastChunk: boolean,
-  onDelta: (delta: Buffer, isHeader: boolean) => void,
+  onDelta: (delta: Buffer) => void,
 ): Promise<Buffer> {
   for (;;) {
     const acquired = await tryAcquireChunkLock(podcastId, episodeId, index);
@@ -142,11 +142,24 @@ async function generateOrJoin(
         const parts: Buffer[] = [];
         await streamSpeech(directorPrompt, parseScriptTurns(chunkText), speakers, (delta) => {
           for (const rawPage of accumulator.push(delta)) {
-            const rewritten = stitcher.processPage(rawPage, isFirstChunk, isLastChunk);
+            const rewritten = stitcher.processPage(rawPage, isLastChunk);
             if (rewritten) {
-              parts.push(rewritten.page);
-              onDelta(rewritten.page, rewritten.isHeader);
+              parts.push(rewritten);
+              onDelta(rewritten);
             }
+          }
+          // Thrown synchronously from inside streamSpeech's own gRPC "data"
+          // handler — it already catches exactly this, destroys the
+          // underlying stream, and turns it into a normal rejection (see
+          // streamSpeech's own comment on that mechanism). This is the
+          // safety net against a chunk that never naturally stops
+          // generating (see MAX_CHUNK_AUDIO_SECONDS in ttsLimits.ts) —
+          // caught below like any other TTS failure, so it goes through
+          // the exact same retry/skip handling.
+          if (stitcher.getCurrentChunkSeconds() > MAX_CHUNK_AUDIO_SECONDS) {
+            throw new Error(
+              `Chunk ${index} exceeded ${MAX_CHUNK_AUDIO_SECONDS}s of synthesized audio — aborting a likely runaway TTS response`,
+            );
           }
         });
         accumulator.assertDrained();
@@ -166,19 +179,11 @@ async function generateOrJoin(
     // its lock goes stale and a future iteration of tryAcquireChunkLock
     // above will steal it and generate here instead. The cached bytes are
     // already fully rewritten by whichever instance produced them, so we
-    // only need to catch our own stitcher up, not reprocess anything — but
-    // we do need to split out chunk 0's header so the caller can relay it
-    // unconditionally like it would for a live-generated page.
+    // only need to catch our own stitcher up, not reprocess anything.
     const cached = await getCachedChunk(podcastId, episodeId, index);
     if (cached) {
-      stitcher.deriveFromCachedBuffer(cached, isFirstChunk);
-      if (isFirstChunk) {
-        const header = extractHeaderPages(cached);
-        onDelta(header, true);
-        onDelta(cached.subarray(header.length), false);
-      } else {
-        onDelta(cached, false);
-      }
+      stitcher.deriveFromCachedBuffer(cached);
+      onDelta(cached);
       return cached;
     }
     await sleep(CHUNK_LOCK_POLL_INTERVAL_MS);
@@ -193,9 +198,8 @@ function getOrStartChunkGeneration(
   chunkText: string,
   speakers: { speaker: string; voiceName: string }[],
   stitcher: OggStitcher,
-  isFirstChunk: boolean,
   isLastChunk: boolean,
-  onDelta: (delta: Buffer, isHeader: boolean) => void,
+  onDelta: (delta: Buffer) => void,
 ): { promise: Promise<Buffer>; isLeader: boolean } {
   const key = chunkKey(podcastId, episodeId, index);
   const existing = inFlightGenerations.get(key);
@@ -211,7 +215,6 @@ function getOrStartChunkGeneration(
     chunkText,
     speakers,
     stitcher,
-    isFirstChunk,
     isLastChunk,
     onDelta,
   );
@@ -227,40 +230,6 @@ function writeSlice(res: Response, data: Buffer, chunkStart: number, start: numb
   if (start < chunkStart + data.length) {
     res.write(data.subarray(Math.max(0, start - chunkStart)));
   }
-}
-
-/**
- * Writes an already-fully-rewritten whole chunk buffer, same as writeSlice,
- * except when `mayNeedHeader` — chunk 0, and only when the caller has
- * decided this response may legitimately start beyond it (a `?t=` resume,
- * never a real Range header — see streamEpisodeAudio). In that case, its
- * OpusHead/OpusTags pages are written unconditionally first, since they're
- * the *only* copy anywhere in the episode: every later chunk's own copy was
- * already dropped by the stitcher — regardless of whether `start` lands
- * inside chunk 0's own remaining bytes or well past it, into some later
- * chunk entirely (the overwhelmingly common real case for a `?t=` seek).
- * Skipping the header injection there produces a headerless, unparseable
- * Ogg stream with no way for a player to identify its format at all.
- */
-export function writeChunk(
-  res: Response,
-  data: Buffer,
-  chunkStart: number,
-  start: number,
-  mayNeedHeader: boolean,
-): void {
-  if (mayNeedHeader && start > chunkStart) {
-    const header = extractHeaderPages(data);
-    if (!res.destroyed && !res.writableEnded) res.write(header);
-    const headerEnd = chunkStart + header.length;
-    // Whatever of chunk 0's own audio content still falls at-or-after
-    // `start` still needs to go out too (relevant when `start` landed
-    // inside chunk 0 itself, before its end) — clamped to headerEnd so a
-    // `start` that landed *inside* the header doesn't rewind into it.
-    writeSlice(res, data, chunkStart, Math.max(start, headerEnd));
-    return;
-  }
-  writeSlice(res, data, chunkStart, start);
 }
 
 /**
@@ -302,19 +271,20 @@ export function writeChunk(
  *   the true final chunk — this is a narrow, cosmetic gap, not a
  *   correctness issue, since stream termination doesn't depend on it.
  *
- * A real `Range` header is only ever sent by a client resuming a
- * connection it already established from byte 0 earlier (a network retry,
- * or a seek after the player already parsed the stream's format) — so it
- * never needs the episode's header re-sent, and we never inject it there,
- * in either branch, to avoid miscounting bytes relative to what that
- * client already has. `?t=`'s resolved byte offset is different: it's
- * designed to be the *first* request of a fresh session (e.g. reopening
- * the app to resume a saved position), so if it lands past chunk 0 — the
- * only chunk carrying the stream's OpusHead/OpusTags, since the stitcher
- * drops every later chunk's copy — the header is injected unconditionally
- * first. Without this, a client cold-starting via `?t=` into a later chunk
- * would receive a stream with no header at all and could never identify
- * its format.
+ * The episode's Ogg header (`OGG_HEADER_PAGES` — see oggStitch.ts) is fixed
+ * and independent of any chunk's own content or success, so it's written
+ * once, unconditionally, up front — never per-chunk. A real `Range` header
+ * is only ever sent by a client resuming a connection it already
+ * established from byte 0 earlier (a network retry, or a seek after the
+ * player already parsed the stream's format), so it never needs the header
+ * re-sent; its byte offset is in full-resource space (header + chunks,
+ * what the client actually received), so it's converted to chunk-space
+ * (header-exclusive) before slicing the concatenated chunk bytes. `?t=`'s
+ * resolved byte offset is already chunk-space (it's derived from
+ * `resolveTimeToByteOffset`'s cumulative-audio-duration walk, which never
+ * involved the header) and is designed to be the *first* request of a
+ * fresh session (e.g. reopening the app to resume a saved position), so
+ * the header is written first, unconditionally, before any chunk bytes.
  *
  * `seek.rangeStart` (an exact byte offset, from a `Range` header) takes
  * priority; `seek.startTimeSeconds` (a saved playback position in seconds)
@@ -365,34 +335,44 @@ export async function streamEpisodeAudio(
   // generating, more chunks may still be sealed after this snapshot, so we
   // always fall through to the live/incremental path below instead.
   if (status === "ready" && initialCachedSizes.every((size) => size !== null)) {
-    const totalLength = initialCachedSizes.reduce((sum, size) => sum + (size ?? 0), 0);
+    // Cached chunk sizes are audio-only now (no chunk ever carries a
+    // header — see oggStitch.ts) — the real resource the client sees is
+    // the fixed header plus all of that.
+    const chunksTotalLength = initialCachedSizes.reduce((sum, size) => sum + (size ?? 0), 0);
+    const fullResourceLength = OGG_HEADER_PAGES.length + chunksTotalLength;
 
-    if (rangeStart >= totalLength) {
+    if (rangeStart >= fullResourceLength) {
       throw new HttpError(416, "Range Not Satisfiable");
     }
 
-    // Never inject the header for a real Range request — see the function
-    // doc comment above for why that would miscount bytes for a client
-    // resuming a connection it already parsed the format from.
-    const mayNeedHeader = !isByteRangeRequest;
-    const chunk0 = mayNeedHeader && rangeStart > 0 ? await getCachedChunk(podcastId, episodeId, 0) : null;
-    const injectedHeaderLength = chunk0 ? extractHeaderPages(chunk0).length : 0;
-    const effectiveStart = Math.max(rangeStart, injectedHeaderLength);
-
     if (isByteRangeRequest && rangeStart > 0) {
+      // Real Range request: never re-inject the header (see the function
+      // doc comment above) — rangeStart is in full-resource space, so
+      // convert to chunk-space before slicing the concatenated chunk bytes.
+      const chunkSpaceStart = Math.max(0, rangeStart - OGG_HEADER_PAGES.length);
       res.status(206);
-      res.set("Content-Range", `bytes ${rangeStart}-${totalLength - 1}/${totalLength}`);
-      res.set("Content-Length", String(totalLength - rangeStart));
-    } else {
-      res.status(200);
-      res.set("Content-Length", String(injectedHeaderLength + (totalLength - effectiveStart)));
-    }
+      res.set("Content-Range", `bytes ${rangeStart}-${fullResourceLength - 1}/${fullResourceLength}`);
+      res.set("Content-Length", String(fullResourceLength - rangeStart));
 
-    let pos = 0;
-    for (let index = 0; index < chunks.length; index++) {
-      const data = index === 0 && chunk0 ? chunk0 : await getCachedChunk(podcastId, episodeId, index);
-      if (data) writeChunk(res, data, pos, rangeStart, index === 0 && mayNeedHeader);
-      pos += data?.length ?? 0;
+      let pos = 0;
+      for (let index = 0; index < chunks.length; index++) {
+        const data = await getCachedChunk(podcastId, episodeId, index);
+        if (data) writeSlice(res, data, pos, chunkSpaceStart);
+        pos += data?.length ?? 0;
+      }
+    } else {
+      // Fresh request or `?t=` resume: rangeStart is already chunk-space —
+      // write the fixed header first, then the chunk bytes from there.
+      res.status(200);
+      res.set("Content-Length", String(fullResourceLength - rangeStart));
+      if (!res.destroyed && !res.writableEnded) res.write(OGG_HEADER_PAGES);
+
+      let pos = 0;
+      for (let index = 0; index < chunks.length; index++) {
+        const data = await getCachedChunk(podcastId, episodeId, index);
+        if (data) writeSlice(res, data, pos, rangeStart);
+        pos += data?.length ?? 0;
+      }
     }
     res.end();
     return;
@@ -405,6 +385,14 @@ export async function streamEpisodeAudio(
   // happen for a `?t=` resume, never a real Range request).
   const bodyStart = isByteRangeRequest ? 0 : rangeStart;
   res.status(200);
+
+  // The header is fixed and independent of any chunk (see oggStitch.ts) —
+  // written once, unconditionally, before any chunk synthesis even starts.
+  // Never for a real Range request, same reasoning as the fully-cached
+  // branch above.
+  if (!isByteRangeRequest && !res.destroyed && !res.writableEnded) {
+    res.write(OGG_HEADER_PAGES);
+  }
 
   let stopped = false;
   res.on("close", () => {
@@ -441,7 +429,6 @@ export async function streamEpisodeAudio(
     }
     const chunkStart = pos;
     const cachedSize = await getCachedChunkSize(podcastId, episodeId, index);
-    const isFirstChunk = index === 0;
     // Only trustworthy once `status` has already confirmed "ready" in a
     // prior poll iteration — at that point `chunks` is the complete, final
     // list, so this really is the episode's last chunk, not just the last
@@ -451,8 +438,8 @@ export async function streamEpisodeAudio(
     if (cachedSize !== null) {
       const data = await getCachedChunk(podcastId, episodeId, index);
       if (data) {
-        writeChunk(res, data, chunkStart, bodyStart, isFirstChunk);
-        stitcher.deriveFromCachedBuffer(data, isFirstChunk);
+        writeSlice(res, data, chunkStart, bodyStart);
+        stitcher.deriveFromCachedBuffer(data);
       }
       pos = chunkStart + (data?.length ?? 0);
       index++;
@@ -470,14 +457,9 @@ export async function streamEpisodeAudio(
       chunkText,
       speakers,
       stitcher,
-      isFirstChunk,
       isLastChunk,
-      (delta, isHeader) => {
-        if (isHeader) {
-          if (!res.destroyed && !res.writableEnded) res.write(delta);
-        } else {
-          writeSlice(res, delta, chunkStart + emittedInChunk, bodyStart);
-        }
+      (delta) => {
+        writeSlice(res, delta, chunkStart + emittedInChunk, bodyStart);
         emittedInChunk += delta.length;
       },
     );
@@ -493,8 +475,8 @@ export async function streamEpisodeAudio(
         // `stitcher` instance never saw this chunk's pages — catch it up
         // from the (already rewritten) shared result before relaying it.
         const fullChunk = await promise;
-        writeChunk(res, fullChunk, chunkStart, bodyStart, isFirstChunk);
-        stitcher.deriveFromCachedBuffer(fullChunk, isFirstChunk);
+        writeSlice(res, fullChunk, chunkStart, bodyStart);
+        stitcher.deriveFromCachedBuffer(fullChunk);
         pos = chunkStart + fullChunk.length;
       }
     } catch (err) {
@@ -505,17 +487,10 @@ export async function streamEpisodeAudio(
       // for it (a small silent gap in the finished audio), and nothing
       // gets cached, so a later request tries generating it fresh — worth
       // it since a moderation false-positive isn't necessarily permanent
-      // and a transient failure genuinely might succeed on retry.
-      //
-      // Chunk 0 is the one exception: it's the only chunk carrying the
-      // episode's Ogg header (OpusHead/OpusTags) — every later chunk's own
-      // copy is dropped by the stitcher — so skipping it would produce a
-      // headerless, invalid stream with nothing to identify its format,
-      // not just a content gap. Surface the failure for this request
-      // instead of emitting broken audio; a later request still gets a
-      // fresh attempt at it, same as any other skipped chunk.
-      if (isFirstChunk) throw err;
-
+      // and a transient failure genuinely might succeed on retry. Every
+      // chunk, including chunk 0, is skippable this way now — the
+      // episode's header no longer depends on any chunk's own output (see
+      // OGG_HEADER_PAGES in oggStitch.ts), so there's no special case left.
       console.error(
         `Skipping podcast ${podcastId} episode ${episodeId} chunk ${index} after TTS failure (nothing written for it):`,
         err,
