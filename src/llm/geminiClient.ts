@@ -98,6 +98,32 @@ function isRateLimitError(err: unknown): err is ApiError {
   return err instanceof Error && "status" in err && (err as ApiError).status === 429;
 }
 
+// Cloud TTS's streamingSynthesize occasionally rejects an unproblematic
+// chunk outright with a false-positive content-moderation block — a gRPC
+// INVALID_ARGUMENT (code 3) whose message names Vertex AI's usage
+// guidelines and a numeric support code (see AGENTS.md's `streamSpeech`
+// writeup: this was already investigated once, support code 54702341).
+// Confirmed non-deterministic *per call*, not just per text, in live
+// testing (2026-09-23): the exact same chunk text failed this way on one
+// streamSpeech call, then succeeded on the very next, unmodified. That
+// rules out a fixed classifier verdict on the text itself — but it also
+// means streamSpeech's default flat `attempt * 500ms` backoff (built for
+// ordinary transient errors) doesn't help: all 3 quick retries within one
+// call hit the identical rejection back-to-back in testing, while only a
+// separate, later call got a different verdict. Give this error the same
+// longer exponential backoff already used for a 429 in `withRetry` above,
+// so a retry has more real time between attempts for whatever's behind the
+// non-determinism (rate-limited/cached classifier state, load-dependent
+// model variance, etc.) to actually change.
+export function isModerationRejectionError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    "code" in err &&
+    (err as { code?: number }).code === 3 &&
+    /usage guidelines/i.test(err.message)
+  );
+}
+
 async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -325,7 +351,8 @@ export async function streamSpeech(
       // (nothing emitted yet) is safe to retry.
       if (receivedAnyAudio) break;
       if (attempt < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+        const delay = isModerationRejectionError(err) ? 2 ** attempt * 1000 : attempt * 500;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { soloSpeakerVoiceName } from "../src/llm/geminiClient";
+import { isModerationRejectionError, soloSpeakerVoiceName } from "../src/llm/geminiClient";
 import type { ScriptTurn } from "../src/utils/scriptText";
 
 const aliasByName = new Map([
@@ -31,5 +31,33 @@ describe("soloSpeakerVoiceName", () => {
   it("falls back to a sanitized alias for a speaker missing from the cast map", () => {
     const turns: ScriptTurn[] = [{ speaker: "Dr. Emily Chen", text: "..." }];
     expect(soloSpeakerVoiceName(turns, aliasByName)).toBe("DrEmilyChen");
+  });
+});
+
+function grpcError(code: number, message: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
+describe("isModerationRejectionError", () => {
+  it("matches the real INVALID_ARGUMENT usage-guidelines rejection", () => {
+    const err = grpcError(
+      3,
+      "3 INVALID_ARGUMENT: Cloud Text-to-Speech could not generate audio because the input text or prompt violates Vertex AI's usage guidelines. If you think this was an error, send feedback. Support codes: 54702341",
+    );
+    expect(isModerationRejectionError(err)).toBe(true);
+  });
+
+  it("does not match a plain INVALID_ARGUMENT with an unrelated message", () => {
+    const err = grpcError(3, "3 INVALID_ARGUMENT: Unsupported audio encoding");
+    expect(isModerationRejectionError(err)).toBe(false);
+  });
+
+  it("does not match a different gRPC code", () => {
+    const err = grpcError(13, "13 INTERNAL: Received RST_STREAM with code 2 (Internal server error)");
+    expect(isModerationRejectionError(err)).toBe(false);
+  });
+
+  it("does not match a non-Error value", () => {
+    expect(isModerationRejectionError("usage guidelines")).toBe(false);
   });
 });
