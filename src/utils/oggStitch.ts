@@ -172,6 +172,18 @@ export class OggStitcher {
   }
 
   /**
+   * How much audio the chunk *currently* being processed (since the last
+   * `startChunk()`) has produced so far — unlike `getCumulativeSeconds()`,
+   * which only advances on `endChunk()`, this updates live as pages arrive
+   * mid-chunk. Used by `audio.service.ts`'s `generateOrJoin` to detect a
+   * chunk whose synthesis has run away (see MAX_CHUNK_AUDIO_SECONDS in
+   * ttsLimits.ts) before it ever reaches `endChunk()`.
+   */
+  getCurrentChunkSeconds(): number {
+    return Number(this.chunkMaxGranule) / OPUS_GRANULE_RATE;
+  }
+
+  /**
    * Rewrites one raw page from the chunk currently being processed into its
    * place in the single continuous output. Returns null for a page that
    * should be dropped entirely — a later chunk's duplicate OpusHead/OpusTags.

@@ -7,7 +7,11 @@ import {
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
 import { bumpGeneratedAudioSeconds, getEpisode } from "../data/episode.repository";
-import { CHUNK_LOCK_POLL_INTERVAL_MS, EPISODE_CHUNK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
+import {
+  CHUNK_LOCK_POLL_INTERVAL_MS,
+  EPISODE_CHUNK_POLL_INTERVAL_MS,
+  MAX_CHUNK_AUDIO_SECONDS,
+} from "../constants/ttsLimits";
 import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
@@ -140,15 +144,38 @@ async function generateOrJoin(
         stitcher.startChunk();
         const accumulator = new OggPageAccumulator();
         const parts: Buffer[] = [];
-        await streamSpeech(directorPrompt, parseScriptTurns(chunkText), speakers, (delta) => {
-          for (const rawPage of accumulator.push(delta)) {
-            const rewritten = stitcher.processPage(rawPage, isFirstChunk, isLastChunk);
-            if (rewritten) {
-              parts.push(rewritten.page);
-              onDelta(rewritten.page, rewritten.isHeader);
+        await streamSpeech(
+          directorPrompt,
+          parseScriptTurns(chunkText),
+          speakers,
+          (delta) => {
+            for (const rawPage of accumulator.push(delta)) {
+              const rewritten = stitcher.processPage(rawPage, isFirstChunk, isLastChunk);
+              if (rewritten) {
+                parts.push(rewritten.page);
+                onDelta(rewritten.page, rewritten.isHeader);
+              }
             }
-          }
-        });
+            // Thrown synchronously from inside streamSpeech's own gRPC "data"
+            // handler — it already catches exactly this, destroys the
+            // underlying stream, and turns it into a normal rejection (see
+            // streamSpeech's own comment on that mechanism). This is the
+            // safety net against a chunk that never naturally stops
+            // generating (see MAX_CHUNK_AUDIO_SECONDS in ttsLimits.ts) —
+            // caught below like any other TTS failure, so it goes through
+            // the exact same retry/skip handling.
+            if (stitcher.getCurrentChunkSeconds() > MAX_CHUNK_AUDIO_SECONDS) {
+              throw new Error(
+                `Chunk ${index} exceeded ${MAX_CHUNK_AUDIO_SECONDS}s of synthesized audio — aborting a likely runaway TTS response`,
+              );
+            }
+          },
+          // Chunk 0 carries the episode's only Ogg header, so its failure
+          // can't be silently skipped like every other chunk's can — see
+          // MAX_CHUNK_AUDIO_SECONDS's neighbor comment in ttsLimits.ts for
+          // why solo-voice routing is never used there.
+          { allowSoloVoice: !isFirstChunk },
+        );
         accumulator.assertDrained();
         stitcher.endChunk();
         const full = Buffer.concat(parts);

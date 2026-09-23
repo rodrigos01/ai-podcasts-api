@@ -260,6 +260,33 @@ describe("OggStitcher", () => {
     // Continues from 96000 (chunk 0) + 24000 (chunk 1's partial progress).
     expect(out[0]!.granule).toBe(48000n + 96000n + 24000n);
   });
+
+  // audio.service.ts's generateOrJoin uses this to detect a chunk whose
+  // synthesis has run away (see MAX_CHUNK_AUDIO_SECONDS in ttsLimits.ts) —
+  // it needs a *live*, mid-chunk reading, unlike getCumulativeSeconds()
+  // which only advances once the whole chunk finishes via endChunk().
+  it("getCurrentChunkSeconds tracks the in-progress chunk live, separately from getCumulativeSeconds", () => {
+    const stitcher = new OggStitcher();
+    stitchChunk(stitcher, [opusHeadPage(111, 0), opusTagsPage(111, 1), audioPage(111, 2, 96000n)], true, false);
+    expect(stitcher.getCumulativeSeconds()).toBe(2); // 96000 / 48000
+
+    stitcher.startChunk();
+    expect(stitcher.getCurrentChunkSeconds()).toBe(0);
+    // getCumulativeSeconds only reflects completed chunks — unaffected by
+    // the new chunk starting, unlike getCurrentChunkSeconds.
+    expect(stitcher.getCumulativeSeconds()).toBe(2);
+
+    stitcher.processPage(audioPage(222, 0, 24000n), false, false);
+    expect(stitcher.getCurrentChunkSeconds()).toBe(0.5); // 24000 / 48000
+    expect(stitcher.getCumulativeSeconds()).toBe(2); // still not advanced
+
+    stitcher.processPage(audioPage(222, 1, 72000n, true), false, true);
+    expect(stitcher.getCurrentChunkSeconds()).toBe(1.5); // 72000 / 48000
+
+    stitcher.endChunk();
+    expect(stitcher.getCumulativeSeconds()).toBe(3.5); // 2 + 1.5, now committed
+    expect(stitcher.getCurrentChunkSeconds()).toBe(0); // reset for the next chunk
+  });
 });
 
 describe("OggPageAccumulator", () => {
