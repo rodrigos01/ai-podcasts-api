@@ -17,44 +17,35 @@ export const MAX_TTS_INPUT_TOKENS = 12_000;
 // once a single call's output audio gets long enough — observed
 // consistently at ~178s of audio for a ~950-token chunk.
 //
-// Raised from 350 to 500 (2026-09-21) to fix a real quality bug, not just
-// tuned for latency: chunker.ts packs whole turns into a chunk up to this
-// budget, and since this app's conversation strictly alternates speakers,
-// a chunk ends up containing only one speaker's turn(s) whenever a single
-// turn's own size is a large fraction of the budget — most reliably the
-// episode-opening "kickoff" turn, which specs.md deliberately makes a
-// substantial uninterrupted monologue. `audio.service.ts` still declares
-// *both* cast voices in `multiSpeakerVoiceConfig` for every chunk
-// regardless (Cloud TTS's `MultiSpeakerVoiceConfig` requires exactly two
-// speaker configs, even when only one of them actually speaks) — that
-// mismatch between a "two-voice dialogue" configuration and single-speaker
-// content was the reproducible trigger for a real production issue:
-// hallucinated interjections attributed to the silent voice, degenerate
-// repetition loops, and voice misattribution, confirmed by comparing
-// per-token audio duration (single-speaker chunks ran 2-3x slower than
-// normal pacing) and by direct listening.
+// Lowered from 500 back to 350 (2026-09-23) to fix voice-attribution drift:
+// Gemini TTS's own recommendation is to keep a single synthesis call under
+// ~3 minutes of audio, and 500 tokens was already observed to produce
+// 115-125s chunks — comfortably under the ~178s RST_STREAM ceiling below,
+// but well past the point where drift starts creeping in per Gemini TTS's
+// guidance. 350 tokens tracks closer to that 3-minute recommendation.
 //
-// 350 tokens made this the *common* case (every episode's first two
-// chunks, guaranteed by the kickoff-monologue structure). 500 tokens
-// doesn't eliminate it — a real single-speaker chunk still occurred once
-// in a 25-chunk test episode, when a turn's own size left too little
-// budget for the next turn to join it — but empirically dropped it from
-// "essentially guaranteed at the start of every episode" to "rare", while
-// every observed chunk's synthesized duration (115-125s in that same test)
-// stayed comfortably under the ~178s RST_STREAM ceiling above. A costlier,
-// more complete fix (routing single-speaker chunks through genuine
-// single-voice synthesis instead of the 2-voice multi-speaker call) was
-// evaluated and rejected: Cloud TTS's plain single-voice request shape
-// turned out to be inconsistently *more* prone to false-positive
-// content-moderation rejections than the multi-speaker shape for
-// identical, unproblematic text — confirmed empirically, including that
-// relaxing `AdvancedVoiceOptions.safetySettings` to `BLOCK_ONLY_HIGH`
-// fixed one such rejection but not another in the same test. If you want
-// to close the remaining gap instead of just shrinking it further, prefer
-// having the chunker pull in a partial slice of the next turn (splitting
-// it, same as the existing oversized-single-turn fallback already does)
-// over ever switching a chunk to single-voice synthesis.
-export const TARGET_CHUNK_TOKENS = 500;
+// 500 was chosen (2026-09-21) specifically to make single-speaker chunks
+// *rare*, because at the time `audio.service.ts` always declared both cast
+// voices in `multiSpeakerVoiceConfig` regardless of which of them actually
+// spoke in a chunk (Cloud TTS's `MultiSpeakerVoiceConfig` requires exactly
+// two speaker configs) — that mismatch between a "two-voice dialogue"
+// configuration and single-speaker content was a reproducible trigger for
+// hallucinated interjections attributed to the silent voice, degenerate
+// repetition loops, and voice misattribution.
+//
+// Rather than keep avoiding single-speaker chunks by widening the budget
+// (which fights the 3-minute goal directly), `geminiClient.ts`'s
+// streamSpeech now detects a single-speaker chunk (every turn in it shares
+// one speaker — the common case at 350 tokens, per the kickoff-monologue
+// structure and the oversized-turn fallback below) and synthesizes it with
+// a genuine single-voice request instead of a 2-voice multi-speaker one, so
+// there's no silent second voice for the model to hallucinate onto. This
+// reverses an earlier evaluation of that same approach (rejected then for
+// an observed increase in false-positive content-moderation rejections on
+// plain single-voice requests) — if single-speaker chunks start showing
+// elevated moderation-rejection rates, that's the known tradeoff to
+// investigate first.
+export const TARGET_CHUNK_TOKENS = 350;
 
 // Cross-instance chunk-generation lock (see data/audioLock.repository.ts /
 // audiobookAudioLock.repository.ts): how long a lock is honored before a

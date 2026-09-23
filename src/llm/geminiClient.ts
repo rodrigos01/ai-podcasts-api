@@ -228,6 +228,22 @@ function sanitizeSpeakerAlias(name: string): string {
   return alias || "Speaker";
 }
 
+/**
+ * A chunk where every turn shares one speaker — the common case at
+ * TARGET_CHUNK_TOKENS (ttsLimits.ts), between the kickoff-monologue turn
+ * and the oversized-turn sentence-level fallback (chunker.ts) — must not go
+ * through the 2-voice `multiSpeakerVoiceConfig` shape below with a silent
+ * second voice declared: that mismatch is a confirmed trigger for
+ * hallucinated interjections, repetition loops, and voice misattribution.
+ * Route it through genuine single-voice synthesis instead.
+ */
+export function soloSpeakerVoiceName(turns: ScriptTurn[], aliasByName: Map<string, string>): string | null {
+  if (turns.length === 0) return null;
+  const first = turns[0]!;
+  if (!turns.every((turn) => turn.speaker === first.speaker)) return null;
+  return aliasByName.get(first.speaker) ?? sanitizeSpeakerAlias(first.speaker);
+}
+
 export async function streamSpeech(
   directorPrompt: string,
   turns: ScriptTurn[],
@@ -239,6 +255,7 @@ export async function streamSpeech(
     speaker: aliasByName.get(turn.speaker) ?? sanitizeSpeakerAlias(turn.speaker),
     text: turn.text,
   }));
+  const soloVoiceName = soloSpeakerVoiceName(turns, aliasByName);
 
   let receivedAnyAudio = false;
   let lastError: unknown;
@@ -277,20 +294,26 @@ export async function streamSpeech(
 
         grpcStream.write({
           streamingConfig: {
-            voice: {
-              languageCode: "en-US",
-              modelName: TTS_MODEL,
-              multiSpeakerVoiceConfig: {
-                speakerVoiceConfigs: speakers.map((s) => ({
-                  speakerAlias: s.voiceName,
-                  speakerId: s.voiceName,
-                })),
-              },
-            },
+            voice: soloVoiceName
+              ? { languageCode: "en-US", modelName: TTS_MODEL, name: soloVoiceName }
+              : {
+                  languageCode: "en-US",
+                  modelName: TTS_MODEL,
+                  multiSpeakerVoiceConfig: {
+                    speakerVoiceConfigs: speakers.map((s) => ({
+                      speakerAlias: s.voiceName,
+                      speakerId: s.voiceName,
+                    })),
+                  },
+                },
             streamingAudioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 24000 },
           },
         });
-        grpcStream.write({ input: { prompt: directorPrompt, multiSpeakerMarkup: { turns: aliasedTurns } } });
+        grpcStream.write({
+          input: soloVoiceName
+            ? { prompt: directorPrompt, text: turns.map((t) => t.text).join("\n\n") }
+            : { prompt: directorPrompt, multiSpeakerMarkup: { turns: aliasedTurns } },
+        });
         grpcStream.end();
       });
       lastError = undefined;
