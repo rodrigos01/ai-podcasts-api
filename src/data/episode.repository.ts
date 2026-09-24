@@ -20,13 +20,17 @@ export async function createEpisode(
     length: input.length,
     sourceIds: input.sourceIds,
     participantHostIds: input.participantHostIds,
-    guests: input.guests.map((guest) => ({ ...guest, id: randomUUID() })),
+    guests: input.guests.map((guest) => ({
+      ...guest,
+      id: randomUUID(),
+      resolvedVoiceId: null,
+      resolvedVoiceOrigin: null,
+      resolvedVoiceHash: null,
+    })),
     productionNotes: input.productionNotes,
     status: "generating",
     progress: null,
     transcript: null,
-    ttsPrompt: null,
-    ttsChunks: null,
     generatedAudioSeconds: 0,
     condensedSummaries: null,
     error: null,
@@ -108,6 +112,62 @@ export async function patchEpisodeState(
  * cheap guarantee against it anyway (e.g. a delayed retry landing after a
  * later chunk's write) rather than a load-bearing assumption.
  */
+/**
+ * Resolves an episode's guest voice exactly once, deduplicated across
+ * concurrent first-time listeners/instances (a guest is always
+ * episode-scoped — see voiceResolution.service.ts's resolveGuestVoice, the
+ * only caller of `resolve` below). If the guest already has a resolved
+ * voice, returns it immediately with no work done. Otherwise runs the
+ * (slow, billed) `resolve` callback outside any transaction, then commits
+ * it via a transaction that re-checks first — if another caller won the
+ * race in the meantime, this discards its own result via `cleanup` (a
+ * losing Voice-Design mint would otherwise leak as an orphaned,
+ * quota-counted voice) and returns the winner's instead.
+ */
+export async function resolveAndPersistGuestVoice(
+  podcastId: string,
+  episodeId: string,
+  guestId: string,
+  resolve: () => Promise<{ voiceId: string; origin: "design" | "library" }>,
+  cleanup: (voiceId: string) => Promise<void>,
+): Promise<{ voiceId: string; origin: "design" | "library" }> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+
+  function alreadyResolved(
+    episode: Episode | null | undefined,
+  ): { voiceId: string; origin: "design" | "library" } | null {
+    const guest = episode?.guests.find((g) => g.id === guestId);
+    if (guest?.resolvedVoiceId && guest.resolvedVoiceOrigin) {
+      return { voiceId: guest.resolvedVoiceId, origin: guest.resolvedVoiceOrigin };
+    }
+    return null;
+  }
+
+  const existing = alreadyResolved(await getEpisode(podcastId, episodeId));
+  if (existing) return existing;
+
+  const resolved = await resolve();
+  const outcome = await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const episode = snap.exists ? (snap.data() as Episode) : undefined;
+    const winner = alreadyResolved(episode);
+    if (winner) return { ...winner, won: false as const };
+
+    const guests = (episode?.guests ?? []).map((guest) =>
+      guest.id === guestId
+        ? { ...guest, resolvedVoiceId: resolved.voiceId, resolvedVoiceOrigin: resolved.origin }
+        : guest,
+    );
+    tx.update(ref, { guests, updatedAt: Date.now() });
+    return { ...resolved, won: true as const };
+  });
+
+  if (!outcome.won && resolved.origin === "design") {
+    await cleanup(resolved.voiceId);
+  }
+  return { voiceId: outcome.voiceId, origin: outcome.origin };
+}
+
 export async function bumpGeneratedAudioSeconds(
   podcastId: string,
   episodeId: string,

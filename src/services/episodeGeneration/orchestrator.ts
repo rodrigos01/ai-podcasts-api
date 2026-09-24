@@ -1,4 +1,3 @@
-import { countTokens } from "../../llm/geminiClient";
 import { LENGTH_RANGES } from "../../constants/lengthRanges";
 import {
   getEpisode,
@@ -8,9 +7,7 @@ import {
 import { getPodcast } from "../../data/podcast.repository";
 import { getSource } from "../../data/source.repository";
 import type { Person } from "../../schemas/person.schema";
-import { chunkTranscript } from "./chunker";
 import { condenseForAllHosts } from "./condensation.service";
-import { generateBaseTtsPrompt } from "./producerPrompt.service";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 
@@ -46,18 +43,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       if (history.length > 0) condensedHistoryBySpeakerId.set(speaker.id, history.join("\n\n"));
     }
 
-    // Built directly from each speaker's own persona/accent data — no LLM
-    // call, no need for podcast/episode context, never needed the
-    // transcript (see producerPrompt.service.ts).
-    const ttsPrompt = generateBaseTtsPrompt(cast.speakers);
-    const basePromptTokens = await countTokens(ttsPrompt);
-
-    await patchEpisodeState(podcastId, episodeId, {
-      ttsPrompt,
-      ttsChunks: [],
-      progress: { stage: "producer_prompt", targetWordRange: wordTarget },
-    });
-
     await patchEpisodeState(podcastId, episodeId, {
       progress: { stage: "conversation", targetWordRange: wordTarget },
     });
@@ -75,14 +60,15 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       wordTarget,
     );
 
-    const ttsChunks = chunkTranscript(script.transcript, basePromptTokens);
-
+    // "streamable" as soon as the script exists — /stream can start
+    // generating audio for it immediately via one streaming TTS call for
+    // the whole transcript (no chunking; see AGENTS.md and
+    // services/audio.service.ts). Condensation may still be running.
     await patchEpisodeState(podcastId, episodeId, {
       transcript: script.transcript,
-      ttsChunks,
       status: "streamable",
       progress: {
-        stage: "chunking",
+        stage: "conversation",
         currentWordCount: script.wordCount,
         targetWordRange: wordTarget,
       },

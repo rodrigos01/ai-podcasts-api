@@ -1,89 +1,51 @@
-// Conservative ceiling for a single TTS submission (base prompt + chunk
-// text combined), safely under Gemini TTS's stated "tens of thousands of
-// tokens" context window per prompting-guide.md.
-export const MAX_TTS_INPUT_TOKENS = 12_000;
+// Gemini 3.8 Flash TTS migration: chunking is gone entirely (the old
+// per-chunk constants — MAX_TTS_INPUT_TOKENS, TARGET_CHUNK_TOKENS,
+// MAX_CHUNK_AUDIO_SECONDS, CHUNK_LOCK_* — existed only to work around Cloud
+// TTS's ~178s-per-call ceiling; the investigation found the new model
+// handles a whole episode, up to ~7,250 words tested, in one call with no
+// splitting). An episode's whole transcript is now synthesized as one
+// streaming `interactions.create` call — see llm/ttsClient.ts and
+// services/audio.service.ts.
 
-// specs.md's "Audio Generation" section calls for audio to be generated
-// on-demand and streamed back *as the user listens* — chunking purely up
-// to MAX_TTS_INPUT_TOKENS would pack an entire short episode (or scene) into
-// one TTS call, so the client waits for all of it to synthesize before
-// playback can start. Target a much smaller practical chunk size instead,
-// so the first chunk is ready quickly. Shared by both the Podcast episode
-// chunker and the audiobook scene chunker.
-//
-// Also doubles as a safety margin against a real, empirically-confirmed
-// limit: Cloud TTS's `streamingSynthesize` (see geminiClient.ts's
-// streamSpeech) resets the connection (`13 INTERNAL: Received RST_STREAM`)
-// once a single call's output audio gets long enough — observed
-// consistently at ~178s of audio for a ~950-token chunk.
-//
-// Lowered from 500 back to 350 (2026-09-23) to fix voice-attribution drift:
-// Gemini TTS's own recommendation is to keep a single synthesis call under
-// ~3 minutes of audio, and 500 tokens was already observed to produce
-// 115-125s chunks — comfortably under the ~178s RST_STREAM ceiling below,
-// but well past the point where drift starts creeping in per Gemini TTS's
-// guidance. 350 tokens tracks closer to that 3-minute recommendation.
-//
-// 500 was chosen (2026-09-21) specifically to make single-speaker chunks
-// *rare*, because at the time `audio.service.ts` always declared both cast
-// voices in `multiSpeakerVoiceConfig` regardless of which of them actually
-// spoke in a chunk (Cloud TTS's `MultiSpeakerVoiceConfig` requires exactly
-// two speaker configs) — that mismatch between a "two-voice dialogue"
-// configuration and single-speaker content was a reproducible trigger for
-// hallucinated interjections attributed to the silent voice, degenerate
-// repetition loops, and voice misattribution.
-//
-// Rather than keep avoiding single-speaker chunks by widening the budget
-// (which fights the 3-minute goal directly), `geminiClient.ts`'s
-// streamSpeech now detects a single-speaker chunk (every turn in it shares
-// one speaker — the common case at 350 tokens, per the kickoff-monologue
-// structure and the oversized-turn fallback below) and synthesizes it with
-// a genuine single-voice request instead of a 2-voice multi-speaker one, so
-// there's no silent second voice for the model to hallucinate onto. This
-// reverses an earlier evaluation of that same approach (rejected then for
-// an observed increase in false-positive content-moderation rejections on
-// plain single-voice requests) — confirmed live (2026-09-23): the
-// single-voice shape does measurably fail more often (moderation
-// false-positives, and separately `RST_STREAM`) than the multi-speaker
-// shape. That higher failure rate used to be an unacceptable risk
-// specifically for chunk 0 (the one chunk whose failure couldn't be
-// silently skipped, since it carried the episode's only Ogg header) —
-// fixed instead by decoupling the header from any chunk's own output (see
-// OGG_HEADER_PAGES in oggStitch.ts), so every chunk's failure, chunk 0
-// included, is equally recoverable now and the single-voice path's
-// reliability tradeoff applies uniformly everywhere.
-export const TARGET_CHUNK_TOKENS = 350;
+// How long to wait for the next streamed event before treating the call as
+// stalled — confirmed empirically in the investigation's spike script: a
+// genuinely healthy multi-hundred-second streamed call never saw a gap over
+// ~1.1s between events, while a real stall went completely silent for 8+
+// minutes with no error. 20s is generous relative to the healthy ceiling
+// while still failing far short of "hangs indefinitely" (the transport
+// enforces no timeout of its own). A stall can't be resumed — see
+// ttsClient.ts's streamEpisodeSynthesis — so this always means retrying the
+// whole call from scratch.
+export const STREAM_INACTIVITY_TIMEOUT_MS = 20_000;
 
-// A single TTS call's synthesized audio is killed (the underlying gRPC
-// stream destroyed, the call treated as a failure) once it exceeds this
-// length — a safety net against Gemini TTS's own documented "degenerate
-// repetition loop" behavior (see AGENTS.md/this file's history above):
-// confirmed live (2026-09-23) that a chunk can, rarely, just never stop
-// generating (no error, no natural end-of-stream), which without a cap
-// would stream to a live listener indefinitely. Set comfortably above what
-// a real ~350-token chunk should ever need (well under 3 minutes per the
-// TARGET_CHUNK_TOKENS reasoning above) so this only ever fires on a
-// genuine runaway, never a normal chunk. A killed chunk goes through the
-// exact same retry/skip handling as any other TTS failure — see
-// `generateOrJoin` in audio.service.ts.
-export const MAX_CHUNK_AUDIO_SECONDS = 180;
+// A single episode's synthesized audio is treated as a runaway/failed
+// generation once it exceeds this length — the episode-level equivalent of
+// the old per-chunk MAX_CHUNK_AUDIO_SECONDS, guarding against Gemini TTS's
+// documented "degenerate repetition loop" behavior, which without a cap
+// could stream to a live listener indefinitely. Set well above the
+// investigation's longest confirmed real episode (~1184s, ~20 minutes, for
+// a ~7,250-word transcript) with real headroom for this app's longer
+// `long`-length episodes (up to 9,000 words, not yet tested against this
+// model — re-verify this ceiling once that's been tried live).
+export const MAX_EPISODE_AUDIO_SECONDS = 2400;
 
-// Cross-instance chunk-generation lock (see data/audioLock.repository.ts /
-// audiobookAudioLock.repository.ts): how long a lock is honored before a
-// waiting instance is allowed to assume its holder died mid-generation and
-// steal it. Generous relative to how long one chunk actually takes to
-// synthesize at the current TARGET_CHUNK_TOKENS size (well under a minute,
-// confirmed empirically), so it only kicks in on a genuine crash, not
-// normal variance.
-export const CHUNK_LOCK_TTL_MS = 5 * 60 * 1000;
+// Cross-instance, per-episode generation lock (data/audioLock.repository.ts):
+// how long a lock is honored before a waiting instance may assume its
+// holder crashed and steal it. Generous relative to a whole episode's real
+// generation time (up to MAX_EPISODE_AUDIO_SECONDS-ish of wall clock, plus
+// retries) — much longer than the old per-chunk lock's 5 minutes, since one
+// lock now covers an entire episode's single synthesis job rather than one
+// ~1-minute chunk.
+export const AUDIO_GENERATION_LOCK_TTL_MS = 40 * 60 * 1000;
 
-// How often a waiting instance re-checks whether the chunk it's waiting on
-// has been cached yet by whichever instance holds the lock.
-export const CHUNK_LOCK_POLL_INTERVAL_MS = 1_500;
+// How often a waiting instance (a follower, or a listener joining after the
+// generation leader) re-checks Storage for the leader's latest in-progress
+// snapshot, or Firestore for the episode's lock/status to change.
+export const AUDIO_POLL_INTERVAL_MS = 1_500;
 
-// How often /stream re-fetches the episode doc once it has caught up to
-// every chunk sealed so far but the episode is still generating (see
-// audio.service.ts) — distinct from CHUNK_LOCK_POLL_INTERVAL_MS, which polls
-// Storage for one specific chunk's cached bytes, not Firestore for new chunk
-// boundaries.
-export const EPISODE_CHUNK_POLL_INTERVAL_MS = 1_500;
+// How often the in-progress WAV snapshot (storage/audioCache.repository.ts's
+// putInProgressAudio) is flushed to Storage while a leader's synthesis is
+// still running — frequent enough that a follower joining mid-generation
+// isn't stuck waiting long for something to tail, without re-uploading on
+// every single small delta.
+export const IN_PROGRESS_FLUSH_INTERVAL_MS = 3_000;

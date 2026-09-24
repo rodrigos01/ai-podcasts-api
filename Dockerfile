@@ -13,6 +13,12 @@ RUN npm run build && npm prune --omit=dev
 FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
+# ffmpeg (with libopus) encodes each episode's final WAV into the single
+# Ogg Opus file served once generation completes — see
+# src/services/episodeGeneration/audioFinalize.service.ts. There is no npm
+# package for this; it's a real, new system dependency of the Gemini 3.8
+# TTS migration.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

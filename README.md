@@ -16,7 +16,7 @@ Product behavior is fully described in [specs.md](specs.md); this document cover
 
 - Node 20+, TypeScript, Express
 - Firebase Firestore (a **named database**, not the default one — see Setup) + Firebase Storage, via `firebase-admin`
-- Google Gemini `gemini-3.8-flash` for text (via `@google/genai`, routed through the **Vertex AI API** — not an API key) and `gemini-3.1-flash-tts-preview` for speech (via `@google-cloud/text-to-speech`'s `streamingSynthesize`, for real incremental audio streaming — and it's the one place that stays off Vertex AI's `generateContent`, since that path only returns raw PCM with no OGG_OPUS option)
+- Google Gemini `gemini-3.8-flash` for text (via `@google/genai`, routed through the **Vertex AI API** — not an API key) and `gemini-3.8-flash-tts` for speech (via `@google/genai`'s `interactions`/`voices` API — one streaming call per episode, no chunking; Vertex AI doesn't expose this API on this project today, so it falls back to the AI Studio API with `GEMINI_API_KEY`)
 - zod for request validation and for validating every piece of LLM-generated JSON before it's trusted
 - vitest for unit tests
 
@@ -104,7 +104,7 @@ All request/response bodies are JSON unless noted.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Liveness check |
-| GET | `/voices` | The 30 available TTS voice IDs, with gender and character trait |
+| GET | `/voices` | A legacy reference list of 30 voice IDs with gender/trait — informational only; `voice` on a host/guest is now a free-text description, not a pick from this list (see below) |
 
 ### Podcasts
 
@@ -128,7 +128,7 @@ All request/response bodies are JSON unless noted.
   "options": [
     {
       "title": "...", "description": "...", "structure": "... (markdown)",
-      "hosts": [{ "name": "...", "voice": "Puck", "persona": "..." }],
+      "hosts": [{ "name": "...", "voice": "warm, gravelly older British male", "persona": "..." }],
       "predictedChanges": ["...", "...", "..."]
     }
     // x3
@@ -143,7 +143,7 @@ All request/response bodies are JSON unless noted.
 // response: same shape as /wizard/options
 ```
 
-**`POST /podcasts`** — body is `{ title, description, structure, hosts: [{name, voice, persona}] }` (drop `predictedChanges` from a chosen option). Returns `201` with the created podcast, including a generated `id` and per-host `id`s.
+**`POST /podcasts`** — body is `{ title, description, structure, hosts: [{name, voice, persona}] }` (drop `predictedChanges` from a chosen option). `voice` is a free-text description (e.g. "warm, gravelly older British male"), not a pick from `GET /voices`'s legacy catalog — the real synthesizable voice is designed from it lazily, the first time the podcast's audio is generated. Returns `201` with the created podcast, including a generated `id` and per-host `id`s.
 
 **`PATCH /podcasts/:podcastId`** — any subset of `{title, description, structure, hosts}`. When editing `hosts`, include each existing host's `id` to keep it stable (episodes reference hosts by id); omit `id` on a new host.
 
@@ -169,7 +169,7 @@ Three ways to add a source, on the same endpoint:
 | POST | `/podcasts/:podcastId/episodes/wizard/revise` | Revise one draft within the suggestions from a free-text instruction |
 | POST | `/podcasts/:podcastId/episodes` | Confirm a whole suggestion (1 or 2 episodes) — creates all of them and starts generation (`202`) |
 | GET | `/podcasts/:podcastId/episodes` | List episodes |
-| GET | `/podcasts/:podcastId/episodes/:episodeId` | Get one episode (includes transcript/ttsPrompt once ready) |
+| GET | `/podcasts/:podcastId/episodes/:episodeId` | Get one episode (includes transcript once ready) |
 | GET | `/podcasts/:podcastId/episodes/:episodeId/status` | Lightweight status poll (no transcript payload) |
 | PATCH | `/podcasts/:podcastId/episodes/:episodeId` | Edit title/topics/productionNotes |
 | DELETE | `/podcasts/:podcastId/episodes/:episodeId` | Delete an episode and its cached audio |
@@ -187,7 +187,7 @@ Three ways to add a source, on the same endpoint:
       "episodes": [
         {
           "title": "...", "topics": "...", "productionNotes": "...",
-          "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
+          "guests": [{ "name": "...", "voice": "bright, upbeat young woman", "persona": "..." }],
           "predictedChanges": ["...", "...", "..."]
         }
       ]
@@ -238,7 +238,7 @@ There's no positional convention here — a suggestion's shape is entirely descr
       "length": "short",            // "short" | "medium" | "long"
       "sourceIds": ["<source-id>"],
       "participantHostIds": ["<host-id>"],
-      "guests": [{ "name": "...", "voice": "Kore", "persona": "..." }],
+      "guests": [{ "name": "...", "voice": "bright, upbeat young woman", "persona": "..." }],
       "productionNotes": "..."
     }
     // a second entry here, for a confirmed split
@@ -281,7 +281,7 @@ This is a single audio resource for the whole episode (not per-chunk), designed 
 
 - **Podcast**: `title`, `description`, `structure` (markdown), `hosts[]` (each with `id`, `name`, `voice`, `persona`).
 - **Source**: `title`, `contents` (extracted plain text), `sourceType`.
-- **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]`, `productionNotes`, `status`, `progress`, `transcript`, `ttsPrompt`, `ttsChunks[]` (internal chunk boundaries), `generatedAudioSeconds` (total audio duration generated so far), `condensedSummaries` (per-host continuity notes carried into future episodes), `error`.
+- **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]`, `productionNotes`, `status`, `progress`, `transcript`, `generatedAudioSeconds` (total audio duration generated so far), `condensedSummaries` (per-host continuity notes carried into future episodes), `error`.
 
 ## Known limitations
 
