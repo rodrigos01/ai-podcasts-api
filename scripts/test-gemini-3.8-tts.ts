@@ -26,24 +26,41 @@
  *     large a single non-streaming call's input can be before it fails or
  *     silently truncates, starting from the full transcript.
  *
- * A real, load-bearing constraint from the model's own docs shapes this
- * script's synthesis strategy: multi-speaker synthesis in a single call
- * only supports prebuilt voices — combining a Voice-Design (`voice_...`)
- * voice into a multi-speaker request isn't supported; each speaker's turns
- * have to be synthesized individually and the audio concatenated. Since
- * hosts always get a Voice-Design voice here, this script empirically
+ * The model's own docs claim multi-speaker synthesis in a single call only
+ * supports prebuilt voices — combining a Voice-Design (`voice_...`) voice
+ * into a multi-speaker request isn't supported, and each speaker's turns
+ * would have to be synthesized individually and the audio concatenated.
+ * Since hosts always get a Voice-Design voice here, this script empirically
  * checks that constraint (rather than assuming the doc is accurate) and
- * picks its synthesis strategy from the result, run by run.
+ * picks its synthesis strategy from the result, run by run — and in
+ * practice (2026-09-24, via --backend=aistudio) mixing a Voice-Design voice
+ * with a prebuilt one in one multi-speaker call worked fine, contrary to
+ * the doc.
+ *
+ * IMPORTANT (confirmed empirically 2026-09-24): this Interactions/Voices
+ * bridge is NOT reachable via Vertex AI on this project — `voices.list`/
+ * `voices.create` 404 at the routing layer across every location and
+ * api_version tried, and `interactions.create` rejects every model tested,
+ * including gemini-3.8-flash (which works fine via the existing
+ * models.generateContent path used elsewhere in this codebase) — so it's
+ * not a TTS-model-specific gate, the whole bridge seems unavailable on
+ * Vertex here. The identical calls work cleanly against the AI Studio
+ * Generative Language API with a plain API key. "vertex" stays the default
+ * backend (matching the original ask), but pass --backend=aistudio (needs
+ * a GEMINI_API_KEY env var) to actually exercise this end-to-end until
+ * Vertex support lands.
  *
  * Usage:
  *   npx tsx scripts/test-gemini-3.8-tts.ts \
- *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC] [--fresh-voices]
+ *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC] \
+ *     [--fresh-voices] [--backend=vertex|aistudio]
  *
  * With no --podcast/--episode, auto-picks the most recently updated
  * episode with a transcript. --turns caps the demo clip synthesized at the
  * end (default 16 turns); --all synthesizes the whole episode instead.
  *
- * Costs real, billed Vertex AI usage (text generation, voice design, TTS).
+ * Costs real, billed usage against whichever backend is selected (text
+ * generation, voice design, TTS).
  * The binary-search probe alone is O(log N) calls; the demo clip is
  * bounded by --turns unless --all is passed. Voice Design voices are a
  * stored, quota-limited resource (200/project, 1-year TTL) — re-running
@@ -97,6 +114,7 @@ interface Args {
   all?: boolean;
   location?: string;
   freshVoices?: boolean;
+  backend?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -112,6 +130,7 @@ function parseArgs(argv: string[]): Args {
     else if (key === "all") out.all = true;
     else if (key === "location") out.location = value;
     else if (key === "fresh-voices") out.freshVoices = true;
+    else if (key === "backend") out.backend = value;
   }
   return out;
 }
@@ -185,8 +204,27 @@ function resolveCast(podcast: Podcast, episode: Episode): [Speaker, Speaker] {
 // and TTS_MODEL constant this script is testing a replacement for)
 // ---------------------------------------------------------------------------
 
-async function loadClient(location: string): Promise<GoogleGenAIClient> {
+type Backend = "vertex" | "aistudio";
+
+// Confirmed empirically (2026-09-24): the Interactions/Voices bridge this
+// script tests is not reachable via Vertex AI on this project at all —
+// `voices.list`/`voices.create` 404 at the routing layer across every
+// location and api_version tried, and `interactions.create` rejects every
+// model tested (including gemini-3.8-flash, which works fine via the
+// existing models.generateContent path), not just the TTS model. The same
+// calls work cleanly against the AI Studio Generative Language API with a
+// plain API key — including mixing a Voice-Design voice with a prebuilt
+// one in a single multi-speaker call, which the docs say isn't supported.
+// "vertex" stays the default (matching the original ask), but pass
+// --backend=aistudio (needs GEMINI_API_KEY) to actually exercise this
+// end-to-end until Vertex support lands.
+async function loadClient(backend: Backend, location: string): Promise<GoogleGenAIClient> {
   const { GoogleGenAI } = await import("@google/genai");
+  if (backend === "aistudio") {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("--backend=aistudio requires a GEMINI_API_KEY environment variable");
+    return new GoogleGenAI({ apiKey });
+  }
   return new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location });
 }
 
@@ -735,10 +773,15 @@ async function synthesizeDemo(
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const location = args.location || process.env.VERTEX_AI_LOCATION || "global";
+  const backend = (args.backend as Backend | undefined) ?? "vertex";
+  if (backend !== "vertex" && backend !== "aistudio") {
+    throw new Error(`--backend must be "vertex" or "aistudio", got "${backend}"`);
+  }
 
   await mkdir(OUT_DIR, { recursive: true });
   console.log(`Output dir: ${OUT_DIR}`);
-  console.log(`Project: ${PROJECT_ID}  Location: ${location}  Database: ${DATABASE_ID}`);
+  console.log(`Backend: ${backend}` + (backend === "vertex" ? `  Project: ${PROJECT_ID}  Location: ${location}` : ""));
+  console.log(`Database: ${DATABASE_ID}`);
 
   const firestore = initFirestore();
   const { podcast, episode } = await findTestEpisode(firestore, args.podcast, args.episode);
@@ -772,7 +815,7 @@ async function main() {
   }
   console.log(`Transcript: ${turns.length} turns, ${wordCount(turns)} words\n`);
 
-  const client = await loadClient(location);
+  const client = await loadClient(backend, location);
 
   console.log("=== Voice resolution ===");
   const voiceCache = await loadVoiceCache();
