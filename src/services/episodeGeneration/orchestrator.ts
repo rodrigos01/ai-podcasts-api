@@ -46,9 +46,10 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       if (history.length > 0) condensedHistoryBySpeakerId.set(speaker.id, history.join("\n\n"));
     }
 
-    // Generated from persona/podcast/episode metadata alone — never needed
-    // the transcript.
-    const ttsPrompt = await generateBaseTtsPrompt(podcast, episode, cast.speakers);
+    // Built directly from each speaker's own persona/accent data — no LLM
+    // call, no need for podcast/episode context, never needed the
+    // transcript (see producerPrompt.service.ts).
+    const ttsPrompt = generateBaseTtsPrompt(cast.speakers);
     const basePromptTokens = await countTokens(ttsPrompt);
 
     await patchEpisodeState(podcastId, episodeId, {

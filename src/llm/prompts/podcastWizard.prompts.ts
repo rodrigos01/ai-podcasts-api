@@ -13,6 +13,11 @@ matches the persona you write, and do not invent new IDs): ${voiceCatalog}. If a
 host, never assign the same voice ID to two different hosts — every host needs to be distinguishable by \
 voice alone.
 
+Only when a host's persona specifically calls for a distinctive spoken accent (regional, national, or \
+non-native) may you also set that host's "accent" field — a short, plain-English description (e.g. \
+"Northern Irish", "light French accent"). Leave it unset for an ordinary/neutral voice; don't invent one \
+for every host just because the field exists.
+
 Personas should read as life-like, specific characters relevant to the show's subject matter, not generic \
 placeholders.`;
 
