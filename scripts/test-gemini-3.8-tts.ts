@@ -307,7 +307,7 @@ async function generateStructured<T>(
 }
 
 function buildPersonaPrompt(speaker: Person): string {
-  const lines = [`Persona:\n${speaker.persona}`];
+  const lines = [`Name: ${speaker.name}`, `Persona:\n${speaker.persona}`];
   if (speaker.accent) lines.push(`Stated accent: ${speaker.accent}`);
   return lines.join("\n\n");
 }
@@ -332,7 +332,10 @@ const HOST_SYSTEM_INSTRUCTION =
   "'voice design' system that builds a brand-new voice purely from a natural-language " +
   "description of how it sounds (age, timbre, pacing, energy, gender presentation). That " +
   "system never reads the description aloud, so it must describe only the VOICE, never the " +
-  "host's biography, opinions, or topics.\n\n" +
+  "host's name, biography, opinions, or topics. The host's name is given below only as a " +
+  "signal for perceived gender presentation (most first names strongly imply one) — use it " +
+  "for that judgment call alone, and fall back to the persona's own phrasing when a name is " +
+  "ambiguous or gender-neutral.\n\n" +
   "First, work out what natural language the persona text below is itself written in — that " +
   "is the language this host will actually speak on the show — and report it as a BCP-47 tag " +
   "(e.g. 'en-US', 'es-ES', 'pt-BR', 'fr-FR', 'ja-JP'), preferring a specific regional tag the " +
@@ -357,7 +360,10 @@ const GUEST_SYSTEM_INSTRUCTION =
   "by proposing filters for a ListVoices-style query: perceived gender, pitch, one to three " +
   "persona/archetype keywords (e.g. 'Warm, Friendly' or 'Narrator'), one or two usage-context " +
   "keywords (e.g. 'Conversational', 'News'), an optional accent descriptor, and an optional " +
-  "free-text search string.\n\n" +
+  "free-text search string. The guest's name is given below only as a signal for perceived " +
+  "gender presentation (most first names strongly imply one) — use it for that judgment call " +
+  "alone, and fall back to the persona's own phrasing when a name is ambiguous or " +
+  "gender-neutral.\n\n" +
   "First, work out what natural language the persona text below is itself written in — that " +
   "is the language this guest will actually speak — and report it as a BCP-47 tag (e.g. " +
   "'en-US', 'es-ES', 'pt-BR', 'fr-FR', 'ja-JP').\n\n" +
@@ -404,8 +410,12 @@ async function saveVoiceCache(cache: VoiceCache): Promise<void> {
 }
 
 function voiceCacheKey(speaker: Person): string {
+  // Includes the name (not just persona/accent) since buildPersonaPrompt
+  // now feeds it to the LLM as a gender-inference signal — a name change
+  // (or this prompt change itself, the first time it runs) should bust the
+  // cache too, not just a persona/accent edit.
   const hash = createHash("sha256")
-    .update(`${speaker.persona}\u0000${speaker.accent ?? ""}`)
+    .update(`${speaker.name}\u0000${speaker.persona}\u0000${speaker.accent ?? ""}`)
     .digest("hex")
     .slice(0, 16);
   return `${speaker.id}:${hash}`;
