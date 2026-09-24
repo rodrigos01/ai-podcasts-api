@@ -23,7 +23,7 @@ Podcast description: ${podcast.description}
 Podcast structure:
 ${podcast.structure}
 
-Fixed hosts on this show, with their assigned voices: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice})`).join("; ")}
+Fixed hosts on this show, with their assigned voices: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice}${h.accent ? `; accent: ${h.accent}` : ""})`).join("; ")}
 
 The user has already chosen a target episode length of "${length}" (${targetRange.min}-${targetRange.max} \
 spoken words, roughly matching the studio's length options: ${lengthCatalog}) before you draft anything — \
@@ -39,6 +39,11 @@ If you include a guest, their "voice" field must be exactly one of these IDs (pi
 gender/trait match for the persona): ${voiceCatalog}. Never assign the guest a voice ID already used by \
 one of this show's fixed hosts listed above — every speaker who might appear together in an episode needs \
 a distinct voice so listeners can tell them apart.
+
+Only when the guest's persona specifically calls for a distinctive spoken accent (regional, national, or \
+non-native) may you also set their "accent" field — a short, plain-English description (e.g. "Northern \
+Irish", "light French accent"), the same optional field a fixed host may have (see above). Leave it unset \
+for an ordinary/neutral voice.
 
 You return an array of 1 or 2 "suggestions". There is no fixed pattern of which suggestion has how many \
 episodes — decide each suggestion's shape independently, on its own merits.
