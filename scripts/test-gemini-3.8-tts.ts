@@ -450,14 +450,26 @@ interface GuestVoiceMatch {
 async function findGuestVoice(client: GoogleGenAIClient, req: GuestVoiceRequest): Promise<GuestVoiceMatch> {
   // Falls back to progressively looser filters if the ideal combination
   // returns nothing — logged so it's clear which attempt actually matched.
+  // `accent` is kept through the first two tiers (dropped only once gender
+  // is also dropped) since it's a stronger, more load-bearing signal than a
+  // persona/context keyword for a guest whose background is part of who
+  // they are — e.g. a Peruvian speaking Brazilian Portuguese.
   const attempts: Array<Record<string, unknown>> = [
     {
       language_code: [req.languageCode],
       gender: [req.gender],
       pitch: req.pitch ? [req.pitch] : undefined,
+      accent: req.accent ? [req.accent] : undefined,
       persona: req.personaKeywords,
       contexts: req.contexts,
       search: req.search,
+      type: ["prebuilt"],
+      page_size: 10,
+    },
+    {
+      language_code: [req.languageCode],
+      gender: [req.gender],
+      accent: req.accent ? [req.accent] : undefined,
       type: ["prebuilt"],
       page_size: 10,
     },
@@ -868,7 +880,13 @@ async function main() {
     } else {
       console.log(`[voice] ${label} (guest): searching the voice library...`);
       const req = await generateStructured(client, GUEST_SYSTEM_INSTRUCTION, buildPersonaPrompt(speaker), guestVoiceSchema);
-      console.log(`  language=${req.languageCode} (${req.languageName}) gender=${req.gender}`);
+      console.log(
+        `  language=${req.languageCode} (${req.languageName}) gender=${req.gender}` +
+          (req.pitch ? ` pitch=${req.pitch}` : "") +
+          (req.accent ? ` accent=${req.accent}` : "") +
+          ` persona=[${req.personaKeywords.join(", ")}] contexts=[${req.contexts.join(", ")}]` +
+          (req.search ? ` search="${req.search}"` : ""),
+      );
       const match = await findGuestVoice(client, req);
       console.log(`  -> ${match.voiceId} (${match.displayName ?? "?"})`);
       speakerVoices.set(label, { label, voiceId: match.voiceId, languageCode: req.languageCode });
