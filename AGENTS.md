@@ -35,6 +35,29 @@ Audio generation was fully replaced, moving off `@google-cloud/text-to-speech`'s
 - **No compressed audio output at all** — the new model only offers WAV/raw PCM, mulaw, or alaw; no Ogg Opus. `audio.service.ts` caches a growing WAV snapshot (`storage/audioCache.repository.ts`'s `in-progress.wav`) while a listener's generation is in flight, then [audioFinalize.service.ts](src/services/episodeGeneration/audioFinalize.service.ts) shells out to a real **`ffmpeg`** subprocess (piped over stdin/stdout, no temp files) to encode the complete WAV to Ogg Opus once generation finishes — replacing the old pipeline's hand-rolled Ogg-page stitching (`utils/oggStitch.ts`/`utils/oggOpus.ts`, deleted) with one real encoder pass. `ffmpeg` is a **new system dependency**, added to the Dockerfile's runtime stage (`apt-get install ffmpeg`) — there is no npm package for this. `utils/wav.ts` reintroduces the WAV utilities the 2026-09-16 Ogg migration had deleted (`buildWavHeader`/`extractPcm`/`secondsToByteOffset`) — WAV's fixed bytes-per-second relationship makes `?t=` resume exact again, for the *whole* episode now, not just chunk-boundary-approximate.
 - **Storage TTL**: `in-progress.wav` (7 days) and `final.ogg` (90 days) are meant to auto-expire — GCS has no true per-object TTL, so `audioCache.repository.ts` stamps `customTime` metadata at every write, and `scripts/configure-audio-storage-lifecycle.ts` (written but **not yet applied to the production bucket** — a human needs to run this deliberately) configures two `daysSinceCustomTime`-keyed bucket lifecycle rules to actually delete them.
 - Two things still need live, billed manual verification before fully trusting this in production (this repo's testing philosophy — external APIs are verified manually, not mocked): `client.voices.delete()`'s exact behavior under real quota/error conditions, and the ~9,000-word `long`-episode ceiling mentioned above.
+- **`GEMINI_API_KEY` reaches the deployed Cloud Run service via Google Secret Manager, never a GitHub secret or a value in the workflow file.** `.github/workflows/deploy.yml`'s `gcloud run deploy` call passes `--update-secrets "GEMINI_API_KEY=gemini-api-key:latest"` — Cloud Run resolves that secret at container startup using the *runtime* service account's own IAM grant and exposes it to the app as a plain env var, so `env.ts`'s `process.env.GEMINI_API_KEY` needs no code awareness of where it came from. The GitHub Actions runner (`player@ai-audio-book.iam.gserviceaccount.com`, WIF-authenticated) never sees or logs the plaintext — it only references the secret's name. **One-time manual setup, not yet done as of this migration** (a human with sufficient IAM on the `ai-audio-book` project needs to run this — not something to do from an agent session without explicit instruction, since it touches real production secrets/IAM):
+  ```bash
+  # Create the secret and its first version (paste the real key at the prompt,
+  # or pipe it in — don't put it on the command line where shell history keeps it):
+  printf '%s' "$GEMINI_API_KEY" | gcloud secrets create gemini-api-key \
+    --project=ai-audio-book --replication-policy=automatic --data-file=-
+
+  # Grant the RUNTIME service account access (this is who actually reads the
+  # secret value, at container startup):
+  gcloud secrets add-iam-policy-binding gemini-api-key \
+    --project=ai-audio-book \
+    --member="serviceAccount:883622140264-compute@developer.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+
+  # Also grant the DEPLOYING service account access -- gcloud run deploy's
+  # --update-secrets validates the reference using the caller's own
+  # credentials too, not just the runtime SA's:
+  gcloud secrets add-iam-policy-binding gemini-api-key \
+    --project=ai-audio-book \
+    --member="serviceAccount:player@ai-audio-book.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+  ```
+  Rotating the key later is `gcloud secrets versions add gemini-api-key --data-file=-` (a new version; `:latest` in the deploy command picks it up on the next deploy, no workflow change needed) — deleting old versions is optional cleanup, not required for rotation to work.
 
 ## Architecture decisions not in specs.md
 
