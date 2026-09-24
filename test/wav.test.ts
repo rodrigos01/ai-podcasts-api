@@ -44,13 +44,20 @@ describe("buildStreamingWavHeader", () => {
     expect(header.length).toBe(44);
   });
 
-  it("declares a placeholder size, not zero", () => {
+  it("declares a placeholder size of 0 (not the oversized 0xFFFFFFFF convention)", () => {
+    // 0xFFFFFFFF is the more common streaming-WAV convention (what ffmpeg/sox
+    // use), but confirmed live (2026-09-24) to not be honored by a real
+    // client's ExoPlayer -- it computed a literal, wrong ~1491-minute
+    // duration from it instead of treating it as "unknown." 0 is the other
+    // real-world convention (used by recording software that patches in the
+    // true size once a write finishes) -- see this constant's own comment
+    // in wav.ts for the full story.
     const header = buildStreamingWavHeader(FMT);
-    expect(header.readUInt32LE(40)).toBe(0xffffffff);
-    expect(header.readUInt32LE(4)).toBe(0xffffffff);
+    expect(header.readUInt32LE(40)).toBe(0); // data chunk size
+    expect(header.readUInt32LE(4)).toBe(0); // RIFF chunk size — the "0 convention" zeros both fields
   });
 
-  it("extractPcm clamps the declared length to what's actually appended so far", () => {
+  it("extractPcm ignores the stale placeholder and reads everything appended so far", () => {
     const header = buildStreamingWavHeader(FMT);
     const pcm = pcmOfLength(500);
     const growing = Buffer.concat([header, pcm]);
