@@ -53,8 +53,7 @@
  * Usage:
  *   npx tsx scripts/test-gemini-3.8-tts.ts \
  *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC] \
- *     [--fresh-voices] [--backend=vertex|aistudio] [--stream] [--skip-probe] \
- *     [--style="Label:free text"]...
+ *     [--fresh-voices] [--backend=vertex|aistudio] [--stream] [--skip-probe]
  *
  * With no --podcast/--episode, auto-picks the most recently updated
  * episode with a transcript. --turns caps the demo clip synthesized at the
@@ -73,15 +72,7 @@
  * expensive, slow part — a full-transcript call can take several minutes
  * even just to confirm it works) when all you want is a quick demo clip,
  * e.g. to listen for streaming-specific artifacts without paying for the
- * capacity search too. --style="Label:free text" (repeatable) adds a
- * `speech_metadata.style` annotation to every one of that speaker's turns
- * in the demo clip — a narrow, deliberately manual escape hatch for testing
- * whether style text can steer something a voice choice alone couldn't
- * (e.g. an accent nuance the Voice Library has no matching tag for), not a
- * general turn-by-turn styling feature. The model's own prompting guide
- * says not to use `style` for "immutable" traits like accent, recommending
- * voice selection instead — worth verifying empirically anyway, same as
- * any other doc claim tested here.
+ * capacity search too.
  *
  * Costs real, billed usage against whichever backend is selected (text
  * generation, voice design, TTS).
@@ -141,7 +132,6 @@ interface Args {
   backend?: string;
   stream?: boolean;
   skipProbe?: boolean;
-  styles?: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -160,23 +150,8 @@ function parseArgs(argv: string[]): Args {
     else if (key === "backend") out.backend = value;
     else if (key === "stream") out.stream = true;
     else if (key === "skip-probe") out.skipProbe = true;
-    else if (key === "style") (out.styles ??= []).push(value);
   }
   return out;
-}
-
-// Parses repeated --style="Label:free text" args into a lookup by speaker
-// label. Deliberately a narrow, manual one-off (see buildContentItems) —
-// not meant to grow into general turn-by-turn styling support.
-function parseStyleByLabel(styles: string[] | undefined): Map<string, string> | undefined {
-  if (!styles?.length) return undefined;
-  const map = new Map<string, string>();
-  for (const raw of styles) {
-    const i = raw.indexOf(":");
-    if (i === -1) throw new Error(`--style must be "Label:style text", got "${raw}"`);
-    map.set(raw.slice(0, i), raw.slice(i + 1));
-  }
-  return map;
 }
 
 // ---------------------------------------------------------------------------
@@ -538,26 +513,12 @@ async function findGuestVoice(client: GoogleGenAIClient, req: GuestVoiceRequest)
 // TTS synthesis
 // ---------------------------------------------------------------------------
 
-// styleByLabel is a deliberately narrow, one-off escape hatch — turn-level
-// `style` was explicitly out of scope for the original spike (see module
-// doc comment) and the model's own prompting guide warns against using it
-// for "immutable speaker traits" like accent, recommending voice selection
-// instead (see Voice Library findings). Worth testing empirically anyway,
-// same as any other doc claim here: not something to build into every
-// call by default.
-function buildContentItems(turns: ScriptTurn[], multiSpeaker: boolean, styleByLabel?: Map<string, string>) {
-  return turns.map((turn) => {
-    const style = styleByLabel?.get(turn.speaker);
-    const annotation =
-      multiSpeaker || style
-        ? { type: "speech_metadata" as const, ...(multiSpeaker ? { speaker: turn.speaker } : {}), ...(style ? { style } : {}) }
-        : undefined;
-    return {
-      type: "text" as const,
-      text: turn.text,
-      annotations: annotation ? [annotation] : undefined,
-    };
-  });
+function buildContentItems(turns: ScriptTurn[], multiSpeaker: boolean) {
+  return turns.map((turn) => ({
+    type: "text" as const,
+    text: turn.text,
+    annotations: multiSpeaker ? [{ type: "speech_metadata" as const, speaker: turn.speaker }] : undefined,
+  }));
 }
 
 interface SynthesisResult {
@@ -642,12 +603,11 @@ async function synthesize(
   turns: ScriptTurn[],
   voices: VoiceAssignment[],
   streamMode = false,
-  styleByLabel?: Map<string, string>,
 ): Promise<SynthesisResult> {
   const multiSpeaker = voices.length > 1;
   const requestBase = {
     model,
-    input: [{ type: "user_input" as const, content: buildContentItems(turns, multiSpeaker, styleByLabel) }],
+    input: [{ type: "user_input" as const, content: buildContentItems(turns, multiSpeaker) }],
     response_format: { type: "audio" as const },
     generation_config: {
       speech_config: voices.map((v) => ({
@@ -937,17 +897,9 @@ async function synthesizeDemo(
   voiceByLabel: Map<string, VoiceAssignment>,
   canCombine: boolean,
   streamMode: boolean,
-  styleByLabel?: Map<string, string>,
 ): Promise<{ buffers: Buffer[]; calls: number }> {
   if (canCombine) {
-    const { buffer, firstByteMs, totalMs } = await synthesize(
-      client,
-      model,
-      turns,
-      [...voiceByLabel.values()],
-      streamMode,
-      styleByLabel,
-    );
+    const { buffer, firstByteMs, totalMs } = await synthesize(client, model, turns, [...voiceByLabel.values()], streamMode);
     if (firstByteMs !== undefined) console.log(`  [demo] first byte ${firstByteMs}ms, total ${totalMs}ms`);
     return { buffers: [buffer], calls: 1 };
   }
@@ -964,7 +916,7 @@ async function synthesizeDemo(
     const label = run[0]!.speaker;
     const voice = voiceByLabel.get(label);
     if (!voice) throw new Error(`No voice assigned for speaker label "${label}"`);
-    const { buffer, firstByteMs, totalMs } = await synthesize(client, model, run, [voice], streamMode, styleByLabel);
+    const { buffer, firstByteMs, totalMs } = await synthesize(client, model, run, [voice], streamMode);
     const timing = firstByteMs !== undefined ? ` [first byte ${firstByteMs}ms, total ${totalMs}ms]` : "";
     console.log(`  [demo] run ${i + 1}/${runs.length}: ${label}, ${run.length} turn(s)${timing}`);
     buffers.push(buffer);
@@ -1117,23 +1069,11 @@ async function main() {
 
   console.log("\n=== Demo synthesis ===");
   const demoTurns = args.all ? turns : turns.slice(0, args.turns ?? DEFAULT_DEMO_TURNS);
-  const styleByLabel = parseStyleByLabel(args.styles);
   console.log(
     `Synthesizing ${demoTurns.length}/${turns.length} turns (${wordCount(demoTurns)} words)` +
       (args.all ? "" : " — pass --all for the whole episode, or --turns=N for a different sample size"),
   );
-  if (styleByLabel) {
-    for (const [label, style] of styleByLabel) console.log(`  [style] ${label}: "${style}"`);
-  }
-  const { buffers, calls } = await synthesizeDemo(
-    client,
-    model,
-    demoTurns,
-    speakerVoices,
-    mixed.ok,
-    streamMode,
-    styleByLabel,
-  );
+  const { buffers, calls } = await synthesizeDemo(client, model, demoTurns, speakerVoices, mixed.ok, streamMode);
   const finalWav = buffers.length === 1 ? buffers[0]! : concatWavBuffers(buffers);
   const outPath = path.join(OUT_DIR, `episode-${episode.id}-demo.wav`);
   await writeFile(outPath, finalWav);
