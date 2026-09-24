@@ -53,7 +53,7 @@
  * Usage:
  *   npx tsx scripts/test-gemini-3.8-tts.ts \
  *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC] \
- *     [--fresh-voices] [--backend=vertex|aistudio] [--stream]
+ *     [--fresh-voices] [--backend=vertex|aistudio] [--stream] [--skip-probe]
  *
  * With no --podcast/--episode, auto-picks the most recently updated
  * episode with a transcript. --turns caps the demo clip synthesized at the
@@ -68,7 +68,11 @@
  * concatenation) is unaffected by which mode produced the buffer. Each
  * streamed call's time-to-first-byte and total wall time are logged and
  * recorded in probe-results.json, since that's the whole point of testing
- * this mode.
+ * this mode. --skip-probe skips the binary-search probe entirely (it's the
+ * expensive, slow part — a full-transcript call can take several minutes
+ * even just to confirm it works) when all you want is a quick demo clip,
+ * e.g. to listen for streaming-specific artifacts without paying for the
+ * capacity search too.
  *
  * Costs real, billed usage against whichever backend is selected (text
  * generation, voice design, TTS).
@@ -127,6 +131,7 @@ interface Args {
   freshVoices?: boolean;
   backend?: string;
   stream?: boolean;
+  skipProbe?: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -144,6 +149,7 @@ function parseArgs(argv: string[]): Args {
     else if (key === "fresh-voices") out.freshVoices = true;
     else if (key === "backend") out.backend = value;
     else if (key === "stream") out.stream = true;
+    else if (key === "skip-probe") out.skipProbe = true;
   }
   return out;
 }
@@ -274,6 +280,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
       lastError = err;
       if (attempt < attempts) {
         const delay = isRateLimitError(err) ? 2 ** attempt * 1000 : attempt * 500;
+        console.warn(`  [retry] attempt ${attempt}/${attempts} failed: ${errorMessage(err)} — retrying in ${delay}ms`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -538,15 +545,50 @@ interface StreamConsumeResult {
   totalMs: number;
 }
 
+// Confirmed empirically (2026-09-24) against a real, healthy long-running
+// stream: even during stretches that LOOKED stalled from the outside (a
+// background task's log file batches writes unpredictably), the real max
+// gap between consecutive events over a full 500+ second, 16,000+ event
+// call never exceeded ~1.1s. A genuine stall — confirmed separately, also
+// live: a streaming call went fully silent server-side for 8+ minutes with
+// zero new events and the client's CPU usage flat, no error surfaced — is
+// unambiguously distinguishable from normal jitter at a much shorter
+// threshold than that. 20s is generous relative to the ~1.1s ceiling seen
+// in the healthy case, while still failing fast relative to a stall that
+// would otherwise hang indefinitely (the SDK/transport enforces no timeout
+// of its own here).
+const STREAM_INACTIVITY_TIMEOUT_MS = 20000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // Iterates the SSE-style event stream a streaming interactions.create()
 // call returns: interaction.created -> repeated step.delta (delta.type
 // "audio" carries a base64 PCM chunk) -> interaction.completed. Confirmed
-// empirically, not assumed from docs.
+// empirically, not assumed from docs. Each `next()` call races against
+// STREAM_INACTIVITY_TIMEOUT_MS so a stalled stream fails fast instead of
+// hanging forever — a stalled stream can't be resumed, so the caller must
+// restart the whole request (see synthesize()'s streamMode branch, which
+// wraps stream creation + consumption together in withRetry for exactly
+// this reason).
 async function consumeInteractionStream(stream: AsyncIterable<any>): Promise<StreamConsumeResult> {
   const start = Date.now();
   const chunks: Buffer[] = [];
   let firstByteMs: number | null = null;
-  for await (const event of stream) {
+  const iterator = stream[Symbol.asyncIterator]();
+  for (;;) {
+    const result = await withTimeout(
+      iterator.next(),
+      STREAM_INACTIVITY_TIMEOUT_MS,
+      `Stream stalled: no event for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s`,
+    );
+    if (result.done) break;
+    const event = result.value;
     if (event?.event_type === "step.delta" && event.delta?.type === "audio" && event.delta.data) {
       if (firstByteMs === null) firstByteMs = Date.now() - start;
       chunks.push(Buffer.from(event.delta.data, "base64"));
@@ -582,8 +624,16 @@ async function synthesize(
     // module doc comment), so `as any` on the request is a pragmatic choice
     // for a throwaway test script, not something to carry into production
     // code.
-    const stream = await withRetry(() => client.interactions.create({ ...requestBase, stream: true } as any));
-    const { pcm, firstByteMs, totalMs } = await consumeInteractionStream(stream as unknown as AsyncIterable<any>);
+    //
+    // Stream creation AND consumption are retried together, not just
+    // creation — a stalled stream (see consumeInteractionStream) can't be
+    // resumed mid-response, so recovering from one means starting an
+    // entirely fresh request, exactly like recovering from a stall in the
+    // old Cloud TTS pipeline's own streamingSynthesize (see AGENTS.md).
+    const { pcm, firstByteMs, totalMs } = await withRetry(async () => {
+      const stream = await client.interactions.create({ ...requestBase, stream: true } as any);
+      return consumeInteractionStream(stream as unknown as AsyncIterable<any>);
+    });
     if (pcm.length === 0) throw new Error("Streaming response produced no audio data");
     return {
       buffer: buildWav(STREAM_PCM_FORMAT, pcm),
@@ -1005,13 +1055,17 @@ async function main() {
     console.log(`Combined multi-speaker call FAILED, as documented: ${mixed.error}`);
   }
 
-  console.log("\n=== Chunking-necessity probe (binary search on full transcript) ===");
-  const probe = await findMaxWorkingPrefix(client, model, turns, firstVoice, streamMode);
-  console.log(
-    `Max working single-call prefix: ${probe.maxTurns}/${turns.length} turns` +
-      ` — chunking ${probe.chunkingNecessary ? "IS" : "is NOT"} necessary for an episode this long.`,
-  );
-  await writeFile(path.join(OUT_DIR, "probe-results.json"), JSON.stringify(probe.attempts, null, 2));
+  if (args.skipProbe) {
+    console.log("\n=== Chunking-necessity probe SKIPPED (--skip-probe) ===");
+  } else {
+    console.log("\n=== Chunking-necessity probe (binary search on full transcript) ===");
+    const probe = await findMaxWorkingPrefix(client, model, turns, firstVoice, streamMode);
+    console.log(
+      `Max working single-call prefix: ${probe.maxTurns}/${turns.length} turns` +
+        ` — chunking ${probe.chunkingNecessary ? "IS" : "is NOT"} necessary for an episode this long.`,
+    );
+    await writeFile(path.join(OUT_DIR, "probe-results.json"), JSON.stringify(probe.attempts, null, 2));
+  }
 
   console.log("\n=== Demo synthesis ===");
   const demoTurns = args.all ? turns : turns.slice(0, args.turns ?? DEFAULT_DEMO_TURNS);
