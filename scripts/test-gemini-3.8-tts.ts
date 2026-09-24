@@ -53,7 +53,8 @@
  * Usage:
  *   npx tsx scripts/test-gemini-3.8-tts.ts \
  *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC] \
- *     [--fresh-voices] [--backend=vertex|aistudio] [--stream] [--skip-probe]
+ *     [--fresh-voices] [--backend=vertex|aistudio] [--stream] [--skip-probe] \
+ *     [--design-guests]
  *
  * With no --podcast/--episode, auto-picks the most recently updated
  * episode with a transcript. --turns caps the demo clip synthesized at the
@@ -72,7 +73,15 @@
  * expensive, slow part — a full-transcript call can take several minutes
  * even just to confirm it works) when all you want is a quick demo clip,
  * e.g. to listen for streaming-specific artifacts without paying for the
- * capacity search too.
+ * capacity search too. --design-guests routes guests through the same
+ * Voice Design path as hosts instead of a Voice Library search — added
+ * after finding the library's accent taxonomy models accents *within* a
+ * language (e.g. regional American English, regional Latin American
+ * Spanish) with no way to express "a native speaker of language A
+ * carrying an accent while speaking language B", which is exactly what a
+ * guest persona describing a different origin than the show's language
+ * usually calls for. HOST_SYSTEM_INSTRUCTION explicitly asks for that
+ * accent to be described in the design text when the persona implies one.
  *
  * Costs real, billed usage against whichever backend is selected (text
  * generation, voice design, TTS).
@@ -132,6 +141,7 @@ interface Args {
   backend?: string;
   stream?: boolean;
   skipProbe?: boolean;
+  designGuests?: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -150,6 +160,7 @@ function parseArgs(argv: string[]): Args {
     else if (key === "backend") out.backend = value;
     else if (key === "stream") out.stream = true;
     else if (key === "skip-probe") out.skipProbe = true;
+    else if (key === "design-guests") out.designGuests = true;
   }
   return out;
 }
@@ -348,20 +359,25 @@ const hostVoiceSchema = z.object({
 type HostVoiceRequest = z.infer<typeof hostVoiceSchema>;
 
 const HOST_SYSTEM_INSTRUCTION =
-  "You are casting a bespoke synthetic voice for a podcast host using a text-to-speech " +
+  "You are casting a bespoke synthetic voice for a podcast speaker using a text-to-speech " +
   "'voice design' system that builds a brand-new voice purely from a natural-language " +
-  "description of how it sounds (age, timbre, pacing, energy, gender presentation). That " +
-  "system never reads the description aloud, so it must describe only the VOICE, never the " +
-  "host's name, biography, opinions, or topics. The host's name is given below only as a " +
-  "signal for perceived gender presentation (most first names strongly imply one) — use it " +
-  "for that judgment call alone, and fall back to the persona's own phrasing when a name is " +
-  "ambiguous or gender-neutral.\n\n" +
+  "description of how it sounds (age, timbre, pacing, energy, gender presentation, and — " +
+  "when relevant — a spoken accent). That system never reads the description aloud, so it " +
+  "must describe only the VOICE, never the speaker's name, biography, opinions, or topics. " +
+  "The speaker's name is given below only as a signal for perceived gender presentation " +
+  "(most first names strongly imply one) — use it for that judgment call alone, and fall " +
+  "back to the persona's own phrasing when a name is ambiguous or gender-neutral.\n\n" +
   "First, work out what natural language the persona text below is itself written in — that " +
-  "is the language this host will actually speak on the show — and report it as a BCP-47 tag " +
-  "(e.g. 'en-US', 'es-ES', 'pt-BR', 'fr-FR', 'ja-JP'), preferring a specific regional tag the " +
-  "text's diction suggests, otherwise a common default for that language.\n\n" +
+  "is the language this speaker will actually speak on the show — and report it as a BCP-47 " +
+  "tag (e.g. 'en-US', 'es-ES', 'pt-BR', 'fr-FR', 'ja-JP'), preferring a specific regional tag " +
+  "the text's diction suggests, otherwise a common default for that language.\n\n" +
   "Then write a vivid, 2-4 sentence voice-design description, plus a perceived gender " +
-  "presentation and a short display name for this voice.";
+  "presentation and a short display name for this voice. If the persona describes the " +
+  "speaker as being from a place, culture, or background distinct from that language's home " +
+  "region — e.g. a native speaker of one language or region speaking a different one on the " +
+  "show — explicitly describe the resulting accent in the voice-design text (e.g. 'a warm " +
+  "male voice speaking Portuguese with a noticeable Peruvian Spanish accent'), rather than " +
+  "describing a neutral/native accent by default.";
 
 const guestVoiceSchema = z.object({
   languageCode: z.string().min(2).max(10),
@@ -429,13 +445,16 @@ async function saveVoiceCache(cache: VoiceCache): Promise<void> {
   await writeFile(voiceCachePath(), JSON.stringify(cache, null, 2));
 }
 
-function voiceCacheKey(speaker: Person): string {
+function voiceCacheKey(speaker: Person, method: "design" | "library"): string {
   // Includes the name (not just persona/accent) since buildPersonaPrompt
   // now feeds it to the LLM as a gender-inference signal — a name change
   // (or this prompt change itself, the first time it runs) should bust the
-  // cache too, not just a persona/accent edit.
+  // cache too, not just a persona/accent edit. Also includes `method`: a
+  // guest resolved once via Voice Library and again via --design-guests
+  // (Voice Design) must get two different cache entries, not have the
+  // second silently reuse the first's stale result.
   const hash = createHash("sha256")
-    .update(`${speaker.name}\u0000${speaker.persona}\u0000${speaker.accent ?? ""}`)
+    .update(`${method}\u0000${speaker.name}\u0000${speaker.persona}\u0000${speaker.accent ?? ""}`)
     .digest("hex")
     .slice(0, 16);
   return `${speaker.id}:${hash}`;
@@ -984,7 +1003,8 @@ async function main() {
     [a, labelA],
     [b, labelB],
   ] as const) {
-    const cacheKey = voiceCacheKey(speaker);
+    const useDesign = speaker.isHost || !!args.designGuests;
+    const cacheKey = voiceCacheKey(speaker, useDesign ? "design" : "library");
     const cached = !args.freshVoices ? voiceCache[cacheKey] : undefined;
     if (cached) {
       console.log(
@@ -995,8 +1015,8 @@ async function main() {
       continue;
     }
 
-    if (speaker.isHost) {
-      console.log(`[voice] ${label} (host): designing a bespoke voice...`);
+    if (useDesign) {
+      console.log(`[voice] ${label} (${speaker.isHost ? "host" : "guest"}): designing a bespoke voice...`);
       const req = await generateStructured(client, HOST_SYSTEM_INSTRUCTION, buildPersonaPrompt(speaker), hostVoiceSchema);
       console.log(`  language=${req.languageCode} (${req.languageName}) gender=${req.gender}`);
       const { voiceId, sampleAudio } = await designHostVoice(client, req);
