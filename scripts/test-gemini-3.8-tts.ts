@@ -500,9 +500,10 @@ async function findGuestVoice(client: GoogleGenAIClient, req: GuestVoiceRequest)
   for (const [i, raw] of attempts.entries()) {
     const params = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
     const res = await withRetry(() => client.voices.list(params));
+    const count = res.voices?.length ?? 0;
+    console.log(`  [guest voice] attempt ${i + 1}/${attempts.length} -> ${count} match(es)`, params);
     const top = res.voices?.[0];
     if (top?.id) {
-      console.log(`  [guest voice] matched on attempt ${i + 1}/${attempts.length}`, params);
       return { voiceId: top.id, displayName: top.display_name, description: top.description };
     }
   }
