@@ -53,11 +53,22 @@
  * Usage:
  *   npx tsx scripts/test-gemini-3.8-tts.ts \
  *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC] \
- *     [--fresh-voices] [--backend=vertex|aistudio]
+ *     [--fresh-voices] [--backend=vertex|aistudio] [--stream]
  *
  * With no --podcast/--episode, auto-picks the most recently updated
  * episode with a transcript. --turns caps the demo clip synthesized at the
  * end (default 16 turns); --all synthesizes the whole episode instead.
+ * --stream sets `stream: true` on every interactions.create() call instead
+ * of the unary default — the production-relevant mode, since Cloud TTS's
+ * `streamingSynthesize` is what actually lets audio start playing before
+ * generation finishes (see AGENTS.md's Audio delivery section). Streaming
+ * defaults to headerless raw PCM (audio/l16, 24kHz, mono) rather than a
+ * complete WAV, so `synthesize()` wraps it into the same WAV shape as the
+ * unary path internally — every downstream check (duration, truncation,
+ * concatenation) is unaffected by which mode produced the buffer. Each
+ * streamed call's time-to-first-byte and total wall time are logged and
+ * recorded in probe-results.json, since that's the whole point of testing
+ * this mode.
  *
  * Costs real, billed usage against whichever backend is selected (text
  * generation, voice design, TTS).
@@ -115,6 +126,7 @@ interface Args {
   location?: string;
   freshVoices?: boolean;
   backend?: string;
+  stream?: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -131,6 +143,7 @@ function parseArgs(argv: string[]): Args {
     else if (key === "location") out.location = value;
     else if (key === "fresh-voices") out.freshVoices = true;
     else if (key === "backend") out.backend = value;
+    else if (key === "stream") out.stream = true;
   }
   return out;
 }
@@ -504,6 +517,42 @@ function buildContentItems(turns: ScriptTurn[], multiSpeaker: boolean) {
 interface SynthesisResult {
   buffer: Buffer;
   mimeType: string;
+  // Only populated when streamMode is true — the whole point of streaming
+  // is starting playback before the full response exists, so these are the
+  // metrics that actually matter for it.
+  firstByteMs?: number;
+  totalMs?: number;
+}
+
+// Streaming defaults to headerless raw 16-bit signed little-endian PCM
+// (audio/l16, 24kHz, mono) per the docs — confirmed empirically (2026-09-24)
+// against the live API: the first bytes of a streamed response are silence
+// (0x00 repeated), not a "RIFF" ASCII header. We never override
+// response_format's mime_type/sample_rate, so these are always the real
+// format for a streaming call here.
+const STREAM_PCM_FORMAT: WavFormat = { numChannels: 1, sampleRate: 24000, bitsPerSample: 16 };
+
+interface StreamConsumeResult {
+  pcm: Buffer;
+  firstByteMs: number | null;
+  totalMs: number;
+}
+
+// Iterates the SSE-style event stream a streaming interactions.create()
+// call returns: interaction.created -> repeated step.delta (delta.type
+// "audio" carries a base64 PCM chunk) -> interaction.completed. Confirmed
+// empirically, not assumed from docs.
+async function consumeInteractionStream(stream: AsyncIterable<any>): Promise<StreamConsumeResult> {
+  const start = Date.now();
+  const chunks: Buffer[] = [];
+  let firstByteMs: number | null = null;
+  for await (const event of stream) {
+    if (event?.event_type === "step.delta" && event.delta?.type === "audio" && event.delta.data) {
+      if (firstByteMs === null) firstByteMs = Date.now() - start;
+      chunks.push(Buffer.from(event.delta.data, "base64"));
+    }
+  }
+  return { pcm: Buffer.concat(chunks), firstByteMs, totalMs: Date.now() - start };
 }
 
 async function synthesize(
@@ -511,32 +560,55 @@ async function synthesize(
   model: string,
   turns: ScriptTurn[],
   voices: VoiceAssignment[],
+  streamMode = false,
 ): Promise<SynthesisResult> {
   const multiSpeaker = voices.length > 1;
-  const interaction = await withRetry(() =>
-    client.interactions.create({
-      model,
-      input: [{ type: "user_input", content: buildContentItems(turns, multiSpeaker) }],
-      response_format: { type: "audio" },
-      generation_config: {
-        speech_config: voices.map((v) => ({
-          ...(multiSpeaker ? { speaker: v.label } : {}),
-          voice: v.voiceId,
-          language: v.languageCode,
-        })),
-      },
-    }),
-  );
+  const requestBase = {
+    model,
+    input: [{ type: "user_input" as const, content: buildContentItems(turns, multiSpeaker) }],
+    response_format: { type: "audio" as const },
+    generation_config: {
+      speech_config: voices.map((v) => ({
+        ...(multiSpeaker ? { speaker: v.label } : {}),
+        voice: v.voiceId,
+        language: v.languageCode,
+      })),
+    },
+  };
+
+  if (streamMode) {
+    // The streaming overload's exact discriminated-union typing isn't worth
+    // fighting here — this whole API surface is new/evolving (see the
+    // module doc comment), so `as any` on the request is a pragmatic choice
+    // for a throwaway test script, not something to carry into production
+    // code.
+    const stream = await withRetry(() => client.interactions.create({ ...requestBase, stream: true } as any));
+    const { pcm, firstByteMs, totalMs } = await consumeInteractionStream(stream as unknown as AsyncIterable<any>);
+    if (pcm.length === 0) throw new Error("Streaming response produced no audio data");
+    return {
+      buffer: buildWav(STREAM_PCM_FORMAT, pcm),
+      mimeType: "audio/wav",
+      firstByteMs: firstByteMs ?? undefined,
+      totalMs,
+    };
+  }
+
+  const interaction = await withRetry(() => client.interactions.create(requestBase));
   const audio = interaction.output_audio;
   if (!audio?.data) throw new Error("Response had no output_audio");
   return { buffer: Buffer.from(audio.data, "base64"), mimeType: audio.mime_type ?? "audio/wav" };
 }
 
-async function pickWorkingModel(client: GoogleGenAIClient, sampleTurn: ScriptTurn, voice: VoiceAssignment) {
+async function pickWorkingModel(
+  client: GoogleGenAIClient,
+  sampleTurn: ScriptTurn,
+  voice: VoiceAssignment,
+  streamMode: boolean,
+) {
   const errors: string[] = [];
   for (const model of TTS_MODEL_CANDIDATES) {
     try {
-      await synthesize(client, model, [sampleTurn], [voice]);
+      await synthesize(client, model, [sampleTurn], [voice], streamMode);
       console.log(`[model] using ${model}`);
       return model;
     } catch (err) {
@@ -649,6 +721,8 @@ interface ProbeAttempt {
   actualSeconds?: number;
   expectedSeconds: number;
   ratio?: number;
+  firstByteMs?: number;
+  totalMs?: number;
   error?: string;
 }
 
@@ -657,11 +731,12 @@ async function probeAttempt(
   model: string,
   turns: ScriptTurn[],
   voice: VoiceAssignment,
+  streamMode: boolean,
 ): Promise<ProbeAttempt> {
   const words = wordCount(turns);
   const expected = expectedSeconds(turns);
   try {
-    const { buffer } = await synthesize(client, model, turns, [voice]);
+    const { buffer, firstByteMs, totalMs } = await synthesize(client, model, turns, [voice], streamMode);
     const { fmt, pcm } = extractPcm(buffer);
     const actual = durationSeconds(fmt, pcm.length);
     const ratio = expected > 0 ? actual / expected : 1;
@@ -673,6 +748,8 @@ async function probeAttempt(
       actualSeconds: actual,
       expectedSeconds: expected,
       ratio,
+      firstByteMs,
+      totalMs,
       error: ok
         ? undefined
         : `possible truncation: got ${actual.toFixed(1)}s, expected ~${expected.toFixed(1)}s (ratio ${ratio.toFixed(2)})`,
@@ -690,8 +767,12 @@ async function probeAttempt(
 
 function logAttempt(attempt: ProbeAttempt) {
   const status = attempt.ok ? "OK  " : "FAIL";
+  const timing =
+    attempt.firstByteMs !== undefined
+      ? ` [first byte ${attempt.firstByteMs}ms, total ${attempt.totalMs}ms]`
+      : "";
   const detail = attempt.ok
-    ? `${attempt.actualSeconds?.toFixed(1)}s (expected ~${attempt.expectedSeconds.toFixed(1)}s, ratio ${attempt.ratio?.toFixed(2)})`
+    ? `${attempt.actualSeconds?.toFixed(1)}s (expected ~${attempt.expectedSeconds.toFixed(1)}s, ratio ${attempt.ratio?.toFixed(2)})${timing}`
     : attempt.error;
   console.log(`  [probe] ${status} ${attempt.turnCount} turns, ${attempt.words} words — ${detail}`);
 }
@@ -701,10 +782,11 @@ async function findMaxWorkingPrefix(
   model: string,
   turns: ScriptTurn[],
   voice: VoiceAssignment,
+  streamMode: boolean,
 ): Promise<{ maxTurns: number; attempts: ProbeAttempt[]; chunkingNecessary: boolean }> {
   const attempts: ProbeAttempt[] = [];
 
-  const full = await probeAttempt(client, model, turns, voice);
+  const full = await probeAttempt(client, model, turns, voice, streamMode);
   attempts.push(full);
   logAttempt(full);
   if (full.ok) return { maxTurns: turns.length, attempts, chunkingNecessary: false };
@@ -717,7 +799,7 @@ async function findMaxWorkingPrefix(
   let bestOk = 0;
   while (lo <= hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    const res = await probeAttempt(client, model, turns.slice(0, mid), voice);
+    const res = await probeAttempt(client, model, turns.slice(0, mid), voice, streamMode);
     attempts.push(res);
     logAttempt(res);
     if (res.ok) {
@@ -740,10 +822,11 @@ async function probeMixedVoiceMultiSpeaker(
   model: string,
   turns: ScriptTurn[],
   voices: VoiceAssignment[],
+  streamMode: boolean,
 ): Promise<{ ok: boolean; buffer?: Buffer; error?: string }> {
   const sample = turns.slice(0, Math.min(6, turns.length));
   try {
-    const { buffer } = await synthesize(client, model, sample, voices);
+    const { buffer } = await synthesize(client, model, sample, voices, streamMode);
     return { ok: true, buffer };
   } catch (err) {
     return { ok: false, error: errorMessage(err) };
@@ -763,9 +846,11 @@ async function synthesizeDemo(
   turns: ScriptTurn[],
   voiceByLabel: Map<string, VoiceAssignment>,
   canCombine: boolean,
+  streamMode: boolean,
 ): Promise<{ buffers: Buffer[]; calls: number }> {
   if (canCombine) {
-    const { buffer } = await synthesize(client, model, turns, [...voiceByLabel.values()]);
+    const { buffer, firstByteMs, totalMs } = await synthesize(client, model, turns, [...voiceByLabel.values()], streamMode);
+    if (firstByteMs !== undefined) console.log(`  [demo] first byte ${firstByteMs}ms, total ${totalMs}ms`);
     return { buffers: [buffer], calls: 1 };
   }
 
@@ -781,8 +866,9 @@ async function synthesizeDemo(
     const label = run[0]!.speaker;
     const voice = voiceByLabel.get(label);
     if (!voice) throw new Error(`No voice assigned for speaker label "${label}"`);
-    console.log(`  [demo] run ${i + 1}/${runs.length}: ${label}, ${run.length} turn(s)`);
-    const { buffer } = await synthesize(client, model, run, [voice]);
+    const { buffer, firstByteMs, totalMs } = await synthesize(client, model, run, [voice], streamMode);
+    const timing = firstByteMs !== undefined ? ` [first byte ${firstByteMs}ms, total ${totalMs}ms]` : "";
+    console.log(`  [demo] run ${i + 1}/${runs.length}: ${label}, ${run.length} turn(s)${timing}`);
     buffers.push(buffer);
   }
   return { buffers, calls: runs.length };
@@ -901,14 +987,17 @@ async function main() {
   }
   if (voiceCacheDirty) await saveVoiceCache(voiceCache);
 
+  const streamMode = !!args.stream;
+  console.log(`\nStreaming mode: ${streamMode ? "ON (stream: true)" : "OFF (unary)"}`);
+
   const firstVoice = speakerVoices.get(labelA)!;
   const firstTurn = turns[0];
   if (!firstTurn) throw new Error("Transcript has no usable turns");
-  const model = await pickWorkingModel(client, firstTurn, firstVoice);
+  const model = await pickWorkingModel(client, firstTurn, firstVoice, streamMode);
 
   console.log("\n=== Multi-speaker + custom-voice feasibility ===");
   console.log("(docs say a single multi-speaker call can't mix a Voice-Design voice in — checking that live)");
-  const mixed = await probeMixedVoiceMultiSpeaker(client, model, turns, [...speakerVoices.values()]);
+  const mixed = await probeMixedVoiceMultiSpeaker(client, model, turns, [...speakerVoices.values()], streamMode);
   if (mixed.ok) {
     console.log("Combined multi-speaker call with a designed voice SUCCEEDED (contrary to the docs' stated limitation).");
     if (mixed.buffer) await writeFile(path.join(OUT_DIR, "probe-mixed-multispeaker.wav"), mixed.buffer);
@@ -917,7 +1006,7 @@ async function main() {
   }
 
   console.log("\n=== Chunking-necessity probe (binary search on full transcript) ===");
-  const probe = await findMaxWorkingPrefix(client, model, turns, firstVoice);
+  const probe = await findMaxWorkingPrefix(client, model, turns, firstVoice, streamMode);
   console.log(
     `Max working single-call prefix: ${probe.maxTurns}/${turns.length} turns` +
       ` — chunking ${probe.chunkingNecessary ? "IS" : "is NOT"} necessary for an episode this long.`,
@@ -930,7 +1019,7 @@ async function main() {
     `Synthesizing ${demoTurns.length}/${turns.length} turns (${wordCount(demoTurns)} words)` +
       (args.all ? "" : " — pass --all for the whole episode, or --turns=N for a different sample size"),
   );
-  const { buffers, calls } = await synthesizeDemo(client, model, demoTurns, speakerVoices, mixed.ok);
+  const { buffers, calls } = await synthesizeDemo(client, model, demoTurns, speakerVoices, mixed.ok, streamMode);
   const finalWav = buffers.length === 1 ? buffers[0]! : concatWavBuffers(buffers);
   const outPath = path.join(OUT_DIR, `episode-${episode.id}-demo.wav`);
   await writeFile(outPath, finalWav);
