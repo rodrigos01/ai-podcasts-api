@@ -37,7 +37,7 @@
  *
  * Usage:
  *   npx tsx scripts/test-gemini-3.8-tts.ts \
- *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC]
+ *     [--podcast=ID --episode=ID] [--turns=N] [--all] [--location=LOC] [--fresh-voices]
  *
  * With no --podcast/--episode, auto-picks the most recently updated
  * episode with a transcript. --turns caps the demo clip synthesized at the
@@ -45,9 +45,16 @@
  *
  * Costs real, billed Vertex AI usage (text generation, voice design, TTS).
  * The binary-search probe alone is O(log N) calls; the demo clip is
- * bounded by --turns unless --all is passed.
+ * bounded by --turns unless --all is passed. Voice Design voices are a
+ * stored, quota-limited resource (200/project, 1-year TTL) — re-running
+ * this script against the same host would otherwise mint a brand new
+ * throwaway voice (and burn an LLM + design call) every time, so resolved
+ * voices are cached on disk (see voiceCacheKey) and reused across runs
+ * unless a host's persona/accent actually changed. Pass --fresh-voices to
+ * force re-designing/re-searching instead of reusing the cache.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { applicationDefault, initializeApp } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
@@ -89,6 +96,7 @@ interface Args {
   turns?: number;
   all?: boolean;
   location?: string;
+  freshVoices?: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -103,6 +111,7 @@ function parseArgs(argv: string[]): Args {
     else if (key === "turns") out.turns = Number(value);
     else if (key === "all") out.all = true;
     else if (key === "location") out.location = value;
+    else if (key === "fresh-voices") out.freshVoices = true;
   }
   return out;
 }
@@ -320,6 +329,48 @@ interface VoiceAssignment {
   label: string;
   voiceId: string;
   languageCode: string;
+}
+
+// ---------------------------------------------------------------------------
+// Voice cache — reuse a previously resolved voice across script runs. A
+// Voice Design voice is a real, persistent, quota-limited resource (200 per
+// project, 1-year TTL); without this, iterating on this script would mint a
+// brand new throwaway voice — plus the LLM call that designs it — for the
+// same host every single run. Keyed on the speaker's stable id plus a hash
+// of their persona/accent, so an actual persona edit still gets a fresh
+// voice instead of silently reusing a stale one.
+// ---------------------------------------------------------------------------
+
+interface VoiceCacheEntry {
+  voiceId: string;
+  languageCode: string;
+  displayName?: string;
+  createdAt: string;
+}
+type VoiceCache = Record<string, VoiceCacheEntry>;
+
+function voiceCachePath(): string {
+  return path.join(OUT_DIR, "voice-cache.json");
+}
+
+async function loadVoiceCache(): Promise<VoiceCache> {
+  try {
+    return JSON.parse(await readFile(voiceCachePath(), "utf8")) as VoiceCache;
+  } catch {
+    return {};
+  }
+}
+
+async function saveVoiceCache(cache: VoiceCache): Promise<void> {
+  await writeFile(voiceCachePath(), JSON.stringify(cache, null, 2));
+}
+
+function voiceCacheKey(speaker: Person): string {
+  const hash = createHash("sha256")
+    .update(`${speaker.persona}\u0000${speaker.accent ?? ""}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `${speaker.id}:${hash}`;
 }
 
 async function designHostVoice(
@@ -724,11 +775,24 @@ async function main() {
   const client = await loadClient(location);
 
   console.log("=== Voice resolution ===");
+  const voiceCache = await loadVoiceCache();
+  let voiceCacheDirty = false;
   const speakerVoices = new Map<string, VoiceAssignment>();
   for (const [speaker, label] of [
     [a, labelA],
     [b, labelB],
   ] as const) {
+    const cacheKey = voiceCacheKey(speaker);
+    const cached = !args.freshVoices ? voiceCache[cacheKey] : undefined;
+    if (cached) {
+      console.log(
+        `[voice] ${label} (${speaker.isHost ? "host" : "guest"}): reusing cached voice ${cached.voiceId}` +
+          ` (language=${cached.languageCode}, designed ${cached.createdAt})`,
+      );
+      speakerVoices.set(label, { label, voiceId: cached.voiceId, languageCode: cached.languageCode });
+      continue;
+    }
+
     if (speaker.isHost) {
       console.log(`[voice] ${label} (host): designing a bespoke voice...`);
       const req = await generateStructured(client, HOST_SYSTEM_INSTRUCTION, buildPersonaPrompt(speaker), hostVoiceSchema);
@@ -741,6 +805,13 @@ async function main() {
         console.log(`  preview saved: ${previewPath}`);
       }
       speakerVoices.set(label, { label, voiceId, languageCode: req.languageCode });
+      voiceCache[cacheKey] = {
+        voiceId,
+        languageCode: req.languageCode,
+        displayName: req.displayName,
+        createdAt: new Date().toISOString(),
+      };
+      voiceCacheDirty = true;
     } else {
       console.log(`[voice] ${label} (guest): searching the voice library...`);
       const req = await generateStructured(client, GUEST_SYSTEM_INSTRUCTION, buildPersonaPrompt(speaker), guestVoiceSchema);
@@ -748,8 +819,16 @@ async function main() {
       const match = await findGuestVoice(client, req);
       console.log(`  -> ${match.voiceId} (${match.displayName ?? "?"})`);
       speakerVoices.set(label, { label, voiceId: match.voiceId, languageCode: req.languageCode });
+      voiceCache[cacheKey] = {
+        voiceId: match.voiceId,
+        languageCode: req.languageCode,
+        displayName: match.displayName,
+        createdAt: new Date().toISOString(),
+      };
+      voiceCacheDirty = true;
     }
   }
+  if (voiceCacheDirty) await saveVoiceCache(voiceCache);
 
   const firstVoice = speakerVoices.get(labelA)!;
   const firstTurn = turns[0];
