@@ -11,6 +11,7 @@ import { condenseForAllHosts } from "./condensation.service";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
+import { chunkTranscript } from "./chunker";
 
 export async function runEpisodeGeneration(podcastId: string, episodeId: string): Promise<void> {
   try {
@@ -80,15 +81,16 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     const [script] = await Promise.all([scriptPromise, voiceResolutionPromise]);
 
-    // "streamable" as soon as the script exists — /stream can start
-    // generating audio for it immediately via one streaming TTS call for
-    // the whole transcript (no chunking; see AGENTS.md and
-    // services/audio.service.ts). Condensation may still be running.
+    const ttsChunks = chunkTranscript(script.transcript);
+
+    // "streamable" as soon as the script exists and is chunked — /stream can
+    // start generating audio on demand per chunk. Condensation may still be running.
     await patchEpisodeState(podcastId, episodeId, {
       transcript: script.transcript,
+      ttsChunks,
       status: "streamable",
       progress: {
-        stage: "conversation",
+        stage: "chunking",
         currentWordCount: script.wordCount,
         targetWordRange: wordTarget,
       },

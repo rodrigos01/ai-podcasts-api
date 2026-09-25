@@ -31,6 +31,7 @@ export async function createEpisode(
     status: "generating",
     progress: null,
     transcript: null,
+    ttsChunks: null,
     generatedAudioSeconds: 0,
     condensedSummaries: null,
     error: null,

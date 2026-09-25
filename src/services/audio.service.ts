@@ -2,21 +2,22 @@ import type { Response } from "express";
 import { streamEpisodeSynthesis, type TtsVoiceAssignment } from "../llm/ttsClient";
 import {
   createFinalAudioReadStream,
-  deleteInProgressAudio,
+  getCachedChunk,
+  getCachedChunkSize,
   getFinalAudioSize,
-  getInProgressAudio,
-  putInProgressAudio,
+  putCachedChunk,
 } from "../storage/audioCache.repository";
-import { releaseAudioGenerationLock, tryAcquireAudioGenerationLock } from "../data/audioLock.repository";
-import { bumpGeneratedAudioSeconds, getEpisode } from "../data/episode.repository";
-import { AUDIO_POLL_INTERVAL_MS, IN_PROGRESS_FLUSH_INTERVAL_MS } from "../constants/ttsLimits";
-import type { Episode } from "../schemas/episode.schema";
+import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
+import { bumpGeneratedAudioSeconds } from "../data/episode.repository";
+import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
+import type { Episode, TtsChunk } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
 import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service";
-import { parseScriptTurns } from "../utils/scriptText";
-import { buildStreamingWavHeader, buildWav, DEFAULT_PCM_FORMAT, durationSeconds, extractPcm, secondsToByteOffset } from "../utils/wav";
+import { chunkTranscript } from "./episodeGeneration/chunker";
+import { parseScriptTurns, type ScriptTurn } from "../utils/scriptText";
+import { buildStreamingWavHeader, buildWav, buildWavHeader, DEFAULT_PCM_FORMAT, durationSeconds, secondsToByteOffset } from "../utils/wav";
 import { HttpError } from "../utils/HttpError";
 
 function sleep(ms: number): Promise<void> {
@@ -24,11 +25,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * The gate is "the script exists" — no more `ttsPrompt` (there is no
- * director/producer prompt at all in the new pipeline; see AGENTS.md) and
- * no more per-chunk state to check. A `"streamable"` or `"ready"` episode
- * with a transcript can always have its audio generation started; a
- * `"generating"` episode with no transcript yet has nothing to synthesize.
+ * Checks that the episode is in a state where audio can be streamed.
+ * Generation failure or missing transcript blocks playback.
  */
 function assertAudioAvailable(episode: Episode): asserts episode is Episode & { transcript: string } {
   if (episode.status === "failed") {
@@ -40,22 +38,8 @@ function assertAudioAvailable(episode: Episode): asserts episode is Episode & { 
 }
 
 /**
- * Resolves both cast members' TTS voices. The normal path is now a pure
- * Firestore read: orchestrator.ts resolves and persists both cast members'
- * `resolvedVoiceId` at episode-generation time (in parallel with script
- * generation — see AGENTS.md), so by the time a listener's first `/stream`
- * request gets here there's usually nothing left to do. A host still goes
- * through `resolveHostVoice` unconditionally — that's already a cheap
- * cache-hit check (compares `resolvedVoiceHash`) and it's the one place
- * that knows whether a persona/accent/voice-hint edit invalidated the
- * cached design. A guest with no persisted id (a race with a still-running
- * orchestrator, or an episode generated before this architecture existed)
- * falls back to resolving — and persisting — one lazily here, same as the
- * old design. The label returned for each must match, byte-for-byte, what
- * scriptGeneration.prompts.ts told the writer to use for that person
- * (speakerSelection.ts's speakerLabel) — the transcript's turn labels and
- * this mapping have to agree on the same string for a turn to route to the
- * right voice via the API's `speech_metadata` annotation.
+ * Resolves both cast members' TTS voices. The normal path reads persisted
+ * `resolvedVoiceId` values; falls back to resolving lazily if missing.
  */
 async function resolveCastVoices(
   podcastId: string,
@@ -90,22 +74,26 @@ async function resolveCastVoices(
   return assignments;
 }
 
-/** Writes the portion of `data` (starting at absolute PCM offset `dataStart`) that's at or past `bodyStart`. */
-function writeSlice(res: Response, data: Buffer, dataStart: number, bodyStart: number): void {
+/** Writes the portion of `data` (starting at absolute PCM offset `dataStart`) that's at or past `targetStart`. */
+function writeSlice(res: Response, data: Buffer, dataStart: number, targetStart: number): void {
   if (res.destroyed || res.writableEnded) return;
-  if (bodyStart < dataStart + data.length) {
-    res.write(data.subarray(Math.max(0, bodyStart - dataStart)));
+  if (targetStart < dataStart + data.length) {
+    res.write(data.subarray(Math.max(0, targetStart - dataStart)));
   }
 }
 
 /**
  * Serves a fully-generated episode's `final.ogg` as a normal, fully
  * seekable static resource — real `Content-Length`, honors a real `Range`
- * request with `206`/`Content-Range`. No custom offset bookkeeping needed
- * here at all now that it's one complete file instead of N stitched
- * fragments (compare to the old Ogg-chunk-stitching design this replaced).
+ * request with `206`/`Content-Range`.
  */
-function serveFinalAudio(podcastId: string, episodeId: string, size: number, res: Response, rangeStart: number | null): void {
+function serveFinalAudio(
+  podcastId: string,
+  episodeId: string,
+  size: number,
+  res: Response,
+  rangeStart: number | null,
+): void {
   res.set("Content-Type", "audio/ogg");
   res.set("Accept-Ranges", "bytes");
 
@@ -125,137 +113,128 @@ function serveFinalAudio(podcastId: string, episodeId: string, size: number, res
   createFinalAudioReadStream(podcastId, episodeId).pipe(res);
 }
 
-/**
- * Runs the single streaming synthesis call for an episode's whole
- * transcript (no chunking — see ttsLimits.ts), writing PCM live to `res`
- * (as a growing WAV: header written by the caller before this starts, raw
- * PCM as it arrives here) while periodically flushing a snapshot to
- * Storage so a follower (another listener, or another instance) can tail
- * it instead of starting a redundant, costly second synthesis call.
- *
- * On success, hands the complete PCM off to `finalizeEpisodeAudio` (ffmpeg
- * encode to the one final Ogg Opus file + guest-voice cleanup). On
- * failure — including an unresumable mid-stream stall, per the
- * investigation's confirmed finding — discards the in-progress snapshot
- * entirely rather than trying to splice a retried attempt's (different,
- * non-reproducible) audio onto it; see AGENTS.md's explicitly-accepted
- * tradeoff. Either way the lock is released so a future request can try
- * again.
- */
-async function leadGeneration(
+/** In-flight finalizations deduplication to prevent duplicate ffmpeg encoding */
+const inFlightFinalizations = new Map<string, Promise<void>>();
+
+function finalizeFromCachedChunks(
   podcastId: string,
   episodeId: string,
-  podcast: Podcast,
-  episode: Episode & { transcript: string },
-  res: Response,
-  bodyStart: number,
+  chunks: TtsChunk[],
 ): Promise<void> {
-  const turns = parseScriptTurns(episode.transcript);
-  const voices = await resolveCastVoices(podcastId, episodeId, podcast, episode);
+  const key = `${podcastId}:${episodeId}`;
+  const existing = inFlightFinalizations.get(key);
+  if (existing) return existing;
 
-  const parts: Buffer[] = [];
-  let pos = 0;
-  let flushing = false;
-  let lastFlushedLength = 0;
+  const promise = (async () => {
+    try {
+      const finalSize = await getFinalAudioSize(podcastId, episodeId);
+      if (finalSize !== null) return;
+      const buffers = await Promise.all(
+        chunks.map((_, i) => getCachedChunk(podcastId, episodeId, i)),
+      );
+      if (buffers.some((b) => b === null)) return;
+      const fullPcm = Buffer.concat(buffers as Buffer[]);
+      await finalizeEpisodeAudio(podcastId, episodeId, fullPcm);
+    } catch (err) {
+      console.error(`Failed to finalize episode audio for ${podcastId}/${episodeId}:`, err);
+    }
+  })();
 
-  function flushInProgress(): void {
-    if (flushing) return;
-    const pcm = Buffer.concat(parts);
-    if (pcm.length === lastFlushedLength) return;
-    flushing = true;
-    lastFlushedLength = pcm.length;
-    Promise.all([
-      putInProgressAudio(podcastId, episodeId, buildWav(DEFAULT_PCM_FORMAT, pcm)),
-      bumpGeneratedAudioSeconds(podcastId, episodeId, durationSeconds(DEFAULT_PCM_FORMAT, pcm.length)),
-    ])
-      .catch((err) => console.error(`Failed to flush in-progress audio for ${podcastId}/${episodeId}:`, err))
-      .finally(() => {
-        flushing = false;
-      });
-  }
+  inFlightFinalizations.set(key, promise);
+  promise.finally(() => inFlightFinalizations.delete(key));
+  return promise;
+}
 
-  let lastFlushAt = Date.now();
+/** In-flight generation promises on this process instance */
+const inFlightGenerations = new Map<string, Promise<Buffer>>();
 
-  try {
-    await streamEpisodeSynthesis(turns, voices, (pcm) => {
-      writeSlice(res, pcm, pos, bodyStart);
-      pos += pcm.length;
-      parts.push(pcm);
-      if (Date.now() - lastFlushAt > IN_PROGRESS_FLUSH_INTERVAL_MS) {
-        lastFlushAt = Date.now();
-        flushInProgress();
-      }
-    });
-  } catch (err) {
-    await deleteInProgressAudio(podcastId, episodeId).catch(() => {});
-    throw err;
-  }
-
-  const fullPcm = Buffer.concat(parts);
-  await putInProgressAudio(podcastId, episodeId, buildWav(DEFAULT_PCM_FORMAT, fullPcm));
-  await bumpGeneratedAudioSeconds(podcastId, episodeId, durationSeconds(DEFAULT_PCM_FORMAT, fullPcm.length));
-  await finalizeEpisodeAudio(podcastId, episodeId, fullPcm);
+function chunkKey(podcastId: string, episodeId: string, index: number): string {
+  return `${podcastId}:${episodeId}:${index}`;
 }
 
 /**
- * Tails another instance's (or another listener's) in-flight generation by
- * polling the in-progress WAV snapshot. Simplification, stated plainly: a
- * follower serves this one HTTP connection as a self-contained WAV response
- * from whatever ends up in the snapshot by the time the lock is released,
- * whether that's a complete episode (the common case) or a leader that
- * crashed partway (rare) — it does not attempt to take over and continue
- * generating mid-response. `final.ogg` is checked too, since it's possible
- * (though unlikely, given polling cadence) for generation to finish between
- * two polls.
+ * Generates one chunk (or waits for another instance currently generating it).
+ * Uses Firestore chunk locking for cross-instance coordination.
  */
-async function followGeneration(podcastId: string, episodeId: string, res: Response, bodyStart: number): Promise<void> {
-  let pos = 0;
+async function generateOrJoinChunk(
+  podcastId: string,
+  episodeId: string,
+  index: number,
+  chunkTurns: ScriptTurn[],
+  voices: TtsVoiceAssignment[],
+  chunkStart: number,
+  onDelta: (delta: Buffer) => void,
+): Promise<Buffer> {
   for (;;) {
-    if (res.destroyed || res.writableEnded) return;
-
-    const finalSize = await getFinalAudioSize(podcastId, episodeId);
-    const wav = await getInProgressAudio(podcastId, episodeId);
-    if (wav) {
-      const { pcm } = extractPcm(wav);
-      if (pcm.length > pos) {
-        const newBytes = pcm.subarray(pos);
-        writeSlice(res, newBytes, pos, bodyStart);
-        pos = pcm.length;
+    const acquired = await tryAcquireChunkLock(podcastId, episodeId, index);
+    if (acquired) {
+      try {
+        const parts: Buffer[] = [];
+        await streamEpisodeSynthesis(chunkTurns, voices, (delta) => {
+          parts.push(delta);
+          onDelta(delta);
+        });
+        const fullChunk = Buffer.concat(parts);
+        await putCachedChunk(podcastId, episodeId, index, fullChunk);
+        await bumpGeneratedAudioSeconds(
+          podcastId,
+          episodeId,
+          durationSeconds(DEFAULT_PCM_FORMAT, chunkStart + fullChunk.length),
+        );
+        return fullChunk;
+      } finally {
+        await releaseChunkLock(podcastId, episodeId, index);
       }
     }
 
-    if (finalSize !== null) return; // leader finished; our WAV response is already complete or as complete as it'll get
-    const stillGenerating = await tryAcquireAudioGenerationLock(podcastId, episodeId);
-    if (stillGenerating) {
-      // The lock was actually free — no one is generating. Either the
-      // leader finished (and we've already read its final snapshot above)
-      // or it crashed before writing anything. Release immediately; we're
-      // not becoming a leader mid-response (see this function's doc
-      // comment) — just end here with whatever we have.
-      await releaseAudioGenerationLock(podcastId, episodeId);
-      return;
+    // Another instance holds the lock — wait for it to land in the cache
+    const cached = await getCachedChunk(podcastId, episodeId, index);
+    if (cached) {
+      onDelta(cached);
+      return cached;
     }
-    await sleep(AUDIO_POLL_INTERVAL_MS);
+    await sleep(CHUNK_LOCK_POLL_INTERVAL_MS);
   }
 }
 
+function getOrStartChunkGeneration(
+  podcastId: string,
+  episodeId: string,
+  index: number,
+  chunkTurns: ScriptTurn[],
+  voices: TtsVoiceAssignment[],
+  chunkStart: number,
+  onDelta: (delta: Buffer) => void,
+): { promise: Promise<Buffer>; isLeader: boolean } {
+  const key = chunkKey(podcastId, episodeId, index);
+  const existing = inFlightGenerations.get(key);
+  if (existing) {
+    return { promise: existing, isLeader: false };
+  }
+
+  const promise = generateOrJoinChunk(
+    podcastId,
+    episodeId,
+    index,
+    chunkTurns,
+    voices,
+    chunkStart,
+    onDelta,
+  );
+
+  inFlightGenerations.set(key, promise);
+  promise.finally(() => inFlightGenerations.delete(key));
+  return { promise, isLeader: true };
+}
+
 /**
- * Streams an episode's audio. specs.md's Audio Delivery section calls for
- * on-demand, listen-triggered generation, with scrubbing disallowed until
- * every chunk exists — with chunking gone, that's now "until the whole
- * episode is synthesized":
+ * Streams an episode's audio chunk by chunk as a continuous WAV stream.
  *
- * - `final.ogg` already exists: serve it as a normal static, fully
- *   seekable resource (see serveFinalAudio).
- * - Otherwise: become the generation leader (single streaming
- *   `interactions.create` call for the whole transcript — see
- *   ttsClient.ts) or a follower tailing the leader's in-progress snapshot.
- *   A real `Range` header can't be honored precisely here (no known total
- *   length yet) — same as the old per-chunk design's documented
- *   limitation — so it's ignored in favor of a plain `200` from byte 0;
- *   `?t=` resumes via `secondsToByteOffset` (exact now, for the whole
- *   episode, since WAV has a fixed bytes-per-second relationship — no more
- *   chunk-boundary approximation).
+ * Seeking:
+ * - Supports `Range: bytes=START-` header (byte-offset space) and `?t=SECONDS` query param.
+ * - If seeking within already-cached chunks, previous chunks are skipped or sliced accordingly.
+ * - Transitions seamlessly from already-cached chunk audio to live-generating audio.
+ * - Once all chunks exist, encodes to `final.ogg` in the background for permanent static delivery.
  */
 export async function streamEpisodeAudio(
   podcastId: string,
@@ -273,35 +252,164 @@ export async function streamEpisodeAudio(
     return;
   }
 
-  const isByteRangeRequest = seek.rangeStart !== null;
-  const bodyStart = isByteRangeRequest
-    ? 0
-    : seek.startTimeSeconds !== null
-      ? secondsToByteOffset(DEFAULT_PCM_FORMAT, seek.startTimeSeconds)
-      : 0;
+  const chunks =
+    episode.ttsChunks && episode.ttsChunks.length > 0
+      ? episode.ttsChunks
+      : chunkTranscript(episode.transcript);
 
-  res.set("Content-Type", "audio/wav");
-  res.status(200);
-  // The header is written once, unconditionally, before any PCM — except
-  // for a real Range request, which only ever resumes a connection that
-  // already parsed the format from an earlier request on the same logical
-  // stream (a player's own seek, or a network retry), same reasoning as
-  // the old design's OGG_HEADER_PAGES handling.
-  if (!isByteRangeRequest && !res.destroyed) {
-    res.write(buildStreamingWavHeader(DEFAULT_PCM_FORMAT));
+  const voices = await resolveCastVoices(podcastId, episodeId, podcast, episode);
+
+  const isByteRangeRequest = seek.rangeStart !== null;
+  let targetPcmOffset = 0;
+  if (seek.startTimeSeconds !== null) {
+    targetPcmOffset = secondsToByteOffset(DEFAULT_PCM_FORMAT, seek.startTimeSeconds);
+  } else if (seek.rangeStart !== null) {
+    targetPcmOffset = Math.max(0, seek.rangeStart - 44);
+    targetPcmOffset -= targetPcmOffset % 2; // align to 16-bit PCM frame (2 bytes)
   }
 
-  const acquired = await tryAcquireAudioGenerationLock(podcastId, episodeId);
-  try {
-    if (acquired) {
-      await leadGeneration(podcastId, episodeId, podcast, episode, res, bodyStart);
-    } else {
-      await followGeneration(podcastId, episodeId, res, bodyStart);
+  const cachedSizes = await Promise.all(
+    chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
+  );
+  const allCached = chunks.length > 0 && cachedSizes.every((s) => s !== null);
+
+  // When all chunks are already cached, total length is known: serve as seekable resource
+  if (allCached) {
+    const totalPcmBytes = cachedSizes.reduce((sum, s) => sum + (s ?? 0), 0);
+    const fullResourceLength = 44 + totalPcmBytes;
+
+    if (isByteRangeRequest && seek.rangeStart !== null) {
+      if (seek.rangeStart >= fullResourceLength) {
+        throw new HttpError(416, "Range Not Satisfiable");
+      }
+      res.status(206);
+      res.set("Content-Type", "audio/wav");
+      res.set("Accept-Ranges", "bytes");
+      res.set("Content-Range", `bytes ${seek.rangeStart}-${fullResourceLength - 1}/${fullResourceLength}`);
+      res.set("Content-Length", String(fullResourceLength - seek.rangeStart));
+
+      if (seek.rangeStart < 44) {
+        const header = buildWavHeader(DEFAULT_PCM_FORMAT, totalPcmBytes);
+        res.write(header.subarray(seek.rangeStart));
+      }
+
+      let pos = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        const data = await getCachedChunk(podcastId, episodeId, i);
+        if (data) {
+          writeSlice(res, data, pos, targetPcmOffset);
+          pos += data.length;
+        }
+      }
+      res.end();
+      void finalizeFromCachedChunks(podcastId, episodeId, chunks);
+      return;
     }
-  } catch (err) {
-    console.error(`Episode ${podcastId}/${episodeId} audio generation failed:`, err);
-  } finally {
-    if (acquired) await releaseAudioGenerationLock(podcastId, episodeId);
-    if (!res.destroyed && !res.writableEnded) res.end();
+
+    res.status(200);
+    res.set("Content-Type", "audio/wav");
+    res.set("Accept-Ranges", "bytes");
+
+    if (seek.startTimeSeconds !== null) {
+      const remainingPcm = Math.max(0, totalPcmBytes - targetPcmOffset);
+      res.set("Content-Length", String(44 + remainingPcm));
+      res.write(buildWavHeader(DEFAULT_PCM_FORMAT, remainingPcm));
+    } else {
+      res.set("Content-Length", String(fullResourceLength));
+      res.write(buildWavHeader(DEFAULT_PCM_FORMAT, totalPcmBytes));
+    }
+
+    let pos = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const data = await getCachedChunk(podcastId, episodeId, i);
+      if (data) {
+        writeSlice(res, data, pos, targetPcmOffset);
+        pos += data.length;
+      }
+    }
+    res.end();
+    void finalizeFromCachedChunks(podcastId, episodeId, chunks);
+    return;
+  }
+
+  // Live streaming path: chunked transfer (unknown total length)
+  // NEVER return Content-Length while chunks are still generating (chunked transfer only)
+  if (typeof res.removeHeader === "function") {
+    res.removeHeader("Content-Length");
+  }
+  res.set("Content-Type", "audio/wav");
+  res.set("Accept-Ranges", "bytes");
+  res.status(200);
+
+  // If a client sent a Range request while chunks are still generating, we cannot honor
+  // it with a 206 (total length is unknown), so per HTTP spec, we stream the full resource
+  // from byte 0 with a plain 200 (including WAV header), and the client self-skips.
+  // For ?t= resume, bodyStart is targetPcmOffset (skipping already-generated chunks).
+  const bodyStart = isByteRangeRequest ? 0 : targetPcmOffset;
+
+  // The streaming WAV header is written once, unconditionally, at the start of the 200 response
+  res.write(buildStreamingWavHeader(DEFAULT_PCM_FORMAT));
+
+  let stopped = false;
+  res.on("close", () => {
+    stopped = true;
+  });
+
+  let pos = 0;
+  for (let index = 0; index < chunks.length && !stopped; index++) {
+    const chunk = chunks[index];
+    if (!chunk) continue;
+    const chunkStart = pos;
+
+    const cachedSize = cachedSizes[index] ?? (await getCachedChunkSize(podcastId, episodeId, index));
+    if (cachedSize !== null) {
+      if (bodyStart < chunkStart + cachedSize) {
+        const data = await getCachedChunk(podcastId, episodeId, index);
+        if (data) {
+          writeSlice(res, data, chunkStart, bodyStart);
+          pos = chunkStart + data.length;
+        } else {
+          pos = chunkStart + cachedSize;
+        }
+      } else {
+        pos = chunkStart + cachedSize;
+      }
+      continue;
+    }
+
+    // Chunk is NOT cached — transition to live generation
+    const chunkTurns = parseScriptTurns(episode.transcript.slice(chunk.startOffset, chunk.endOffset));
+    let emittedInChunk = 0;
+
+    const { promise, isLeader } = getOrStartChunkGeneration(
+      podcastId,
+      episodeId,
+      index,
+      chunkTurns,
+      voices,
+      chunkStart,
+      (delta) => {
+        writeSlice(res, delta, chunkStart + emittedInChunk, bodyStart);
+        emittedInChunk += delta.length;
+      },
+    );
+
+    try {
+      const fullChunk = await promise;
+      if (!isLeader) {
+        writeSlice(res, fullChunk, chunkStart, bodyStart);
+      }
+      pos = chunkStart + fullChunk.length;
+    } catch (err) {
+      console.error(`Chunk ${index} generation failed for ${podcastId}/${episodeId}:`, err);
+      throw err;
+    }
+  }
+
+  if (!stopped) {
+    void finalizeFromCachedChunks(podcastId, episodeId, chunks);
+  }
+  if (!res.destroyed && !res.writableEnded) {
+    res.end();
   }
 }

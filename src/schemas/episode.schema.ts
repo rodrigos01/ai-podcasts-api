@@ -48,9 +48,18 @@ export const episodeUpdateSchema = z.object({
 });
 
 export const episodeProgressSchema = z.object({
-  stage: z.enum(["kickoff", "conversation", "condensation", "done"]),
+  stage: z.enum(["kickoff", "conversation", "chunking", "condensation", "done"]),
   currentWordCount: z.number().int().nonnegative().optional(),
   targetWordRange: z.object({ min: z.number(), max: z.number() }).optional(),
+});
+
+export const ttsChunkSchema = z.object({
+  index: z.number().int().nonnegative(),
+  startTurnIndex: z.number().int().nonnegative(),
+  endTurnIndex: z.number().int().nonnegative(),
+  startOffset: z.number().int().nonnegative(),
+  endOffset: z.number().int().nonnegative(),
+  turnCount: z.number().int().positive(),
 });
 
 export const episodeSchema = z.object({
@@ -63,21 +72,21 @@ export const episodeSchema = z.object({
   guests: z.array(personSchema),
   productionNotes: z.string().min(1),
   // "streamable" sits between "generating" and "ready": the episode's
-  // script has been written (see
-  // episodeGeneration/scriptGeneration.service.ts), so /stream will start
-  // generating audio for it, but condensation may still be in progress.
+  // script has been written and chunked (see
+  // episodeGeneration/scriptGeneration.service.ts and chunker.ts), so
+  // /stream will serve audio, but condensation may still be in progress.
   // Clients should treat both "streamable" and "ready" as "go ahead and hit
   // /stream" — the difference is only whether more is still being generated.
   status: z.enum(["generating", "streamable", "ready", "failed"]),
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),
+  ttsChunks: z.array(ttsChunkSchema).nullable(),
   // Total audio duration generated so far, in seconds — updated in
-  // Firestore as the episode's single streamed TTS synthesis call
-  // progresses (audio.service.ts), not computed at request time, so polling
-  // clients (GET .../status) can build a "how far can I scrub" UI without
-  // probing GCS themselves. Reads of episodes created before this field
-  // existed get `undefined` here (Firestore is schemaless and this isn't
-  // backfilled) — treat as 0.
+  // Firestore as chunks finish generating (audio.service.ts), not computed
+  // at request time, so polling clients (GET .../status) can build a "how
+  // far can I scrub" UI without probing GCS themselves. Reads of episodes
+  // created before this field existed get `undefined` here (Firestore is
+  // schemaless and this isn't backfilled) — treat as 0.
   generatedAudioSeconds: z.number().nonnegative(),
   condensedSummaries: z.record(z.string(), z.string()).nullable(),
   error: z.string().nullable(),
@@ -90,3 +99,4 @@ export type EpisodeCreateRequest = z.infer<typeof episodeCreateRequestSchema>;
 export type EpisodeUpdateInput = z.infer<typeof episodeUpdateSchema>;
 export type Episode = z.infer<typeof episodeSchema>;
 export type EpisodeProgress = z.infer<typeof episodeProgressSchema>;
+export type TtsChunk = z.infer<typeof ttsChunkSchema>;

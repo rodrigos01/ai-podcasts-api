@@ -80,6 +80,16 @@ export function buildWav(fmt: WavFormat, pcm: Buffer): Buffer {
 }
 
 /**
+ * A 44-byte WAV header alone declaring the exact `dataLength` (in bytes).
+ * Used when the total PCM length is known (e.g. all chunks cached or fixed-length range).
+ */
+export function buildWavHeader(fmt: WavFormat, dataLength: number): Buffer {
+  const header = Buffer.alloc(44);
+  writeWavHeader(header, fmt, dataLength);
+  return header;
+}
+
+/**
  * A 44-byte header alone, declaring an unknown/maximal total length —
  * written once, up front, before any PCM is available, so a live HTTP
  * response can start streaming immediately (see audio.service.ts). Not
@@ -92,6 +102,7 @@ export function buildStreamingWavHeader(fmt: WavFormat): Buffer {
   writeWavHeader(header, fmt, UNKNOWN_LENGTH_PLACEHOLDER);
   return header;
 }
+
 
 /** Parses a RIFF/WAVE buffer into its format and raw PCM data. */
 export function extractPcm(buffer: Buffer): { fmt: WavFormat; pcm: Buffer } {

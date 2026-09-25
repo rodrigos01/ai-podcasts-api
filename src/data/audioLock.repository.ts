@@ -1,44 +1,43 @@
 import { randomUUID } from "node:crypto";
 import { firestore } from "../config/firebase";
-import { AUDIO_GENERATION_LOCK_TTL_MS } from "../constants/ttsLimits";
+import { CHUNK_LOCK_TTL_MS } from "../constants/ttsLimits";
 
 // One id per process — purely for a human inspecting the Firestore console
 // to see which instance holds a lock; correctness comes entirely from the
 // transaction below, not from this value.
 const INSTANCE_ID = randomUUID();
 
-// One lock per episode now, not per chunk — the Gemini 3.8 Flash TTS
-// migration replaced per-chunk generation with a single streaming
-// synthesis call for an episode's whole transcript (see ttsLimits.ts,
-// llm/ttsClient.ts). A single "audioGeneration" doc under the episode
-// covers the whole job.
-function lockRef(podcastId: string, episodeId: string) {
+function lockRef(podcastId: string, episodeId: string, index: number) {
   return firestore
     .collection("podcasts")
     .doc(podcastId)
     .collection("episodes")
     .doc(episodeId)
     .collection("audioLocks")
-    .doc("generation");
+    .doc(String(index));
 }
 
 /**
- * Cross-instance equivalent of audio.service.ts's in-process leader/
- * follower bookkeeping — without this, two requests for the same
- * not-yet-generated episode landing on *different* Cloud Run instances
- * would otherwise both start a (costly, long-running) TTS synthesis call
- * for it. The transaction gives us an atomic "only one instance wins"; a
- * lock older than AUDIO_GENERATION_LOCK_TTL_MS is treated as abandoned (its
- * holder crashed mid-generation) and stolen rather than blocking every
- * other instance forever.
+ * Cross-instance equivalent of audio.service.ts's in-process
+ * inFlightGenerations Map — that Map only dedupes concurrent requests
+ * landing on the *same* Cloud Run instance; two requests for the same
+ * not-yet-cached chunk landing on *different* instances would otherwise
+ * both call the (costly) TTS API for it. The transaction gives us an
+ * atomic "only one instance wins"; a lock older than CHUNK_LOCK_TTL_MS is
+ * treated as abandoned (its holder crashed mid-generation) and stolen
+ * rather than blocking every other instance forever.
  */
-export async function tryAcquireAudioGenerationLock(podcastId: string, episodeId: string): Promise<boolean> {
-  const ref = lockRef(podcastId, episodeId);
+export async function tryAcquireChunkLock(
+  podcastId: string,
+  episodeId: string,
+  index: number,
+): Promise<boolean> {
+  const ref = lockRef(podcastId, episodeId, index);
   return firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (snap.exists) {
       const startedAt = snap.data()?.startedAt as number | undefined;
-      if (typeof startedAt === "number" && Date.now() - startedAt < AUDIO_GENERATION_LOCK_TTL_MS) {
+      if (typeof startedAt === "number" && Date.now() - startedAt < CHUNK_LOCK_TTL_MS) {
         return false;
       }
     }
@@ -47,6 +46,11 @@ export async function tryAcquireAudioGenerationLock(podcastId: string, episodeId
   });
 }
 
-export async function releaseAudioGenerationLock(podcastId: string, episodeId: string): Promise<void> {
-  await lockRef(podcastId, episodeId).delete();
+export async function releaseChunkLock(
+  podcastId: string,
+  episodeId: string,
+  index: number,
+): Promise<void> {
+  await lockRef(podcastId, episodeId, index).delete();
 }
+

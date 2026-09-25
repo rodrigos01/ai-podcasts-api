@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildStreamingWavHeader,
   buildWav,
+  buildWavHeader,
   DEFAULT_PCM_FORMAT,
   durationSeconds,
   extractPcm,
@@ -64,6 +65,15 @@ describe("buildStreamingWavHeader", () => {
     const growing = Buffer.concat([header, pcm]);
     const { pcm: extracted } = extractPcm(growing);
     expect(extracted).toEqual(pcm);
+  });
+});
+
+describe("buildWavHeader", () => {
+  it("declares the exact data length and RIFF chunk size", () => {
+    const header = buildWavHeader(FMT, 96000);
+    expect(header.length).toBe(44);
+    expect(header.readUInt32LE(40)).toBe(96000); // data chunk size
+    expect(header.readUInt32LE(4)).toBe(36 + 96000); // RIFF chunk size
   });
 });
 

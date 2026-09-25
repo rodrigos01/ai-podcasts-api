@@ -9,13 +9,34 @@ service cloud.firestore {
     }
     
     function isOwner(data) {
-      return isSignedIn() && data.owner_id == request.auth.uid;
+      return isSignedIn() && (
+        ('ownerId' in data && data.ownerId == request.auth.uid) ||
+        ('owner_id' in data && data.owner_id == request.auth.uid)
+      );
+    }
+
+    function isPodcastOwner(podcastId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/podcasts/$(podcastId)) &&
+        isOwner(get(/databases/$(database)/documents/podcasts/$(podcastId)).data);
     }
 
     match /podcasts/{podcastId} {
       allow read: if isOwner(resource.data);
-      allow create: if isSignedIn();
-      allow update, delete: if isOwner(resource.data);
+      allow create: if false;
+      allow update, delete: if false;
+
+      match /episodes/{episodeId} {
+        allow read: if isPodcastOwner(podcastId);
+        allow create: if false;
+        allow update, delete: if false;
+      }
+
+      match /sources/{sourceId} {
+        allow read: if isPodcastOwner(podcastId);
+        allow create: if false;
+        allow update, delete: if false;
+      }
     }
   }
 }

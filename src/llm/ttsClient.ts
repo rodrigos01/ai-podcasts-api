@@ -1,7 +1,7 @@
 import type { GoogleGenAI as GoogleGenAIClient } from "@google/genai" with { "resolution-mode": "import" };
 import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
-import { MAX_EPISODE_AUDIO_SECONDS, STREAM_INACTIVITY_TIMEOUT_MS } from "../constants/ttsLimits";
+import { MAX_CHUNK_AUDIO_SECONDS, MAX_EPISODE_AUDIO_SECONDS, STREAM_INACTIVITY_TIMEOUT_MS } from "../constants/ttsLimits";
 import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
 import { stream } from "../controllers/audio.controller";
@@ -290,6 +290,7 @@ const MAX_OTHER_EVENTS_LOGGED = 10;
 async function consumeInteractionStream(
   stream: AsyncIterable<unknown>,
   onDelta: (pcm: Buffer) => void,
+  maxAudioSeconds: number = MAX_CHUNK_AUDIO_SECONDS,
 ): Promise<ConsumeResult> {
   let totalBytes = 0;
   const otherEvents: string[] = [];
@@ -311,9 +312,9 @@ async function consumeInteractionStream(
         const pcm = Buffer.from(data, "base64");
         totalBytes += pcm.length;
         onDelta(pcm);
-        if (durationSeconds(DEFAULT_PCM_FORMAT, totalBytes) > MAX_EPISODE_AUDIO_SECONDS) {
+        if (durationSeconds(DEFAULT_PCM_FORMAT, totalBytes) > maxAudioSeconds) {
           throw new Error(
-            `Episode audio exceeded ${MAX_EPISODE_AUDIO_SECONDS}s — aborting a likely runaway TTS response`,
+            `Audio exceeded ${maxAudioSeconds}s — aborting a likely runaway TTS response`,
           );
         }
       }
@@ -350,6 +351,7 @@ export async function streamEpisodeSynthesis(
   turns: ScriptTurn[],
   voices: TtsVoiceAssignment[],
   onDelta: (pcm: Buffer) => void,
+  maxAudioSeconds: number = MAX_CHUNK_AUDIO_SECONDS,
 ): Promise<void> {
   const { client } = await getTtsClient();
   const soloLabel = soloSpeakerLabel(turns);
@@ -391,6 +393,7 @@ export async function streamEpisodeSynthesis(
           receivedAnyAudio = true;
           onDelta(pcm);
         },
+        maxAudioSeconds,
       );
       if (totalBytes === 0) {
         // A clean-completing stream with zero audio bytes and no thrown
