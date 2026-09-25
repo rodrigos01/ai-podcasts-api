@@ -136,6 +136,71 @@ export function getAdtsDurationSeconds(buffer: Buffer, fallbackSampleRate: numbe
   return totalSamples / fallbackSampleRate;
 }
 
+export interface AdtsTimeSlice {
+  buffer: Buffer;
+  skippedSeconds: number;
+  skippedBytes: number;
+}
+
+/**
+ * Slices an ADTS AAC buffer by advancing to the frame boundary corresponding to
+ * `targetSeconds`. Frames ending at or before `targetSeconds` are skipped.
+ * The resulting sliced buffer starts exactly on an ADTS syncword boundary (0xFFF),
+ * ensuring immediate seamless decoding without decoder errors or delay.
+ */
+export function sliceAdtsByTime(
+  buffer: Buffer,
+  targetSeconds: number,
+  fallbackSampleRate: number = 24000,
+): AdtsTimeSlice {
+  if (targetSeconds <= 0 || buffer.length === 0) {
+    return { buffer, skippedSeconds: 0, skippedBytes: 0 };
+  }
+
+  let offset = 0;
+  let currentSeconds = 0;
+  let sliceOffset = 0;
+  let skippedSeconds = 0;
+
+  while (offset + 7 <= buffer.length) {
+    // Syncword: 12 bits 0xFFF
+    if (buffer[offset] !== 0xff || (buffer[offset + 1]! & 0xf0) !== 0xf0) {
+      offset++;
+      continue;
+    }
+
+    const freqIndex = (buffer[offset + 2]! & 0x3c) >> 2;
+    const sampleRate = SAMPLING_FREQUENCIES[freqIndex] ?? fallbackSampleRate;
+
+    const frameLength =
+      ((buffer[offset + 3]! & 0x03) << 11) |
+      (buffer[offset + 4]! << 3) |
+      ((buffer[offset + 5]! & 0xe0) >> 5);
+
+    if (frameLength < 7 || offset + frameLength > buffer.length) {
+      break;
+    }
+
+    const frameDuration = 1024 / sampleRate;
+
+    // If this frame ends at or before targetSeconds, skip it
+    if (currentSeconds + frameDuration <= targetSeconds) {
+      currentSeconds += frameDuration;
+      offset += frameLength;
+      sliceOffset = offset;
+      skippedSeconds = currentSeconds;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    buffer: buffer.subarray(sliceOffset),
+    skippedSeconds,
+    skippedBytes: sliceOffset,
+  };
+}
+
 /**
  * Creates a synthetic minimal ADTS frame for testing without needing ffmpeg.
  * Produces a valid 7-byte header followed by `payloadLength` zero bytes.

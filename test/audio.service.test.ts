@@ -53,6 +53,14 @@ vi.mock("../src/utils/aac", () => ({
   getAdtsDurationSeconds: vi.fn((buf: Buffer) => {
     return buf.length / 8000;
   }),
+  sliceAdtsByTime: vi.fn((buf: Buffer, targetSeconds: number) => {
+    const skipBytes = Math.min(buf.length, Math.floor(targetSeconds * 8000));
+    return {
+      buffer: buf.subarray(skipBytes),
+      skippedSeconds: skipBytes / 8000,
+      skippedBytes: skipBytes,
+    };
+  }),
 }));
 
 import * as audioCache from "../src/storage/audioCache.repository";
@@ -217,6 +225,35 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
     expect(res.written[0]).toEqual(chunk1Aac);
     expect(res.writableEnded).toBe(true);
   });
+
+  it("resumes from the exact mid-chunk time when ?t=SECONDS falls in the middle of a chunk", async () => {
+    const chunk0Aac = Buffer.alloc(8000, 1); // 1.0 second
+    const chunk1Aac = Buffer.alloc(8000, 2); // 1.0 second
+
+    vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => {
+      return i === 0 ? chunk0Aac.length : chunk1Aac.length;
+    });
+    vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => {
+      return i === 0 ? chunk0Aac : chunk1Aac;
+    });
+
+    const res = createMockResponse();
+    // Seek to 0.5s (skips first 4000 bytes of chunk 0, sends remaining 4000 of chunk 0 + full 8000 of chunk 1)
+    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+      rangeStart: null,
+      startTimeSeconds: 0.5,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("audio/aac");
+    // 4000 (from chunk 0) + 8000 (from chunk 1) = 12000
+    expect(res.headers["content-length"]).toBe(String(12000));
+    expect(res.written).toHaveLength(2);
+    expect(res.written[0]?.length).toBe(4000);
+    expect(res.written[1]).toEqual(chunk1Aac);
+    expect(res.writableEnded).toBe(true);
+  });
+
 
   it("seamlessly transitions from cached chunk 0 to live-generating chunk 1", async () => {
     const chunk0Aac = Buffer.alloc(8000, 1); // cached

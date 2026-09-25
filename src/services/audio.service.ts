@@ -16,7 +16,7 @@ import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service"
 import { chunkTranscript } from "./episodeGeneration/chunker";
 import { parseScriptTurns, type ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
-import { createAacStreamEncoder, encodePcmToAac, getAdtsDurationSeconds } from "../utils/aac";
+import { createAacStreamEncoder, encodePcmToAac, getAdtsDurationSeconds, sliceAdtsByTime } from "../utils/aac";
 import { HttpError } from "../utils/HttpError";
 
 function sleep(ms: number): Promise<void> {
@@ -228,24 +228,36 @@ export async function streamEpisodeAudio(
     if (seek.startTimeSeconds !== null && seek.startTimeSeconds > 0) {
       let cumulativeSec = 0;
       let startChunkIndex = 0;
+      let seekOffsetInsideChunk = 0;
       for (let i = 0; i < chunks.length; i++) {
         const chunkData = await getCachedChunk(podcastId, episodeId, i);
         const dur = chunkData ? getAdtsDurationSeconds(chunkData) : 0;
         if (cumulativeSec + dur > seek.startTimeSeconds) {
           startChunkIndex = i;
+          seekOffsetInsideChunk = seek.startTimeSeconds - cumulativeSec;
           break;
         }
         cumulativeSec += dur;
         startChunkIndex = i;
+        seekOffsetInsideChunk = Math.max(0, seek.startTimeSeconds - cumulativeSec);
       }
 
-      const remainingBytes = cachedSizes
-        .slice(startChunkIndex)
-        .reduce((sum, s) => sum + (s ?? 0), 0);
-      res.status(200);
-      res.set("Content-Length", String(remainingBytes));
+      const startChunkData = await getCachedChunk(podcastId, episodeId, startChunkIndex);
+      const { buffer: slicedStartChunk } = startChunkData
+        ? sliceAdtsByTime(startChunkData, seekOffsetInsideChunk)
+        : { buffer: Buffer.alloc(0) };
 
-      for (let i = startChunkIndex; i < chunks.length; i++) {
+      const laterBytes = cachedSizes
+        .slice(startChunkIndex + 1)
+        .reduce((sum, s) => sum + (s ?? 0), 0);
+      const totalBytes = slicedStartChunk.length + laterBytes;
+      res.status(200);
+      res.set("Content-Length", String(totalBytes));
+
+      if (slicedStartChunk.length > 0) {
+        res.write(slicedStartChunk);
+      }
+      for (let i = startChunkIndex + 1; i < chunks.length; i++) {
         const chunkData = await getCachedChunk(podcastId, episodeId, i);
         if (chunkData) res.write(chunkData);
       }
@@ -276,21 +288,25 @@ export async function streamEpisodeAudio(
   // Determine starting chunk if ?t=SECONDS was specified
   let startChunkIndex = 0;
   let cumulativeSec = 0;
+  let seekOffsetInsideChunk = 0;
   if (seek.startTimeSeconds !== null && seek.startTimeSeconds > 0) {
     for (let i = 0; i < chunks.length; i++) {
       const size = cachedSizes[i];
       if (size === null) {
         startChunkIndex = i;
+        seekOffsetInsideChunk = Math.max(0, seek.startTimeSeconds - cumulativeSec);
         break;
       }
       const data = await getCachedChunk(podcastId, episodeId, i);
       const dur = data ? getAdtsDurationSeconds(data) : 0;
       if (cumulativeSec + dur > seek.startTimeSeconds) {
         startChunkIndex = i;
+        seekOffsetInsideChunk = seek.startTimeSeconds - cumulativeSec;
         break;
       }
       cumulativeSec += dur;
       startChunkIndex = i;
+      seekOffsetInsideChunk = Math.max(0, seek.startTimeSeconds - cumulativeSec);
     }
   }
 
@@ -314,7 +330,12 @@ export async function streamEpisodeAudio(
 
     const cached = await getCachedChunk(podcastId, episodeId, index);
     if (cached) {
-      if (!stopped) res.write(cached);
+      if (index === startChunkIndex && seekOffsetInsideChunk > 0) {
+        const { buffer: sliced } = sliceAdtsByTime(cached, seekOffsetInsideChunk);
+        if (!stopped && sliced.length > 0) res.write(sliced);
+      } else {
+        if (!stopped) res.write(cached);
+      }
       runningAudioSeconds += getAdtsDurationSeconds(cached);
       continue;
     }
@@ -322,6 +343,8 @@ export async function streamEpisodeAudio(
     // Chunk is NOT cached — live generation
     const chunkTurns = parseScriptTurns(episode.transcript.slice(chunk.startOffset, chunk.endOffset));
     const chunkStartSec = runningAudioSeconds;
+
+    let liveSeekRemaining = index === startChunkIndex ? seekOffsetInsideChunk : 0;
 
     const { promise, isLeader } = getOrStartChunkGeneration(
       podcastId,
@@ -331,14 +354,31 @@ export async function streamEpisodeAudio(
       voices,
       chunkStartSec,
       (delta) => {
-        if (!stopped) res.write(delta);
+        if (stopped) return;
+        if (liveSeekRemaining > 0) {
+          const deltaDur = getAdtsDurationSeconds(delta);
+          if (deltaDur <= liveSeekRemaining) {
+            liveSeekRemaining -= deltaDur;
+            return;
+          }
+          const { buffer: sliced } = sliceAdtsByTime(delta, liveSeekRemaining);
+          liveSeekRemaining = 0;
+          if (sliced.length > 0) res.write(sliced);
+        } else {
+          res.write(delta);
+        }
       },
     );
 
     try {
       const fullChunk = await promise;
       if (!isLeader && !stopped) {
-        res.write(fullChunk);
+        if (index === startChunkIndex && seekOffsetInsideChunk > 0) {
+          const { buffer: sliced } = sliceAdtsByTime(fullChunk, seekOffsetInsideChunk);
+          if (sliced.length > 0) res.write(sliced);
+        } else {
+          res.write(fullChunk);
+        }
       }
       runningAudioSeconds += getAdtsDurationSeconds(fullChunk);
     } catch (err) {
