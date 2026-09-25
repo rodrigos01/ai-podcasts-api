@@ -271,13 +271,27 @@ export function soloSpeakerLabel(turns: ScriptTurn[]): string | null {
 
 interface ConsumeResult {
   totalBytes: number;
+  // Every event this call saw that wasn't a "step.delta"/"audio" delta, with
+  // a small JSON snapshot of each distinct shape encountered (capped, since
+  // a legitimate delta stream can otherwise also carry many step.start/
+  // step.done/response.completed bookkeeping events we don't need to act
+  // on). Populated regardless of outcome — see the module comment above
+  // `streamEpisodeSynthesis` for why: this API's moderation/error event
+  // shape isn't confirmed yet, and a silently-empty stream (no thrown
+  // error, zero audio bytes) has otherwise been completely opaque to
+  // debug — there's nothing else in this app's logs that explains *why*
+  // no audio came back for a specific, reproducible episode.
+  otherEvents: string[];
 }
+
+const MAX_OTHER_EVENTS_LOGGED = 10;
 
 async function consumeInteractionStream(
   stream: AsyncIterable<unknown>,
   onDelta: (pcm: Buffer) => void,
 ): Promise<ConsumeResult> {
   let totalBytes = 0;
+  const otherEvents: string[] = [];
   const iterator = (stream as AsyncIterable<Record<string, unknown>>)[Symbol.asyncIterator]();
   for (;;) {
     const result = await withTimeout(
@@ -302,9 +316,15 @@ async function consumeInteractionStream(
           );
         }
       }
+    } else if (otherEvents.length < MAX_OTHER_EVENTS_LOGGED) {
+      try {
+        otherEvents.push(JSON.stringify(event).slice(0, 500));
+      } catch {
+        otherEvents.push(String(event));
+      }
     }
   }
-  return { totalBytes };
+  return { totalBytes, otherEvents };
 }
 
 /**
@@ -360,14 +380,30 @@ export async function streamEpisodeSynthesis(
         },
         stream: true,
       } as Parameters<typeof client.interactions.create>[0]);
-      const { totalBytes } = await consumeInteractionStream(
+      const { totalBytes, otherEvents } = await consumeInteractionStream(
         stream as unknown as AsyncIterable<unknown>,
         (pcm) => {
           receivedAnyAudio = true;
           onDelta(pcm);
         },
       );
-      if (totalBytes === 0) throw new Error("Gemini TTS stream produced no audio data");
+      if (totalBytes === 0) {
+        // A clean-completing stream with zero audio bytes and no thrown
+        // error is otherwise a dead end to debug — this API's moderation/
+        // rejection event shape isn't confirmed (see AGENTS.md), so log
+        // whatever non-audio events the stream actually carried instead of
+        // guessing. This is the first thing to check on a repeat of this
+        // error for a specific episode.
+        console.error(
+          `Gemini TTS stream for model ${model} completed with zero audio bytes. Non-audio events seen (${otherEvents.length}):`,
+          otherEvents,
+        );
+        throw new Error(
+          otherEvents.length > 0
+            ? `Gemini TTS stream produced no audio data (saw: ${otherEvents.join(" | ")})`
+            : "Gemini TTS stream produced no audio data (stream ended with no events at all)",
+        );
+      }
       resolvedModel = model;
       return;
     } catch (err) {
