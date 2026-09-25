@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { generateText } from "../../llm/geminiClient";
 import { deleteVoice, designVoice, findLibraryVoice } from "../../llm/ttsClient";
 import { setHostResolvedVoice } from "../../data/podcast.repository";
-import { resolveAndPersistGuestVoice } from "../../data/episode.repository";
+import { setGuestResolvedVoice } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
 import {
   buildPersonaPrompt,
@@ -72,36 +72,37 @@ export async function resolveHostVoice(podcastId: string, host: Person): Promise
  * Library's accent taxonomy only models regional variation *within* a
  * language, with no way to express "a native speaker of one language
  * carrying an accent while speaking another" (confirmed in the
- * investigation). Deduplicated across concurrent first-time
- * listeners/instances by `episode.repository.ts`'s
- * `resolveAndPersistGuestVoice`, which also handles cleaning up a losing
- * concurrent Voice-Design mint.
+ * investigation).
+ *
+ * Called once per generation attempt (episode creation or `/regenerate`)
+ * from orchestrator.ts, in parallel with script generation — not lazily at
+ * stream time — so the resolved id is already persisted on the episode
+ * doc's guest entry by the time a listener's first `/stream` request needs
+ * it (audio.service.ts's resolveCastVoices just reads it). A `/regenerate`
+ * re-running this for a guest that already has a previously-resolved
+ * Voice-Design voice mints a fresh one and cleans up the stale one
+ * afterward — `deleteVoice` is best-effort, so this is safe even if the
+ * stale voice was already deleted by cleanupGuestVoice (e.g. a prior
+ * attempt's audio fully finished generating before this regenerate ran).
  */
 export async function resolveGuestVoice(
   podcastId: string,
   episodeId: string,
   guest: Person,
 ): Promise<ResolvedVoice & { origin: "design" | "library" }> {
-  // Captured from whichever resolve attempt actually ran here — if another
-  // concurrent caller won the race (resolveAndPersistGuestVoice below),
-  // this is still this call's own attempt's language, not necessarily the
-  // winner's; a harmless inconsistency in that rare case, since only the
-  // actual generation leader's own resolution feeds a real synthesis call.
-  let languageCode: string | undefined;
+  const staleVoiceId = guest.resolvedVoiceOrigin === "design" ? guest.resolvedVoiceId : null;
 
-  const resolve = guest.accent
-    ? async () => {
+  const resolved = guest.accent
+    ? await (async () => {
         const r = await designFor(guest);
-        languageCode = r.languageCode;
-        return { voiceId: r.voiceId, origin: "design" as const };
-      }
-    : async () => {
+        return { voiceId: r.voiceId, origin: "design" as const, languageCode: r.languageCode };
+      })()
+    : await (async () => {
         const req = await generateText({
           systemInstruction: VOICE_LIBRARY_SYSTEM_INSTRUCTION,
           prompt: buildPersonaPrompt(guest),
           schema: guestVoiceLibrarySchema,
         });
-        languageCode = req.languageCode;
         const match = await findLibraryVoice({
           languageCode: req.languageCode,
           gender: req.gender,
@@ -111,11 +112,17 @@ export async function resolveGuestVoice(
           contexts: req.contexts,
           search: req.search,
         });
-        return { voiceId: match.voiceId, origin: "library" as const };
-      };
+        return { voiceId: match.voiceId, origin: "library" as const, languageCode: req.languageCode };
+      })();
 
-  const outcome = await resolveAndPersistGuestVoice(podcastId, episodeId, guest.id, resolve, deleteVoice);
-  return { voiceId: outcome.voiceId, origin: outcome.origin, languageCode };
+  await setGuestResolvedVoice(podcastId, episodeId, guest.id, {
+    resolvedVoiceId: resolved.voiceId,
+    resolvedVoiceOrigin: resolved.origin,
+  });
+
+  if (staleVoiceId) await deleteVoice(staleVoiceId);
+
+  return resolved;
 }
 
 /**

@@ -10,6 +10,7 @@ import type { Person } from "../../schemas/person.schema";
 import { condenseForAllHosts } from "./condensation.service";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
+import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
 
 export async function runEpisodeGeneration(podcastId: string, episodeId: string): Promise<void> {
   try {
@@ -54,11 +55,30 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // whole script comes back, so a crash mid-call loses the whole
     // not-yet-persisted episode (recoverable via /regenerate), not just an
     // in-flight turn.
-    const script = await generateEpisodeScript(
+    const scriptPromise = generateEpisodeScript(
       cast,
       { podcast, episode, sources, condensedHistoryBySpeakerId },
       wordTarget,
     );
+
+    // Voice resolution (host Voice Design cache hit/miss, guest Voice
+    // Design/Library mint) runs in parallel with script generation rather
+    // than lazily at first `/stream` request — see AGENTS.md and
+    // audio.service.ts's resolveCastVoices, which now just reads the ids
+    // this persists. A failure here doesn't fail episode generation itself:
+    // audio.service.ts still falls back to resolving lazily (and
+    // persisting) if a cast member's resolvedVoiceId ends up missing.
+    const voiceResolutionPromise = Promise.all([
+      ...hosts.map((host) => resolveHostVoice(podcastId, host)),
+      ...guests.map((guest) => resolveGuestVoice(podcastId, episodeId, guest)),
+    ]).catch((err) => {
+      console.error(
+        `Voice resolution failed for episode ${podcastId}/${episodeId} (will resolve lazily at stream time instead):`,
+        err,
+      );
+    });
+
+    const [script] = await Promise.all([scriptPromise, voiceResolutionPromise]);
 
     // "streamable" as soon as the script exists — /stream can start
     // generating audio for it immediately via one streaming TTS call for

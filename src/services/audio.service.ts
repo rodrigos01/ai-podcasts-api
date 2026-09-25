@@ -40,14 +40,22 @@ function assertAudioAvailable(episode: Episode): asserts episode is Episode & { 
 }
 
 /**
- * Resolves both cast members' TTS voices — a real, billed LLM + Voice
- * Design/Library call the first time a host or guest is used, a cheap
- * cache hit for a host on every episode after their first (see
- * voiceResolution.service.ts). The label returned for each must match,
- * byte-for-byte, what scriptGeneration.prompts.ts told the writer to use
- * for that person (speakerSelection.ts's speakerLabel) — the transcript's
- * turn labels and this mapping have to agree on the same string for a turn
- * to route to the right voice via the API's `speech_metadata` annotation.
+ * Resolves both cast members' TTS voices. The normal path is now a pure
+ * Firestore read: orchestrator.ts resolves and persists both cast members'
+ * `resolvedVoiceId` at episode-generation time (in parallel with script
+ * generation — see AGENTS.md), so by the time a listener's first `/stream`
+ * request gets here there's usually nothing left to do. A host still goes
+ * through `resolveHostVoice` unconditionally — that's already a cheap
+ * cache-hit check (compares `resolvedVoiceHash`) and it's the one place
+ * that knows whether a persona/accent/voice-hint edit invalidated the
+ * cached design. A guest with no persisted id (a race with a still-running
+ * orchestrator, or an episode generated before this architecture existed)
+ * falls back to resolving — and persisting — one lazily here, same as the
+ * old design. The label returned for each must match, byte-for-byte, what
+ * scriptGeneration.prompts.ts told the writer to use for that person
+ * (speakerSelection.ts's speakerLabel) — the transcript's turn labels and
+ * this mapping have to agree on the same string for a turn to route to the
+ * right voice via the API's `speech_metadata` annotation.
  */
 async function resolveCastVoices(
   podcastId: string,
@@ -70,7 +78,9 @@ async function resolveCastVoices(
   ] as const) {
     const resolved = hostIds.has(person.id)
       ? await resolveHostVoice(podcastId, person)
-      : await resolveGuestVoice(podcastId, episodeId, person);
+      : person.resolvedVoiceId
+        ? { voiceId: person.resolvedVoiceId }
+        : await resolveGuestVoice(podcastId, episodeId, person);
     assignments.push({
       label: speakerLabel(person.name, other.name),
       voiceId: resolved.voiceId,
