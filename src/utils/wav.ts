@@ -28,26 +28,30 @@ export const DEFAULT_PCM_FORMAT: WavFormat = {
 
 // Placeholder for a WAV file whose total length isn't known yet (a live,
 // still-growing stream). There are two competing real-world conventions for
-// this and neither is universally honored:
+// this and neither is universally honored — confirmed live against two
+// different failure modes, in this order:
 //   - 0xFFFFFFFF (the largest value that fits the 32-bit size field) is what
-//     ffmpeg/sox use when piping WAV to a non-seekable output — but at least
-//     one real player (confirmed live, 2026-09-24: a mobile client's
+//     ffmpeg/sox use when piping WAV to a non-seekable output. Confirmed
+//     live (2026-09-24) that at least one real player (a mobile client's
 //     ExoPlayer) doesn't special-case it as "unknown," and just computes a
 //     literal (enormous, wrong) duration from it: 0xFFFFFFFF bytes at this
 //     format's 48000 bytes/sec byte rate is exactly 1491m18s, which is what
 //     showed up as the episode's total duration in testing.
-//   - 0 is the convention some recording software uses instead while a
-//     write is still in progress, patching in the real size once it
-//     finishes — used here instead, since the other convention is now
-//     confirmed broken against a real client. Not verified against every
-//     possible player either — if a *different* player chokes on a
-//     data-chunk size of 0 (e.g. treats it as "no audio, empty file"), this
-//     is the first place to look. A real player reads bytes as they arrive
-//     rather than trusting this size either way; the header gets rewritten
-//     with the true size once generation completes (see buildWavHeader) —
-//     this placeholder only ever appears in the still-generating case's
-//     live HTTP response, never in anything cached.
-const UNKNOWN_LENGTH_PLACEHOLDER = 0;
+//   - 0 was tried next (2026-09-24) on the theory that it's the convention
+//     some recording software uses instead, patching in the real size once
+//     a write finishes. Confirmed live (2026-09-25) that this is *worse*: a
+//     declared data-chunk size of 0 is taken literally by more than one
+//     real player as "zero bytes of audio, nothing to play" — playback
+//     never starts at all, for every episode hitting the live-generation
+//     path (final.ogg's fast path is unaffected, since that's a real,
+//     correctly-sized file). A wrong displayed duration is a much smaller
+//     problem than audio that never starts, so this reverts to 0xFFFFFFFF.
+//     If a genuinely universal fix is wanted later, it likely means not
+//     relying on the RIFF header's declared size at all for the streaming
+//     case (e.g. a container/transport that doesn't encode length in-band),
+//     not a third placeholder value — don't try a third magic number here
+//     without first confirming it against real players, plural.
+const UNKNOWN_LENGTH_PLACEHOLDER = 0xffffffff;
 
 function writeWavHeader(header: Buffer, fmt: WavFormat, dataLength: number): void {
   const byteRate = fmt.sampleRate * fmt.numChannels * (fmt.bitsPerSample / 8);
@@ -111,13 +115,15 @@ export function extractPcm(buffer: Buffer): { fmt: WavFormat; pcm: Buffer } {
     } else if (chunkId === "data") {
       // `data`'s declared size can't be trusted — a streaming/in-progress
       // header (see buildStreamingWavHeader) declares a placeholder
-      // (UNKNOWN_LENGTH_PLACEHOLDER, currently 0) that's stale by the time
-      // real PCM bytes have been appended after it, in either direction
-      // (smaller than what's really there, or — the old 0xFFFFFFFF
-      // convention — larger). `data` is always the last chunk in every WAV
-      // this app writes (buildWav/buildStreamingWavHeader never add
+      // (UNKNOWN_LENGTH_PLACEHOLDER) that's stale by the time real PCM
+      // bytes have been appended after it, in either direction (the
+      // current 0xFFFFFFFF convention undersells it; the briefly-tried 0
+      // convention oversold it). `data` is always the last chunk in every
+      // WAV this app writes (buildWav/buildStreamingWavHeader never add
       // anything after it), so the robust read is simply "everything left
-      // in the buffer," not the declared size in either direction.
+      // in the buffer," not the declared size in either direction — this
+      // also means a future change to the placeholder value doesn't need a
+      // matching change here.
       pcm = buffer.subarray(body);
       break;
     } else {
