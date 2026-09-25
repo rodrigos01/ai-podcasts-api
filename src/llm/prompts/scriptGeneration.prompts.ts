@@ -109,18 +109,39 @@ You can optionally include a "Style:" line immediately following the speaker's t
 ### Point-in-time Vocal Bursts (inline angle tags)
 Place momentary non-speech human vocalizations directly inline inside the text using angle brackets (<...>) at the \
 exact point where the sound should occur:
-- Recommended tags: <cough>, <breath>, <heavy breath>, <exhales>, <cackle>, <cheer>, <chuckle>, <chuckles>, <gasp>, \
+- Common cues: <cough>, <breath>, <heavy breath>, <exhales>, <cackle>, <cheer>, <chuckle>, <chuckles>, <gasp>, \
 <giggle>, <groan>, <grunt>, <laugh>, <laughter>, <pant>, <phew>, <sigh>, <sighs>, <snicker>, <snort>, <sob>, \
 <throat-clearing>, <tsk>, <whimper>, <yawn>, <short pause>, <long pause>.
 - Stick to human vocalizations rather than non-vocal sound effects.
 
+### Delivery Cues & Style in Transcript's Language
+Write all delivery cues (<...>) and "Style:" descriptions in the same language as the transcript \
+(matching the dialogue, podcast description, topics, and source material). For example:
+- In English: use cues like <laughter>, <sigh>, <gasp>, <short pause>, and styles like "Style: whispering", "Style: sarcastic", "Style: speaking rapidly".
+- In Spanish: use cues like <risas>, <suspiro>, <jadeo>, <pausa corta>, and styles like "Style: susurrando", "Style: sarcástico", "Style: hablando rápido".
+- In Portuguese: use cues like <risos>, <suspiro>, <ofegante>, <pausa curta>, and styles like "Style: sussurrando", "Style: sarcástico", "Style: falando rápido".
+- In French: use cues like <rires>, <soupir>, <halètement>, <pause courte>, and styles like "Style: chuchoté", "Style: sarcastique", "Style: parlant rapidement".
+
+### Backchanneling and Overlapping Speech (using pipe characters |...|)
+In natural conversations, listeners react, interject, or speak over each other without waiting for a full turn change. \
+Gemini 3.8 Flash TTS natively synthesizes concurrent multi-speaker audio when you wrap listener reactions in \
+pipe characters (|reaction|) directly inside the active speaker's line. Use this capability whenever it fits the natural \
+conversational flow:
+- Short backchannel reactions: Layer brief listener acknowledgments, affirmations, or reactions in the transcript's \
+language (e.g. in English "|oh hmm|", "|really?|", "|totally|", "|absolutely|"; in Spanish "|ah claro|", "|en serio?|", "|totalmente|"; \
+in Portuguese "|ah sim|", "|sério?|", "|com certeza|") inside the active speaker's sentence so the listener reacts while the speaker talks:
+  ${labelA}: "So the launch was scheduled for Thursday |oh hmm| and nobody knew if we were actually ready."
+  ${labelB}: "Ready enough |oh really?| The last blocker cleared right before the demo."
+- Overlapping and interleaved speech: Use multiple pipe segments when speakers talk at the same time, speak in chorus, \
+or interrupt each other in excitement, disagreement, or celebration:
+  ${labelA}: "We were completely blown away |no way| when the final numbers were announced!"
+  ${labelB}: "Let's count it down together |ok| ready? One, two, three |happy| happy |anniversary| anniversary!"
+
 ### Conversational Rhythm, Pacing, and Hesitations
 - Use punctuation, dashes (--), and ellipses (...) for natural conversational hesitation.
-- Insert <short pause> or <long pause> where a speaker pauses to think.
+- Insert pauses (<short pause> or <long pause>, or in the transcript's language) where a speaker pauses to think.
 - Write natural conversational disfluencies (e.g., "Oh uh yeah I think... hm, so that's interesting").
 - Capitalize specific words to place natural vocal stress and emphasis (e.g., "This is a VERY important point!").
-- For brief listener reactions during a turn, you can wrap backchannels in pipe characters (e.g., "|oh hmm|", \
-"|really?|", "|absolutely|").
 
 ### Clean Spoken Text
 - Write clean spoken dialogue only: NO markdown of any kind (no **bold**, *italics*, # headers, bullet lists, or \
@@ -134,25 +155,22 @@ colon, like "Watch this: ..." or "Funny thing: ...". Phrase it without the colon
 Write the entire episode as a sequence of turns in this exact format, one turn per block, separated by a \
 single blank line:
 
-// Turn 1
 ${labelA}: <the line ${a.name} speaks>
 Style: <optional short delivery style>
 
-// Turn 2
 ${labelB}: <the line ${b.name} speaks>
 
-// Turn 3
 ${labelA}: <the line ${a.name} speaks>
 
 Rules:
-1. Start each turn with "// Turn <number>".
-2. The ONLY two valid speaker labels are "${labelA}" and "${labelB}" — use each one's first name alone \
+1. The ONLY two valid speaker labels are "${labelA}" and "${labelB}" — use each one's first name alone \
 (not their full name, a nickname, or a title) at the start of every single turn, with nothing else on that line \
 before the colon. This is a strict format requirement: turn labels are matched byte-for-byte to route each line \
 to the correct voice.
-3. If a turn needs a delivery adjustment, put "Style: <short style>" on the line immediately following the speaker line. \
+2. If a turn needs a delivery adjustment, put "Style: <short style>" on the line immediately following the speaker line. \
 Otherwise, omit the "Style:" line.
-4. Separate turns by a single blank line.
+3. Separate turns by a single blank line.
+4. Do NOT include turn comment lines (such as "// Turn 1") or any section headers.
 5. Respond with ONLY the transcript itself in that format — no preamble, no markdown code fence blocks, no \
 commentary before or after it.`;
 }
@@ -171,5 +189,6 @@ and structure the conversation so it naturally lands in this range: don't pad it
 short, and don't let it sprawl past the maximum if the material runs long — bring the conversation to a \
 natural close once the topics have been covered well, even if you're tempted to keep going.
 
-Write the full episode now, following the "// Turn N\\nName: line\\nStyle: ..." format described above.`;
+Write the full episode now, following the "Name: line\\nStyle: ..." format described above.`;
 }
+

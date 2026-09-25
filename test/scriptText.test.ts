@@ -92,6 +92,25 @@ Style: focused`;
     ]);
   });
 
+  it("parses turns without comments, extracting Style: and preserving cues and pipes", () => {
+    const script = `Carlos: Mira esto <risas> |totalmente| no lo puedo creer.
+Style: susurrando
+
+Sofia: Es impresionante.`;
+
+    expect(parseScriptTurns(script)).toEqual([
+      {
+        speaker: "Carlos",
+        text: "Mira esto <risas> |totalmente| no lo puedo creer.",
+        style: "susurrando",
+      },
+      {
+        speaker: "Sofia",
+        text: "Es impresionante.",
+      },
+    ]);
+  });
+
   it("parses a turn labeled with an accented/non-ASCII name", () => {
     const script = "Chloé: Bonjour!\n\nMarcus: Hey.";
     expect(parseScriptTurns(script)).toEqual([

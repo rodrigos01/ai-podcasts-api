@@ -135,4 +135,21 @@ describe("chunker", () => {
       { speaker: "Alice", text: "Final thoughts.", style: "whispering" },
     ]);
   });
+
+  it("chunks transcripts without comments with styles and backchannel pipes", () => {
+    const transcript = [
+      "Alice: Opening line |yeah| right here.\nStyle: energetic",
+      "Bob: Great to be here <laughter>.",
+      "Alice: Final thoughts.\nStyle: whispering",
+    ].join("\n\n");
+
+    const chunks = chunkTranscript(transcript, 2);
+    expect(chunks).toHaveLength(2);
+
+    const chunk0Turns = getChunkTurns(transcript, chunks[0]!);
+    expect(chunk0Turns).toEqual([
+      { speaker: "Alice", text: "Opening line |yeah| right here.", style: "energetic" },
+      { speaker: "Bob", text: "Great to be here <laughter>." },
+    ]);
+  });
 });
