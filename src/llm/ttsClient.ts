@@ -4,6 +4,7 @@ import { env } from "../config/env";
 import { MAX_EPISODE_AUDIO_SECONDS, STREAM_INACTIVITY_TIMEOUT_MS } from "../constants/ttsLimits";
 import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
+import { stream } from "../controllers/audio.controller";
 
 // The Gemini 3.8 Flash TTS "interactions"/"voices" bridge, replacing the old
 // @google-cloud/text-to-speech pipeline entirely (see AGENTS.md). Confirmed
@@ -34,7 +35,7 @@ interface TtsClientHandle {
 // probe which one is enabled for this project/account without spending a
 // real synthesis call — whichever one first produces audio is cached in
 // resolvedModel for every later call to use directly.
-const TTS_MODEL_CANDIDATES = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"] as const;
+const TTS_MODEL_CANDIDATES = ["gemini-3.8-flash-tts"] as const;
 let resolvedModel: string | null = null;
 
 let clientPromise: Promise<TtsClientHandle> | null = null;
@@ -251,7 +252,7 @@ export interface TtsVoiceAssignment {
 function buildContentItems(turns: ScriptTurn[], multiSpeaker: boolean) {
   return turns.map((turn) => ({
     type: "text" as const,
-    text: turn.text,
+    text: turn.text.replaceAll(/\[/g, "<").replace(/\]/g, ">").trim(),
     annotations: multiSpeaker ? [{ type: "speech_metadata" as const, speaker: turn.speaker }] : undefined,
   }));
 }
@@ -367,19 +368,23 @@ export async function streamEpisodeSynthesis(
     // this call's retry budget on a model that will never work.
     const model = resolvedModel ?? TTS_MODEL_CANDIDATES[(attempt - 1) % TTS_MODEL_CANDIDATES.length]!;
     try {
-      const stream = await client.interactions.create({
+      const params = {
         model,
         input: [{ type: "user_input", content: buildContentItems(turns, multiSpeaker) }],
         response_format: { type: "audio" },
         generation_config: {
-          speech_config: activeVoices.map((v) => ({
-            ...(multiSpeaker ? { speaker: v.label } : {}),
-            voice: v.voiceId,
-            ...(v.languageCode ? { language: v.languageCode } : {}),
-          })),
+          speech_config: {
+            mode: "conversational",
+            speakers: activeVoices.map((v) => ({
+              ...(multiSpeaker ? { speaker: v.label } : {}),
+              voice: v.voiceId,
+              ...(v.languageCode ? { language: v.languageCode } : {}),
+            })),
+          }
         },
         stream: true,
-      } as Parameters<typeof client.interactions.create>[0]);
+      } as Parameters<typeof client.interactions.create>[0]
+      const stream = await client.interactions.create(params);
       const { totalBytes, otherEvents } = await consumeInteractionStream(
         stream as unknown as AsyncIterable<unknown>,
         (pcm) => {
