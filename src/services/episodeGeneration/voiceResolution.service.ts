@@ -1,15 +1,13 @@
 import { createHash } from "node:crypto";
 import { generateText } from "../../llm/geminiClient";
-import { deleteVoice, designVoice, findLibraryVoice } from "../../llm/ttsClient";
+import { deleteVoice, designVoice } from "../../llm/ttsClient";
 import { setHostResolvedVoice } from "../../data/podcast.repository";
 import { setGuestResolvedVoice } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
 import {
   buildPersonaPrompt,
-  guestVoiceLibrarySchema,
   hostVoiceDesignSchema,
   VOICE_DESIGN_SYSTEM_INSTRUCTION,
-  VOICE_LIBRARY_SYSTEM_INSTRUCTION,
 } from "../../llm/prompts/voiceResolution.prompts";
 
 export interface ResolvedVoice {
@@ -67,12 +65,9 @@ export async function resolveHostVoice(podcastId: string, host: Person): Promise
 
 /**
  * Guests always resolve fresh — a guest is scoped to one episode, never
- * reused across episodes, so there's no cache to check. Routes through
- * Voice Design (not the Library) when the guest has a stated accent: the
- * Library's accent taxonomy only models regional variation *within* a
- * language, with no way to express "a native speaker of one language
- * carrying an accent while speaking another" (confirmed in the
- * investigation).
+ * reused across episodes, so there's no cache to check. Guests always get
+ * a bespoke Voice Design voice created using their name, persona, voice hint,
+ * and accent data.
  *
  * Called once per generation attempt (episode creation or `/regenerate`)
  * from orchestrator.ts, in parallel with script generation — not lazily at
@@ -89,31 +84,11 @@ export async function resolveGuestVoice(
   podcastId: string,
   episodeId: string,
   guest: Person,
-): Promise<ResolvedVoice & { origin: "design" | "library" }> {
+): Promise<ResolvedVoice & { origin: "design" }> {
   const staleVoiceId = guest.resolvedVoiceOrigin === "design" ? guest.resolvedVoiceId : null;
 
-  const resolved = guest.accent
-    ? await (async () => {
-        const r = await designFor(guest);
-        return { voiceId: r.voiceId, origin: "design" as const, languageCode: r.languageCode };
-      })()
-    : await (async () => {
-        const req = await generateText({
-          systemInstruction: VOICE_LIBRARY_SYSTEM_INSTRUCTION,
-          prompt: buildPersonaPrompt(guest),
-          schema: guestVoiceLibrarySchema,
-        });
-        const match = await findLibraryVoice({
-          languageCode: req.languageCode,
-          gender: req.gender,
-          pitch: req.pitch,
-          accent: req.accent,
-          personaKeywords: req.personaKeywords,
-          contexts: req.contexts,
-          search: req.search,
-        });
-        return { voiceId: match.voiceId, origin: "library" as const, languageCode: req.languageCode };
-      })();
+  const r = await designFor(guest);
+  const resolved = { voiceId: r.voiceId, origin: "design" as const, languageCode: r.languageCode };
 
   await setGuestResolvedVoice(podcastId, episodeId, guest.id, {
     resolvedVoiceId: resolved.voiceId,
