@@ -111,4 +111,28 @@ describe("chunker", () => {
     const turns = getChunkTurns(transcript, chunks[0]!);
     expect(turns).toEqual(parseScriptTurns(transcript));
   });
+
+  it("chunks transcripts with // Turn comments and Style: lines preserving styles", () => {
+    const transcript = [
+      "// Turn 1\nAlice: Opening line.\nStyle: energetic",
+      "// Turn 2\nBob: Great to be here.",
+      "// Turn 3\nAlice: Final thoughts.\nStyle: whispering",
+    ].join("\n\n");
+
+    const chunks = chunkTranscript(transcript, 2);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]?.turnCount).toBe(2);
+    expect(chunks[1]?.turnCount).toBe(1);
+
+    const chunk0Turns = getChunkTurns(transcript, chunks[0]!);
+    expect(chunk0Turns).toEqual([
+      { speaker: "Alice", text: "Opening line.", style: "energetic" },
+      { speaker: "Bob", text: "Great to be here." },
+    ]);
+
+    const chunk1Turns = getChunkTurns(transcript, chunks[1]!);
+    expect(chunk1Turns).toEqual([
+      { speaker: "Alice", text: "Final thoughts.", style: "whispering" },
+    ]);
+  });
 });

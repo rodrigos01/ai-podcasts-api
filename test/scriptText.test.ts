@@ -38,6 +38,17 @@ describe("SPEAKER_LABEL_RE / extractSpeakerNames", () => {
     expect(SPEAKER_LABEL_RE.test("Chloé: Bonjour!")).toBe(true);
     expect(extractSpeakerNames("Chloé: Hey.\n\nMarcus: Hi.")).toEqual(["Chloé", "Marcus"]);
   });
+
+  it("extracts speaker names from scripts with // Turn comments and Style: lines", () => {
+    const script = `// Turn 1
+Marcus: Hello.
+Style: whispering
+
+// Turn 2
+Priya: Hi there.`;
+
+    expect(extractSpeakerNames(script)).toEqual(["Marcus", "Priya"]);
+  });
 });
 
 describe("parseScriptTurns", () => {
@@ -59,6 +70,25 @@ describe("parseScriptTurns", () => {
     expect(parseScriptTurns(script)).toEqual([
       { speaker: "Marcus", text: "First part.\n\nStill part of the same turn." },
       { speaker: "Priya", text: "Reply." },
+    ]);
+  });
+
+  it("parses // Turn comments and extracts Style: line", () => {
+    const script = `// Turn 1
+Marcus: Hey there everyone!
+Style: energetic, cheerful
+
+// Turn 2
+Priya: Welcome back.
+
+// Turn 3
+Marcus: Let's get right into it.
+Style: focused`;
+
+    expect(parseScriptTurns(script)).toEqual([
+      { speaker: "Marcus", text: "Hey there everyone!", style: "energetic, cheerful" },
+      { speaker: "Priya", text: "Welcome back." },
+      { speaker: "Marcus", text: "Let's get right into it.", style: "focused" },
     ]);
   });
 

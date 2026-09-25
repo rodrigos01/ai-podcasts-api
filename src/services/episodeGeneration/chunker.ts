@@ -21,12 +21,13 @@ export function splitIntoTurnSpans(transcript: string): TurnSpan[] {
   let cursor = 0;
   for (const part of transcript.split("\n\n")) {
     const end = cursor + part.length;
-    const match = part.match(SPEAKER_LABEL_RE);
-    if (match?.[1]) {
+    const parsed = parseScriptTurns(part);
+    if (parsed.length > 0 && parsed[0]) {
+      const turn = parsed[0];
       spans.push({
         turnIndex: spans.length,
-        speaker: match[1],
-        text: part.slice(match[0].length).trim(),
+        speaker: turn.speaker,
+        text: turn.text,
         startOffset: cursor,
         endOffset: end,
       });

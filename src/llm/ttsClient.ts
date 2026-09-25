@@ -249,12 +249,27 @@ export interface TtsVoiceAssignment {
   languageCode?: string;
 }
 
-function buildContentItems(turns: ScriptTurn[], multiSpeaker: boolean) {
-  return turns.map((turn) => ({
-    type: "text" as const,
-    text: turn.text.replaceAll(/\[/g, "<").replace(/\]/g, ">").trim(),
-    annotations: multiSpeaker ? [{ type: "speech_metadata" as const, speaker: turn.speaker }] : undefined,
-  }));
+export function buildContentItems(turns: ScriptTurn[], multiSpeaker: boolean) {
+  return turns.map((turn) => {
+    const annotations: { type: "speech_metadata"; speaker?: string; style?: string }[] = [];
+    if (multiSpeaker) {
+      annotations.push({
+        type: "speech_metadata" as const,
+        speaker: turn.speaker,
+        ...(turn.style ? { style: turn.style } : {}),
+      });
+    } else if (turn.style) {
+      annotations.push({
+        type: "speech_metadata" as const,
+        style: turn.style,
+      });
+    }
+    return {
+      type: "text" as const,
+      text: turn.text.replaceAll(/\[/g, "<").replaceAll(/\]/g, ">").trim(),
+      annotations: annotations.length > 0 ? annotations : undefined,
+    };
+  });
 }
 
 /**
