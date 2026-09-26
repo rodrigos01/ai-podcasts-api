@@ -20,12 +20,17 @@ export async function createEpisode(
     length: input.length,
     sourceIds: input.sourceIds,
     participantHostIds: input.participantHostIds,
-    guests: input.guests.map((guest) => ({ ...guest, id: randomUUID() })),
+    guests: input.guests.map((guest) => ({
+      ...guest,
+      id: randomUUID(),
+      resolvedVoiceId: null,
+      resolvedVoiceOrigin: null,
+      resolvedVoiceHash: null,
+    })),
     productionNotes: input.productionNotes,
     status: "generating",
     progress: null,
     transcript: null,
-    ttsPrompt: null,
     ttsChunks: null,
     generatedAudioSeconds: 0,
     condensedSummaries: null,
@@ -108,6 +113,33 @@ export async function patchEpisodeState(
  * cheap guarantee against it anyway (e.g. a delayed retry landing after a
  * later chunk's write) rather than a load-bearing assumption.
  */
+/**
+ * Persists a guest's freshly-resolved voice onto their entry in the episode
+ * doc's `guests` array — called once per generation attempt from
+ * orchestrator.ts's runEpisodeGeneration (see
+ * voiceResolution.service.ts's resolveGuestVoice, the only caller), so a
+ * later `/stream` request can just read it instead of resolving lazily.
+ * A transaction, not a plain read-modify-write, purely for consistency with
+ * podcast.repository.ts's setHostResolvedVoice — a given episode's guest
+ * voice is only ever resolved by one in-flight generation run at a time, so
+ * there's no real race to guard against here.
+ */
+export async function setGuestResolvedVoice(
+  podcastId: string,
+  episodeId: string,
+  guestId: string,
+  resolved: { resolvedVoiceId: string; resolvedVoiceOrigin: "design" | "library" },
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const episode = snap.data() as Episode;
+    const guests = episode.guests.map((guest) => (guest.id === guestId ? { ...guest, ...resolved } : guest));
+    tx.update(ref, { guests, updatedAt: Date.now() });
+  });
+}
+
 export async function bumpGeneratedAudioSeconds(
   podcastId: string,
   episodeId: string,

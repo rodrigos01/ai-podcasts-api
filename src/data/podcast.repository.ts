@@ -13,7 +13,13 @@ export async function createPodcast(input: PodcastCreateInput, ownerId: string):
     title: input.title,
     description: input.description,
     structure: input.structure,
-    hosts: input.hosts.map((host) => ({ ...host, id: randomUUID() })),
+    hosts: input.hosts.map((host) => ({
+      ...host,
+      id: randomUUID(),
+      resolvedVoiceId: null,
+      resolvedVoiceOrigin: null,
+      resolvedVoiceHash: null,
+    })),
     ownerId,
     createdAt: now,
     updatedAt: now,
@@ -48,18 +54,53 @@ export async function updatePodcast(
 
   const patch: Record<string, unknown> = { ...input, updatedAt: Date.now() };
   if (input.hosts) {
-    const currentHostIds = new Set(
-      (existing.data() as Podcast).hosts.map((host) => host.id),
-    );
-    patch.hosts = input.hosts.map((host) => ({
-      ...host,
-      id: host.id && currentHostIds.has(host.id) ? host.id : randomUUID(),
-    }));
+    const currentHosts = new Map((existing.data() as Podcast).hosts.map((host) => [host.id, host]));
+    patch.hosts = input.hosts.map((host) => {
+      const id = host.id && currentHosts.has(host.id) ? host.id : randomUUID();
+      // A matched existing host keeps its already-resolved voice — an edit
+      // to persona/accent/voice hint doesn't need to be caught here;
+      // voiceResolution.service.ts's resolveHostVoice hashes those fields
+      // itself and re-designs lazily, at the next episode generation, if
+      // they've changed. A genuinely new host (no matching id) starts
+      // unresolved, same as at podcast creation.
+      const current = currentHosts.get(id);
+      return {
+        ...host,
+        id,
+        resolvedVoiceId: current?.resolvedVoiceId ?? null,
+        resolvedVoiceOrigin: current?.resolvedVoiceOrigin ?? null,
+        resolvedVoiceHash: current?.resolvedVoiceHash ?? null,
+      };
+    });
   }
 
   await ref.update(patch);
   const updated = await ref.get();
   return updated.data() as Podcast;
+}
+
+/**
+ * Persists a host's freshly-resolved Voice Design voice so every future
+ * episode of this podcast reuses it instead of re-designing (see
+ * services/episodeGeneration/voiceResolution.service.ts's resolveHostVoice,
+ * the only caller). A transaction, not a plain read-modify-write, since two
+ * concurrent first-time episode generations for the same new host could
+ * otherwise race and each write their own separately-designed voice, with
+ * the loser's overwritten silently.
+ */
+export async function setHostResolvedVoice(
+  podcastId: string,
+  hostId: string,
+  resolved: { resolvedVoiceId: string; resolvedVoiceOrigin: "design"; resolvedVoiceHash: string },
+): Promise<void> {
+  const ref = podcastsCollection.doc(podcastId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const podcast = snap.data() as Podcast;
+    const hosts = podcast.hosts.map((host) => (host.id === hostId ? { ...host, ...resolved } : host));
+    tx.update(ref, { hosts, updatedAt: Date.now() });
+  });
 }
 
 export async function deletePodcast(podcastId: string): Promise<boolean> {

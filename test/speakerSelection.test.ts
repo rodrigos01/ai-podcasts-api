@@ -3,7 +3,15 @@ import { selectCast, speakerLabel } from "../src/services/episodeGeneration/spea
 import type { Person } from "../src/schemas/person.schema";
 
 function person(id: string, name: string): Person {
-  return { id, name, voice: "Puck", persona: "test persona" };
+  return {
+    id,
+    name,
+    voice: "warm, friendly voice",
+    persona: "test persona",
+    resolvedVoiceId: null,
+    resolvedVoiceOrigin: null,
+    resolvedVoiceHash: null,
+  };
 }
 
 describe("selectCast", () => {

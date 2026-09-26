@@ -1,165 +1,104 @@
-# Gemini TTS Prompting Guide
+# Gemini 3.8 Flash TTS Prompting Guide
 
-*A reference for writing "full prompts" for Gemini's native-audio text-to-speech models. Give this file to an LLM along with a short description of the voice/scene you want, and ask it to produce a complete prompt following this structure.*
+*A reference for writing transcripts and performance directions for Gemini 3.8 Flash TTS (`gemini-3.8-flash-tts`).*
 
 Source: adapted from Google's Gemini API documentation on [speech generation](https://ai.google.dev/gemini-api/docs/speech-generation#prompting-guide) (CC BY 4.0).
 
 ---
 
-## The core idea
+## The Core Concept
 
-Gemini's TTS models aren't a conventional "type text, get audio" system — they're driven by a language model that reasons about **how** a line should be delivered, not just **what** it says. That means a good prompt reads less like a caption and more like a director's brief: it sets up a character, a physical scene, and specific performance notes, and then hands the actor a script to perform in that context.
-
-Two guiding principles for anyone writing these prompts:
-
-1. **Alignment matters.** The transcript's subject matter and phrasing should match the tone you're directing. A script about a stock market crash won't land as convincingly cheerful, no matter how many "upbeat" instructions you stack on it.
-2. **Don't over-specify.** Give the model enough to understand the performance, but leave some room for it to fill in the details — an actor works better with a clear brief than a word-for-word choreography sheet.
+Gemini 3.8 TTS models treat input text strictly as a **verbatim transcript**. Unlike earlier preview models where stage directions were embedded in plain text or long "Director's Notes" blocks, Gemini 3.8 TTS cleanly separates:
+1. **Turn-level delivery style (`speech_metadata.style`)**: Sustained delivery attributes (emotion, prosody, overall pace) applied across an entire turn.
+2. **Point-in-time inline tags (`<...>`)**: Momentary non-speech vocal bursts, breaths, or pauses placed directly in the spoken transcript.
 
 ---
 
-## The five building blocks
+## Turn Structure in Transcripts
 
-A complete prompt is typically assembled from these parts. Director's Notes is the one part worth never skipping; everything else is there to add context and naturalness.
+Transcripts are written as a sequence of turns separated by a single blank line:
 
-| Block | What it does |
-|---|---|
-| **Audio Profile** | Names the character and gives their core identity/archetype (e.g. radio host, podcaster, customer support agent). |
-| **Scene** | Describes the physical location and emotional atmosphere the character is performing in — this shapes delivery indirectly, the way a real environment would. |
-| **Director's Notes** | The most important section. Explicit performance guidance: style, accent, pacing, breathing, articulation — whatever matters most for this specific read. |
-| **Sample Context** | A line or two establishing what kind of material this voice is typically used for, so the model understands the character's "home turf." |
-| **Transcript** | The actual text to be spoken, optionally marked up with inline audio tags. |
+```
+Speaker 1: Text to be spoken aloud
+Style: optional short delivery style
 
-### Audio Profile
+Speaker 2: Another spoken line
 
-- Give the character a name — it helps the model tie identity to performance, and lets you refer back to them consistently.
-- State their role/archetype in a few words (e.g. "morning radio DJ," "beauty influencer," "noir detective narrating a case file").
+Speaker 1: Third spoken line
+Style: whispering
+```
 
-### Scene
-
-- Set location, time, and mood.
-- Describe what's physically happening around the character (equipment, other people, ambient conditions) and how it affects their energy or posture.
-- This section works subtly — it colors the performance without giving direct instructions.
-
-### Director's Notes
-
-- This is where you spend most of your specificity budget. The most common sub-categories are **Style**, **Pacing**, and **Accent**, but you can add anything relevant (breathiness, articulation, energy arcs, etc.).
-- Vague adjectives underperform. Compare "energetic and enthusiastic" to something like: describing exactly what the listener should feel, or naming a concrete vocal technique (e.g. a raised soft palate for a brighter, "smiling" tone).
-- You can escalate from a single descriptive sentence to a bulleted, multi-part breakdown depending on how much control you need.
-- For accents, name a specific region or even a specific place rather than a broad category — "a British accent as heard in a particular English town" gives more reliable results than just "British accent."
-
-### Sample Context
-
-- A short line framing what this voice/character is typically used for (radio spots, tutorial narration, character voice work, etc.). It gives the model a natural "genre" to slot the performance into.
-
-### Transcript
-
-- The literal text to be read aloud.
-- Keep its topic and register consistent with the Director's Notes — a mismatch between what's being directed and what's being said undermines the performance.
-- This is also where inline **audio tags** go (see below).
+- **Speaker line (`Speaker: Text`)**: The speaker's exact canonical label followed by a colon and the text to speak.
+- **Style line (`Style: ...`)**: Optional concise delivery instruction for that turn.
+- **No comment lines**: Do not include `// Turn N` comment headers in the output.
 
 ---
 
-## Audio tags
+## Style Field vs. Inline Tags
 
-Audio tags are short bracketed inline cues placed directly in the transcript to control delivery at a specific point in the text — tone, pace, emotion, or a non-verbal sound. There's no fixed, exhaustive list; treat them as directable cues and experiment.
+| Scope | Where to place | Examples |
+|---|---|---|
+| **Turn-level** (sustained across the whole turn) | `Style: ...` (`speech_metadata.style`) | `Style: whispering`, `Style: speaking rapidly`, `Style: out of breath`, `Style: sarcastic`, `Style: cheerful, energetic`, `Style: angry tone`, `Style: deadpan` |
+| **Point-in-time** (occurs at a specific moment) | Inline in text using `<...>` | `<cough>`, `<breath>`, `<gasp>`, `<sigh>`, `<laughter>`, `<chuckle>`, `<throat-clearing>`, `<short pause>`, `<long pause>` |
 
-Ways to use them:
+### Delivery Cues & Style in Transcript's Language
 
-- **At the start of a line**, to set overall emphasis: `[excitedly]`, `[bored]`, `[reluctantly]`
-- **To control pace**, alone or combined with emotion: `[very fast]`, `[very slow]`, `[sarcastically, one painfully slow word at a time]`
-- **Mid-line, to shift delivery within a single sentence**: e.g. starting a line whispered, jumping to shouting partway through, then dropping back to a whisper
-- **For pure creative/character direction**: `[like a cartoon dog]`, `[like a classic vampire]`
-- **For non-verbal sounds and interjections**: `[sighs]`, `[cough]`, `[gasp]`
+Write all inline cues (`<...>`) and `Style:` instructions in the same language as the transcript:
+- **English**: `<laughter>`, `<sigh>`, `<gasp>`, `<short pause>`, `Style: whispering`, `Style: sarcastic`
+- **Spanish**: `<risas>`, `<suspiro>`, `<jadeo>`, `<pausa corta>`, `Style: susurrando`, `Style: sarcástico`
+- **Portuguese**: `<risos>`, `<suspiro>`, `<ofegante>`, `<pausa curta>`, `Style: sussurrando`, `Style: sarcástico`
+- **French**: `<rires>`, `<soupir>`, `<halètement>`, `<pause courte>`, `Style: chuchoté`, `Style: sarcastique`
 
-Frequently used tags include: `[amazed]`, `[crying]`, `[curious]`, `[excited]`, `[sighs]`, `[gasp]`, `[giggles]`, `[laughs]`, `[mischievously]`, `[panicked]`, `[sarcastic]`, `[serious]`, `[shouting]`, `[tired]`, `[trembling]`, `[whispers]`.
+### Turn-Level Delivery (`Style:`)
 
-Notes:
-- Tags give fast, local control; combine them with full Director's Notes for a consistent overall tone.
-- Even for non-English transcripts, tags themselves are best kept in English.
+- Use `Style:` for sustained attributes: overall pacing, emotional coloring, or vocal register across the turn.
+- **Keep it concise**: A short descriptive phrase (e.g. `Style: sarcastic`, `Style: muttering`).
+- **Omit when normal**: Most turns do not need a `Style:` line — let the speaker's designed voice carry natural conversational dialogue.
+- **Never put immutable traits in `Style:`**: Do not put character backstory, age, names, or permanent accents in `Style:`. Those belong in Voice Design.
 
----
+### Point-in-Time Vocal Bursts (Inline `<...>` Tags)
 
-## Full prompt template
+Place non-speech human vocalizations directly inline in the dialogue text:
+- **Laughter / Amusement**: `<chuckle>`, `<chuckles>`, `<giggle>`, `<cackle>`, `<laugh>`, `<laughter>`, `<snicker>`
+- **Breathing / Relief**: `<breath>`, `<heavy breath>`, `<exhales>`, `<gasp>`, `<pant>`, `<phew>`, `<sigh>`, `<sighs>`, `<yawn>`
+- **Effort / Displeasure**: `<groan>`, `<grunt>`, `<grr>`, `<hiss>`, `<moan>`, `<whimper>`, `<argh>`
+- **Hesitation / Clearing**: `<throat-clearing>`, `<cough>`, `<sneeze>`, `<snort>`, `<sob>`, `<tsk>`
+- **Pauses**: `<short pause>`, `<long pause>`
 
-```
-# AUDIO PROFILE: [Character Name]
-## "[One-line archetype/nickname]"
-
-## THE SCENE: [Location name]
-[2-4 sentences describing where the character is, the time, the atmosphere,
-what's physically happening around them, and how that's affecting their energy.]
-
-### DIRECTOR'S NOTES
-
-Style:
-* [Primary stylistic direction — be specific and sensory rather than a single adjective.]
-* [Optional secondary style note — e.g. a vocal technique, dynamic range, or emphasis pattern.]
-
-Pacing: [How fast/slow, and whether pace should vary — steady, building, erratic, etc.]
-
-Accent: [Specific region or reference point, not just a broad nationality.]
-
-### SAMPLE CONTEXT
-[One or two sentences on what kind of material this voice is typically used for.]
-
-#### TRANSCRIPT
-[The actual lines to be spoken, with inline audio tags like [whispers] or
-[excitedly] where you want a shift in delivery.]
-```
-
-### Worked example
-
-```
-# AUDIO PROFILE: Marcus V.
-## "The Late-Night Radio Confessor"
-
-## THE SCENE: A rain-soaked broadcast booth
-It's 2 AM and the only light in the booth comes from the glowing console dials.
-Rain streaks the studio window overlooking an empty highway. Marcus leans in
-close to the mic, elbows on the desk, speaking to whoever's still awake and
-listening. The city outside has gone quiet; his voice is the only thing moving.
-
-### DIRECTOR'S NOTES
-
-Style:
-* Warm, low, and unhurried — like he's talking to one specific person, not
-  an audience. A little gravel in the voice from a long shift.
-* Let sentences trail off slightly at the end rather than landing hard, as
-  if he's thinking out loud.
-
-Pacing: Slow and spacious, with natural pauses between thoughts. No urgency
-anywhere in the read.
-
-Accent: General American, softened and unhurried — no regional markers.
-
-### SAMPLE CONTEXT
-Marcus hosts a call-in show for insomniacs and night-shift workers; this is
-the kind of low-key monologue he opens with before taking calls.
-
-#### TRANSCRIPT
-[softly] Hey. If you're still up right now... you're not alone. [pause] I know
-it's late. I know the rest of the world's asleep. [warmly] But you and me,
-we're gonna get through these next few hours together. [sighs] So go on,
-pour yourself something warm, and let's talk.
-```
+*Note: Stick to human vocalizations rather than sound effects or non-vocal audio cues.*
 
 ---
 
-## Tips for getting good results
+## Backchanneling and Overlapping Speech (`|...|`)
 
-- Keep the whole prompt internally coherent — the scene, notes, and transcript should all point in the same direction.
-- Resist the urge to specify every micro-detail; leaving some room tends to produce a more natural read than a rigid, over-constrained one.
-- If a prompt isn't landing, try tightening the Director's Notes first — that section carries the most weight.
-- Match the transcript's actual content and word choice to the character and mood you've built, not just the instructions around it.
-- If you're stuck, you can ask an LLM to sketch a character from a blank version of the template above.
+In natural human dialogue, listeners interject brief reactions or talk simultaneously without waiting for a full turn change. Gemini 3.8 Flash TTS synthesizes multi-speaker audio with concurrent overlapping voices when listener reactions are wrapped in pipe characters (`|reaction|`) inside the active speaker's line:
 
-## Known limitations to keep in mind
+1. **Short backchannel exchanges**:
+   Layer brief listener reactions inside the active speaker's sentence so the listener reacts while the speaker talks:
+   - `Speaker A: "So the launch is Thursday |oh hmm| Are we actually ready?"`
+   - `Speaker B: "Ready enough |oh really?| The last blocker cleared this morning."`
+   - `Speaker A: "Then let's ship it |absolutely| and watch the dashboards."`
 
-- These models take text in and produce audio only — no other modalities.
-- There's a context window limit per session (in the tens of thousands of tokens), so very long scripts should be split into chunks; quality can drift on outputs longer than a few minutes.
-- Vague or under-specified prompts occasionally fail to trigger speech synthesis properly. It helps to open with a short, clear preamble stating that this is speech to be synthesized, and to clearly mark where the actual transcript begins.
-- Voice/character mismatches (e.g. directing a deep voice to sound like a young child) can produce inconsistent results — keep the written tone aligned with the selected voice's natural qualities.
+2. **Overlapping and interleaved speech**:
+   Use pipe segments to simulate simultaneous speech, chorus lines, or excited interruptions:
+   - *Simultaneous countdown/chorus*: `"Let's surprise him on three |ok| ready?"` followed by `"one. two. three. |happy| happy |birthday| birthday!"`
+   - *Interleaved overlap*: `"We were completely blown away |no way| when the final numbers were announced!"`
 
-## Reference: voice character list
+Always write listener backchannel phrases in the language of the transcript (e.g. `|oh hmm|`, `|ah claro|`, `|sério?|`, `|exactement|`).
 
-The current voice options and their general character (bright, upbeat, firm, breathy, gravelly, warm, etc.) are listed in the voice-reference.md — worth checking so you can pick a base voice whose natural quality reinforces the direction you're writing rather than fighting it.
+---
+
+## Pacing, Pauses, and Rhythm
+
+1. **Punctuation & Ellipses**: Use commas, em-dashes (`--`), and ellipses (`...`) for natural hesitation and conversational rhythm.
+2. **Explicit Pauses**: Insert pauses (`<short pause>`, `<long pause>`) where a speaker pauses to think or react.
+3. **Conversational Disfluencies**: Include realistic natural speech hesitations (e.g., *"Oh uh yeah I think... hm, so that's interesting"*).
+4. **Emphasis**: Capitalize specific words to place natural vocal stress and punch (e.g., *"This is a VERY important point!"*).
+
+---
+
+## What to Avoid
+
+- **No markdown formatting**: Do NOT use `**bold**`, `*italics*`, `# headers`, bullet points, or code formatting. The TTS model reads punctuation and symbols literally.
+- **No colon prefixes in sentences**: Never start a line or sentence with `"Word:"` (e.g., `"Watch this: ..."`). It can be misinterpreted as a speaker label. Use dashes instead (`"Watch this — ..."`).
+- **No comment headers**: Do not emit `// Turn N` lines in generated transcripts.

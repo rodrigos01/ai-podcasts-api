@@ -33,8 +33,9 @@ env:
   PROJECT: ai-audio-book
   REGION: us-central1
   # The runtime identity the existing ai-podcast-api service already runs as
-  # (Vertex AI, Cloud TTS, Firestore, and Storage all authenticate through
-  # it via Application Default Credentials).
+  # (Vertex AI, Firestore, and Storage all authenticate through it via
+  # Application Default Credentials; TTS falls back to the AI Studio API
+  # with GEMINI_API_KEY below when Vertex doesn't expose it -- see AGENTS.md).
   RUNTIME_SERVICE_ACCOUNT: 883622140264-compute@developer.gserviceaccount.com
   # Not secrets -- the same values scripts/deploy.sh forwards from .env, and
   # already visible in the service's own config. Overridable per repo via
@@ -42,6 +43,12 @@ env:
   FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || 'ai-audio-book' }}
   FIREBASE_STORAGE_BUCKET: ${{ vars.FIREBASE_STORAGE_BUCKET || 'ai-audio-book-podcast-audio' }}
   FIRESTORE_DATABASE_ID: ${{ vars.FIRESTORE_DATABASE_ID || 'podcasts' }}
+  # The actual key value lives only in Secret Manager (see AGENTS.md's TTS
+  # migration notes for the one-time `gcloud secrets create`/IAM setup) --
+  # this workflow never sees or logs the plaintext. Cloud Run resolves it at
+  # container startup via RUNTIME_SERVICE_ACCOUNT's own IAM grant, exposing
+  # it to the app as a normal env var (see the --set-secrets flag below).
+  GEMINI_API_KEY_SECRET: gemini-api-key
 
 jobs:
   deploy:
@@ -89,6 +96,7 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
-            --update-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET},FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE_ID}"
+            --update-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET},FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE_ID}" \
+            --update-secrets "GEMINI_API_KEY=${GEMINI_API_KEY_SECRET}:latest"
           url=$(gcloud run services describe "${{ steps.meta.outputs.service }}" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')
           echo "Deployed ${{ steps.meta.outputs.service }}: $url" >> "$GITHUB_STEP_SUMMARY"

@@ -32,20 +32,17 @@ export const SPEAKER_LABEL_RE = new RegExp(`^(${NAME_PATTERN}):`, "u");
 const SPEAKER_LABEL_GLOBAL_RE = new RegExp(`^(${NAME_PATTERN}):`, "gmu");
 
 /**
- * Every distinct speaker labeled in a "Name: text" formatted script, in
- * order of first appearance. Used to figure out which characters actually
- * speak in a given scene's generated script, without re-deriving it from
- * the draft's cast list (a script may use fewer characters than the scene
- * was originally expected to feature).
+ * Every distinct speaker labeled in a formatted script, in
+ * order of first appearance.
  */
 export function extractSpeakerNames(script: string): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
-  for (const turn of script.split("\n\n")) {
-    const name = turn.match(SPEAKER_LABEL_RE)?.[1];
-    if (name && !seen.has(name)) {
-      seen.add(name);
-      names.push(name);
+  const turns = parseScriptTurns(script);
+  for (const turn of turns) {
+    if (!seen.has(turn.speaker)) {
+      seen.add(turn.speaker);
+      names.push(turn.speaker);
     }
   }
   return names;
@@ -74,28 +71,70 @@ export function findLastSpeakerLabel(precedingText: string): string | null {
 export interface ScriptTurn {
   speaker: string;
   text: string;
+  style?: string;
 }
 
 /**
- * Parses a "Name: text" formatted script/chunk into structured turns for
- * the Cloud Text-to-Speech `multiSpeakerMarkup.turns` field — shared by
- * both the Podcast and Audiobook audio services. The chunk text passed in
- * is expected to already start with a label (callers' own getChunkText
- * ensures this, backward-scanning for one if a chunk is a continuation of
- * an oversized turn); a paragraph with no label of its own is folded into
- * the previous turn's text rather than dropped or misattributed, since a
- * single turn's own text can itself contain internal blank-line breaks.
+ * Parses turns separated by "\n\n", extracting speaker name, spoken text,
+ * and optional turn delivery style.
+ *
+ * Supports turns formatted as:
+ * // Turn 1
+ * Speaker: Text
+ * Style: optional short delivery style
+ *
+ * as well as plain "Speaker: Text" turns.
  */
 export function parseScriptTurns(script: string): ScriptTurn[] {
   const turns: ScriptTurn[] = [];
-  const re = new RegExp(`^(${NAME_PATTERN}):\\s*([\\s\\S]*)$`, "u");
+  const speakerRe = new RegExp(`^(${NAME_PATTERN}):\\s*(.*)$`, "u");
+  const styleRe = /^Style:\s*(.*)$/i;
+
   for (const part of script.split("\n\n")) {
-    const match = part.match(re);
-    if (match?.[1] !== undefined && match[2] !== undefined) {
-      turns.push({ speaker: match[1], text: match[2].trim() });
+    const trimmedPart = part.trim();
+    if (!trimmedPart) continue;
+
+    const lines = trimmedPart.split("\n");
+    let speaker: string | null = null;
+    let style: string | undefined;
+    const textLines: string[] = [];
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine.startsWith("//")) {
+        // Comment line like "// Turn 1"
+        continue;
+      }
+      const styleMatch = trimmedLine.match(styleRe);
+      if (styleMatch) {
+        style = styleMatch[1]!.trim();
+        continue;
+      }
+      if (!speaker) {
+        const speakerMatch = trimmedLine.match(speakerRe);
+        if (speakerMatch) {
+          speaker = speakerMatch[1]!;
+          if (speakerMatch[2]) {
+            textLines.push(speakerMatch[2].trim());
+          }
+          continue;
+        }
+      }
+      textLines.push(trimmedLine);
+    }
+
+    if (speaker) {
+      turns.push({
+        speaker,
+        text: textLines.join("\n").trim(),
+        ...(style ? { style } : {}),
+      });
     } else if (turns.length > 0) {
-      const last = turns[turns.length - 1];
-      if (last) last.text += `\n\n${part.trim()}`;
+      const last = turns[turns.length - 1]!;
+      const cont = textLines.join("\n").trim();
+      if (cont) {
+        last.text += `\n\n${cont}`;
+      }
     }
   }
   return turns;
