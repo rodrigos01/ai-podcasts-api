@@ -155,17 +155,57 @@ describe("chunker", () => {
     expect(chunks[1]?.startTurnIndex).toBe(5);
   });
 
-  it("gives an over-limit single turn its own chunk rather than an empty one", () => {
-    const hugeLine = Array(400).fill("word").join(" "); // over a 300-word cap on its own
+  it("splits an over-limit single turn into same-speaker continuation chunks, at sentence boundaries", () => {
+    const bobLine = "One two three four five. Six seven eight nine ten. Eleven twelve thirteen fourteen fifteen.";
+    const turns = [createTurn("Alice", "hi"), createTurn("Bob", bobLine), createTurn("Alice", "bye")];
+    const transcript = turns.join("\n\n");
+    const chunks = chunkTranscript(transcript, 10, 8);
+
+    // Alice/hi, 3 Bob pieces (sentence 1, sentence 2, sentence 3), Alice/bye.
+    expect(chunks).toHaveLength(5);
+    expect(chunks[0]?.turnCount).toBe(1);
+    expect(chunks[4]?.turnCount).toBe(1);
+
+    for (const chunk of chunks.slice(1, 4)) {
+      expect(chunk?.turnCount).toBe(1);
+      expect(chunk?.startTurnIndex).toBe(1);
+      expect(chunk?.endTurnIndex).toBe(2);
+    }
+
+    const pieces = chunks.slice(1, 4).map((c) => getChunkTurns(transcript, c!));
+    expect(pieces.every((p) => p.length === 1 && p[0]?.speaker === "Bob")).toBe(true);
+    expect(pieces.map((p) => p[0]?.text)).toEqual([
+      "One two three four five.",
+      "Six seven eight nine ten.",
+      "Eleven twelve thirteen fourteen fifteen.",
+    ]);
+
+    expect(getChunkTurns(transcript, chunks[0]!)[0]).toMatchObject({ speaker: "Alice", text: "hi" });
+    expect(getChunkTurns(transcript, chunks[4]!)[0]).toMatchObject({ speaker: "Alice", text: "bye" });
+  });
+
+  it("falls back to a plain word-boundary cut for a run-on turn with no sentence punctuation", () => {
+    const hugeLine = Array(400).fill("word").join(" "); // no periods anywhere -- no sentence boundaries to prefer
     const turns = [createTurn("Alice", "short line"), createTurn("Bob", hugeLine), createTurn("Alice", "short line")];
     const transcript = turns.join("\n\n");
     const chunks = chunkTranscript(transcript, 10, 300);
 
-    expect(chunks).toHaveLength(3);
     expect(chunks[0]?.turnCount).toBe(1);
-    expect(chunks[1]?.turnCount).toBe(1);
-    expect(chunks[1]?.startTurnIndex).toBe(1);
-    expect(chunks[2]?.turnCount).toBe(1);
+    expect(chunks[chunks.length - 1]?.turnCount).toBe(1);
+
+    const bobChunks = chunks.slice(1, -1);
+    expect(bobChunks.length).toBeGreaterThan(1); // the 400-word turn had to be split
+    for (const chunk of bobChunks) {
+      expect(chunk?.startTurnIndex).toBe(1);
+      expect(chunk?.endTurnIndex).toBe(2);
+    }
+
+    const bobPieces = bobChunks.map((c) => getChunkTurns(transcript, c!));
+    expect(bobPieces.every((p) => p.length === 1 && p[0]?.speaker === "Bob")).toBe(true);
+    // Every piece (after the label-bearing first one) stays within the cap,
+    // and the pieces reassemble the original 400-word line exactly.
+    const reassembled = bobPieces.map((p) => p[0]!.text).join(" ");
+    expect(reassembled).toBe(hugeLine);
   });
 
   it("still respects the turn-count limit when word count stays low", () => {

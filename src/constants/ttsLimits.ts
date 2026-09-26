@@ -23,10 +23,12 @@ export const TURNS_PER_CHUNK = 10;
 // content-size-bound approach the pre-3.8 Cloud TTS pipeline's deleted
 // chunker used (there, token count, for a different technical ceiling —
 // see AGENTS.md) — reintroduced here because turn count alone doesn't
-// protect against this new limit. A single turn whose own text exceeds 650
-// words still gets its own (over-limit) chunk regardless, since a turn
-// can't be split without breaking the "Name: text" structure — rare in
-// practice given this app's conversational-density prompting guidance.
+// protect against this new limit. A single turn whose own text exceeds
+// this cap gets split into several same-speaker continuation chunks
+// instead of one over-limit chunk (chunker.ts's splitOversizedSpan/
+// splitTextByWordBudget, preferring sentence-boundary cuts) — unlike a
+// truly ambiguous mid-transcript cut, there's no speaker to guess at here,
+// since it's still the same turn's own speaker throughout.
 export const MAX_WORDS_PER_CHUNK = 650;
 
 // How long to wait for the next streamed event before treating the call as

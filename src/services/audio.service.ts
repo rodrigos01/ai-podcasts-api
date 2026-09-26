@@ -13,8 +13,8 @@ import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
 import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service";
-import { chunkTranscript } from "./episodeGeneration/chunker";
-import { parseScriptTurns, type ScriptTurn } from "../utils/scriptText";
+import { chunkTranscript, getChunkTurns } from "./episodeGeneration/chunker";
+import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
 import { createAacStreamEncoder, encodePcmToAac, getAdtsDurationSeconds, sliceAdtsByTime } from "../utils/aac";
 import { HttpError } from "../utils/HttpError";
@@ -341,7 +341,7 @@ export async function streamEpisodeAudio(
     }
 
     // Chunk is NOT cached — live generation
-    const chunkTurns = parseScriptTurns(episode.transcript.slice(chunk.startOffset, chunk.endOffset));
+    const chunkTurns = getChunkTurns(episode.transcript, chunk);
     const chunkStartSec = runningAudioSeconds;
 
     let liveSeekRemaining = index === startChunkIndex ? seekOffsetInsideChunk : 0;
