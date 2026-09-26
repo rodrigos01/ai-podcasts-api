@@ -136,6 +136,51 @@ describe("chunker", () => {
     ]);
   });
 
+  it("cuts a chunk short on word count even when under the turn limit", () => {
+    const longLine = Array(60).fill("word").join(" "); // 60 words per turn
+    const turns = [
+      createTurn("Alice", longLine), // 60
+      createTurn("Bob", longLine), // 120
+      createTurn("Alice", longLine), // 180
+      createTurn("Bob", longLine), // 240 -- adding the 5th (300) still <= maxWords
+      createTurn("Alice", longLine), // 300
+      createTurn("Bob", longLine), // would be 360, over a 300-word cap
+    ];
+    const transcript = turns.join("\n\n");
+    const chunks = chunkTranscript(transcript, 10, 300);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]?.turnCount).toBe(5);
+    expect(chunks[1]?.turnCount).toBe(1);
+    expect(chunks[1]?.startTurnIndex).toBe(5);
+  });
+
+  it("gives an over-limit single turn its own chunk rather than an empty one", () => {
+    const hugeLine = Array(400).fill("word").join(" "); // over a 300-word cap on its own
+    const turns = [createTurn("Alice", "short line"), createTurn("Bob", hugeLine), createTurn("Alice", "short line")];
+    const transcript = turns.join("\n\n");
+    const chunks = chunkTranscript(transcript, 10, 300);
+
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]?.turnCount).toBe(1);
+    expect(chunks[1]?.turnCount).toBe(1);
+    expect(chunks[1]?.startTurnIndex).toBe(1);
+    expect(chunks[2]?.turnCount).toBe(1);
+  });
+
+  it("still respects the turn-count limit when word count stays low", () => {
+    const turns: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      turns.push(createTurn(i % 2 === 0 ? "Alice" : "Bob", "ok"));
+    }
+    const transcript = turns.join("\n\n");
+    const chunks = chunkTranscript(transcript, 10, 650);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]?.turnCount).toBe(10);
+    expect(chunks[1]?.turnCount).toBe(2);
+  });
+
   it("chunks transcripts without comments with styles and backchannel pipes", () => {
     const transcript = [
       "Alice: Opening line |yeah| right here.\nStyle: energetic",

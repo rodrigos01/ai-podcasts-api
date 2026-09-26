@@ -1,8 +1,33 @@
 // Gemini 3.8 Flash TTS chunking: transcripts are broken down into chunks
 // of turns (TURNS_PER_CHUNK), synthesized on demand as the user listens.
 
-// Number of script turns per TTS synthesis chunk.
+// Number of script turns per TTS synthesis chunk — an upper bound, not a
+// fixed size: chunker.ts's chunkTranscript also stops a chunk early once
+// MAX_WORDS_PER_CHUNK is reached, whichever limit comes first. See that
+// constant for why the word cap exists.
 export const TURNS_PER_CHUNK = 10;
+
+// Gemini's `interactions.create` now outright rejects (not just eventually
+// times out) a request whose synthesized audio would exceed ~300s — a hard
+// server-side limit discovered live, not the soft "runaway generation"
+// ceiling MAX_CHUNK_AUDIO_SECONDS below already guarded against. A fixed
+// 10-turns-per-chunk size doesn't bound audio duration at all (a chunk of
+// 10 short backchannel turns and a chunk of 10 long monologue turns produce
+// wildly different audio lengths), so chunkTranscript also caps each
+// chunk's word count, cutting a chunk short — even under 10 turns — the
+// moment adding the next turn would push it over this word count. 650
+// words is a proxy for audio duration, not audio duration itself: at a
+// conversational ~150 words/minute (2.5 words/sec) speaking rate, 650
+// words is ~260s of audio, leaving real margin under the 300s hard limit
+// for the pacing/pause variance real TTS output has. This is the same
+// content-size-bound approach the pre-3.8 Cloud TTS pipeline's deleted
+// chunker used (there, token count, for a different technical ceiling —
+// see AGENTS.md) — reintroduced here because turn count alone doesn't
+// protect against this new limit. A single turn whose own text exceeds 650
+// words still gets its own (over-limit) chunk regardless, since a turn
+// can't be split without breaking the "Name: text" structure — rare in
+// practice given this app's conversational-density prompting guidance.
+export const MAX_WORDS_PER_CHUNK = 650;
 
 // How long to wait for the next streamed event before treating the call as
 // stalled — confirmed empirically in the investigation's spike script: a
@@ -15,9 +40,15 @@ export const TURNS_PER_CHUNK = 10;
 // whole call from scratch.
 export const STREAM_INACTIVITY_TIMEOUT_MS = 20_000;
 
-// Maximum synthesized audio duration for a single chunk before treating it
-// as a runaway generation. 10 turns is typically 30-90 seconds of audio;
-// 300s (5 minutes) provides ample headroom while catching infinite loops.
+// Client-side abort threshold for a single chunk's synthesized audio,
+// checked live as PCM deltas arrive (ttsClient.ts's consumeInteractionStream)
+// — a defense-in-depth backstop, not the primary guard against Gemini's
+// ~300s hard server-side limit (see MAX_WORDS_PER_CHUNK above, which sizes
+// chunks to stay under that limit proactively, before the request is even
+// sent). Deliberately the same 300s: MAX_WORDS_PER_CHUNK's word-count
+// estimate could undershoot real audio duration for unusually slow/drawn-
+// out delivery, and this is what catches that case (or any other runaway
+// generation) rather than streaming indefinitely.
 export const MAX_CHUNK_AUDIO_SECONDS = 300;
 
 // A single episode's synthesized audio is treated as a runaway/failed
