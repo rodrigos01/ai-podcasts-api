@@ -5,6 +5,7 @@ import { z } from "zod";
 import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
 import type { ScriptTurn } from "../utils/scriptText";
+import { TTS_SAMPLE_RATE_HERTZ } from "../constants/ttsLimits";
 
 const TEXT_MODEL = "gemini-3.8-flash";
 const TTS_MODEL = "gemini-3.1-flash-tts-preview";
@@ -225,13 +226,24 @@ export interface SpeakerVoice {
  * client: same underlying model, same multi-speaker + free-text-prompt
  * capability (confirmed empirically — `StreamingSynthesisInput` accepts a
  * `prompt` string alongside `multiSpeakerMarkup.turns`), much cheaper
- * billing for it. `audioEncoding: "OGG_OPUS"` compresses far better than
- * raw PCM for the same audio — confirmed empirically that `streamingSynthesize`
- * only accepts a subset of the API's advertised encodings: `LINEAR16` and
- * `MP3` are both rejected outright ("Unsupported audio encoding") even
- * though they're valid for the non-streaming `synthesizeSpeech` call;
- * `PCM` and `OGG_OPUS` are the two confirmed to work. Don't "fix" this back
- * to LINEAR16 or MP3 without re-confirming against the live API first.
+ * billing for it. `streamingSynthesize` only accepts a subset of the API's
+ * advertised encodings — confirmed empirically that `LINEAR16` and `MP3`
+ * are both rejected outright ("Unsupported audio encoding") even though
+ * they're valid for the non-streaming `synthesizeSpeech` call; `PCM` and
+ * `OGG_OPUS` are the two confirmed to work. Don't "fix" this back to
+ * LINEAR16 or MP3 without re-confirming against the live API first.
+ *
+ * Requests `PCM` (migrated 2026-09-26 from requesting `OGG_OPUS` directly —
+ * see AGENTS.md): callers (audio.service.ts) now encode it to AAC
+ * themselves, on the fly per chunk, via utils/aacEncoder.ts. This trades
+ * Cloud TTS's own Ogg Opus compression for one we control end-to-end —
+ * chosen so independently-generated chunks can concatenate into one
+ * playable resource with no cross-chunk rewriting (ADTS AAC has no shared-
+ * header/serial-number concept to fight, unlike Ogg's chained-bitstream
+ * problem) and so `?t=` seeking can resolve to individual encoded frames
+ * instead of only whole-chunk boundaries. This function itself is otherwise
+ * unaffected — it stays audio-format-agnostic, just forwarding whatever raw
+ * bytes Cloud TTS returns.
  */
 // Cloud TTS's speakerAlias is far stricter than our own speaker names:
 // "cannot contain whitespace or non-alphanumeric characters" (confirmed
@@ -282,13 +294,15 @@ export async function streamSpeech(
     text: turn.text,
   }));
   // Every chunk — chunk 0 included — is free to use the single-voice path
-  // when it's genuinely solo-speaker: the episode's Ogg header no longer
-  // depends on any particular chunk's output (see OGG_HEADER_PAGES in
-  // oggStitch.ts), so a chunk-0 TTS failure is exactly as recoverable
-  // (silently skippable — see audio.service.ts) as any other chunk's,
-  // removing the one case where the single-voice path's higher failure
-  // rate (confirmed live, 2026-09-23 — moderation false-positives and
-  // RST_STREAM) used to be an unacceptable risk instead of a tolerable one.
+  // when it's genuinely solo-speaker: no chunk's audio depends on any other
+  // chunk's output or carries any shared episode-wide state (true since the
+  // Ogg-era OGG_HEADER_PAGES fix, and even more structurally so now that
+  // chunks are independent ADTS AAC files — see utils/aacEncoder.ts), so a
+  // chunk-0 TTS failure is exactly as recoverable (silently skippable — see
+  // audio.service.ts) as any other chunk's, removing the one case where the
+  // single-voice path's higher failure rate (confirmed live, 2026-09-23 —
+  // moderation false-positives and RST_STREAM) used to be an unacceptable
+  // risk instead of a tolerable one.
   const soloVoiceName = soloSpeakerVoiceName(turns, aliasByName);
 
   let receivedAnyAudio = false;
@@ -340,7 +354,7 @@ export async function streamSpeech(
                     })),
                   },
                 },
-            streamingAudioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 24000 },
+            streamingAudioConfig: { audioEncoding: "PCM", sampleRateHertz: TTS_SAMPLE_RATE_HERTZ },
           },
         });
         grpcStream.write({

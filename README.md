@@ -15,8 +15,9 @@ Product behavior is fully described in [specs.md](specs.md); this document cover
 ## Tech stack
 
 - Node 20+, TypeScript, Express
+- **`ffmpeg`** on `PATH` — audio.service.ts spawns it per TTS chunk to encode Cloud TTS's raw PCM output to AAC on the fly (see utils/aacEncoder.ts). Install it locally for `npm run dev`/`npm run smoke` (e.g. `apt-get install ffmpeg`); the deploy Dockerfile installs it for you in any deployed environment.
 - Firebase Firestore (a **named database**, not the default one — see Setup) + Firebase Storage, via `firebase-admin`
-- Google Gemini `gemini-3.8-flash` for text (via `@google/genai`, routed through the **Vertex AI API** — not an API key) and `gemini-3.1-flash-tts-preview` for speech (via `@google-cloud/text-to-speech`'s `streamingSynthesize`, for real incremental audio streaming — and it's the one place that stays off Vertex AI's `generateContent`, since that path only returns raw PCM with no OGG_OPUS option)
+- Google Gemini `gemini-3.8-flash` for text (via `@google/genai`, routed through the **Vertex AI API** — not an API key) and `gemini-3.1-flash-tts-preview` for speech (via `@google-cloud/text-to-speech`'s `streamingSynthesize`, for real incremental audio streaming — and it's the one place that stays off Vertex AI's `generateContent`, since that path only returns raw PCM with no encoding option at all). Requests `PCM` and encodes it to AAC ourselves (see above) rather than asking Cloud TTS for pre-compressed Ogg Opus directly.
 - zod for request validation and for validating every piece of LLM-generated JSON before it's trusted
 - vitest for unit tests
 
@@ -272,10 +273,10 @@ Episode length word/time targets:
 This is a single audio resource for the whole episode (not per-chunk), designed to be pointed at directly by a standard `<audio>` element or a native mobile player:
 
 - **Once fully generated**: behaves like a normal static audio file — proper `Content-Length`, `Accept-Ranges: bytes`, full seek support via `Range` requests.
-- **While still generating**: served as `audio/ogg` (Ogg Opus) over `Transfer-Encoding: chunked` (no `Content-Length`, since the final size isn't known yet). Playback can start immediately and can be paused/resumed, but cannot be scrubbed ahead of what's actually been generated. A `Range: bytes=N-` request resumes precisely from `N` if that's already been generated; if not, it triggers generation of whatever's needed to reach it. `Episode.generatedAudioSeconds` (see `/status` above) tells a client how much audio currently exists, for building a "scrub within what's generated so far" UI — it's updated in Firestore as each chunk finishes, not computed on request.
+- **While still generating**: served as `audio/aac` (raw ADTS AAC, encoded on the fly from Cloud TTS's PCM output — see Tech stack above) over `Transfer-Encoding: chunked` (no `Content-Length`, since the final size isn't known yet). Playback can start immediately and can be paused/resumed, but cannot be scrubbed ahead of what's actually been generated. A `Range: bytes=N-` request resumes precisely from `N` if that's already been generated; if not, it triggers generation of whatever's needed to reach it. `Episode.generatedAudioSeconds` (see `/status` above) tells a client how much audio currently exists, for building a "scrub within what's generated so far" UI — it's updated in Firestore as each chunk finishes, not computed on request.
 - Audio generation is genuinely on-demand — the first request for a given episode's stream is what triggers TTS synthesis (in chunks, cached from then on), not episode confirmation. Expect real latency the first time any given episode is streamed.
 
-**Resuming from a saved position**: pass `?t=<seconds>` to start the stream from a playback position your app already has (e.g. the user exited the player and came back) — `GET .../audio/stream?t=754.2`. The server resumes at the nearest generated-audio-chunk boundary at or before that time (not an exact byte offset — audio chunks are compressed, so a chunk's duration isn't known until it's been generated) — if a `Range` header is present on the same request, it takes precedence over `t`.
+**Resuming from a saved position**: pass `?t=<seconds>` to start the stream from a playback position your app already has (e.g. the user exited the player and came back) — `GET .../audio/stream?t=754.2`. The server resolves this to the nearest encoded-frame boundary at or before that time — each AAC frame is a fixed ~43ms (1024 samples at 24kHz), so this is sub-chunk precise, not just "nearest chunk" — if a `Range` header is present on the same request, it takes precedence over `t`.
 
 ## Data model
 

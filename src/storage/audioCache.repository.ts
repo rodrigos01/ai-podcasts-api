@@ -1,18 +1,20 @@
 import { storageBucket } from "../config/firebase";
 
-// Each chunk starts as its own independent Ogg Opus stream from one
-// streamingSynthesize call, but audio.service.ts's oggStitch rewrite (see
-// utils/oggStitch.ts) patches it in place before it's ever cached here: a
-// shared serial number, continuous page sequence, and continuous granule
-// timeline, with duplicate OpusHead/OpusTags header pages dropped for every
-// chunk after the first. What's stored under each chunk's key is therefore
-// a *fragment* of one single continuous logical Ogg bitstream, not a
-// standalone playable file on its own — concatenating the cached chunks in
-// order reconstructs that one stream. See utils/oggOpus.ts for how a
-// chunk's own last page (now an absolute, not per-chunk-relative, position)
-// is used for time-based resume.
+// Each chunk is encoded independently (audio.service.ts spawns its own
+// short-lived ffmpeg process per chunk — see utils/aacEncoder.ts) into ADTS
+// AAC, migrated 2026-09-26 from Ogg Opus (see AGENTS.md). Unlike the old Ogg
+// Opus chunks, which needed audio.service.ts's oggStitch rewrite to erase
+// each chunk's own header/serial-number/page-sequence state before caching,
+// an ADTS AAC chunk needs no such rewriting: every frame is self-delimited
+// with no shared "logical stream" concept to reconcile across chunks, so
+// what's stored here is exactly the encoder's own output, and each cached
+// file is independently decodable/playable on its own — concatenating them
+// in order still reconstructs the whole episode, but no single cached file
+// depends on any other's bytes the way a stitched Ogg fragment did. See
+// utils/adts.ts for how a chunk's own frame count is used for time-based
+// resume.
 function chunkPath(podcastId: string, episodeId: string, chunkIndex: number): string {
-  return `podcasts/${podcastId}/episodes/${episodeId}/audio/chunk-${chunkIndex}.opus`;
+  return `podcasts/${podcastId}/episodes/${episodeId}/audio/chunk-${chunkIndex}.aac`;
 }
 
 export async function getCachedChunk(
@@ -49,7 +51,7 @@ export async function putCachedChunk(
   data: Buffer,
 ): Promise<void> {
   const file = storageBucket.file(chunkPath(podcastId, episodeId, chunkIndex));
-  await file.save(data, { contentType: "audio/ogg" });
+  await file.save(data, { contentType: "audio/aac" });
 }
 
 export async function deleteEpisodeAudio(podcastId: string, episodeId: string): Promise<void> {

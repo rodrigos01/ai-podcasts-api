@@ -3,6 +3,22 @@
 // tokens" context window per prompting-guide.md.
 export const MAX_TTS_INPUT_TOKENS = 12_000;
 
+// Cloud TTS's streamingSynthesize output sample rate (see geminiClient.ts's
+// streamSpeech) — shared with utils/aacEncoder.ts (the PCM it's fed) and
+// utils/adts.ts (duration math for the AAC it produces), so both sides of
+// the encode always agree on the same rate.
+export const TTS_SAMPLE_RATE_HERTZ = 24000;
+
+// Target bitrate for the on-the-fly PCM->AAC encode (utils/aacEncoder.ts,
+// migrated 2026-09-26 from requesting OGG_OPUS directly from Cloud TTS — see
+// AGENTS.md). Chosen for speech-quality dialogue at a modest size; ffmpeg's
+// native "aac" encoder doesn't hold this exactly per-frame (confirmed
+// empirically — frame sizes vary even at a fixed target), so this is a
+// target average, not a literal per-frame guarantee. `?t=` seeking doesn't
+// depend on it being exact regardless — see utils/adts.ts's frame-counting
+// approach.
+export const AAC_BITRATE_KBPS = 64;
+
 // specs.md's "Audio Generation" section calls for audio to be generated
 // on-demand and streamed back *as the user listens* — chunking purely up
 // to MAX_TTS_INPUT_TOKENS would pack an entire short episode (or scene) into
@@ -47,11 +63,18 @@ export const MAX_TTS_INPUT_TOKENS = 12_000;
 // false-positives, and separately `RST_STREAM`) than the multi-speaker
 // shape. That higher failure rate used to be an unacceptable risk
 // specifically for chunk 0 (the one chunk whose failure couldn't be
-// silently skipped, since it carried the episode's only Ogg header) —
-// fixed instead by decoupling the header from any chunk's own output (see
-// OGG_HEADER_PAGES in oggStitch.ts), so every chunk's failure, chunk 0
-// included, is equally recoverable now and the single-voice path's
+// silently skipped, since it used to carry the episode's only Ogg header) —
+// fixed by decoupling the header from any chunk's own output, and later
+// made moot entirely by the PCM/AAC migration (2026-09-26, see AGENTS.md):
+// ADTS AAC chunks need no shared header at all, so every chunk's failure,
+// chunk 0 included, is equally recoverable and the single-voice path's
 // reliability tradeoff applies uniformly everywhere.
+//
+// This ~178s RST_STREAM ceiling is a function of the model's own output
+// (tokens/duration), not the requested audioEncoding's byte size — confirmed
+// by the person who found it originally — so switching the request from
+// OGG_OPUS to PCM (2026-09-26) doesn't change where it triggers and this
+// value didn't need retuning for that migration.
 export const TARGET_CHUNK_TOKENS = 350;
 
 // A single TTS call's synthesized audio is killed (the underlying gRPC

@@ -2,9 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Deploys the API to Cloud Run straight from source — Cloud Build detects
-# Node via package.json's build/start scripts (no Dockerfile needed) and
-# builds+deploys in one step.
+# Deploys the API to Cloud Run straight from source. `--source` builds
+# using the repo's root Dockerfile when one is present (confirmed via
+# `gcloud run deploy --help`) rather than Google Cloud buildpacks — this
+# matters as of 2026-09-26: the Dockerfile installs ffmpeg (audio.service.ts
+# spawns it per TTS chunk — see AGENTS.md), which buildpacks has no way to
+# do, so this path staying Dockerfile-based isn't optional anymore.
 #
 # .env is the source of truth for runtime config, but it is NOT forwarded
 # verbatim: a few keys are deliberately excluded because they either don't
