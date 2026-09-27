@@ -1,4 +1,3 @@
-import { countTokens } from "../../llm/geminiClient";
 import { LENGTH_RANGES } from "../../constants/lengthRanges";
 import {
   getEpisode,
@@ -7,12 +6,13 @@ import {
 } from "../../data/episode.repository";
 import { getPodcast } from "../../data/podcast.repository";
 import { getSource } from "../../data/source.repository";
+import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Person } from "../../schemas/person.schema";
-import { chunkTranscript } from "./chunker";
 import { condenseForAllHosts } from "./condensation.service";
-import { generateBaseTtsPrompt } from "./producerPrompt.service";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
+import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
+import { chunkTranscript } from "./chunker";
 
 export async function runEpisodeGeneration(podcastId: string, episodeId: string): Promise<void> {
   try {
@@ -20,6 +20,36 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     if (!podcast) throw new Error(`Podcast ${podcastId} not found`);
     const episode = await getEpisode(podcastId, episodeId);
     if (!episode) throw new Error(`Episode ${episodeId} not found`);
+
+    // Wipe any previous attempt's transcript/chunks/cached audio before
+    // doing anything else. A no-op for a brand-new episode (already in
+    // this state), but essential for /regenerate on an already-"ready"
+    // episode (episode.controller.ts's regenerate no longer blocks that):
+    // without this, a listener hitting /stream mid-regeneration would
+    // still see the *old* transcript and could even become a chunk-
+    // generation leader against it — wasting a real synthesis call on
+    // content that's about to be discarded. Clearing `transcript` is what
+    // actually closes that race, since audio.service.ts's
+    // assertAudioAvailable only blocks on a null transcript or
+    // status==="failed" — flipping status to "generating" alone wouldn't.
+    // Clearing the cached chunk files themselves matters too: a new
+    // generation attempt's chunk boundaries/count won't line up with the
+    // old ones, so a stale chunk left behind at the same index could get
+    // served (or mistaken for "already cached") against all-new content.
+    await patchEpisodeState(podcastId, episodeId, {
+      status: "generating",
+      transcript: null,
+      ttsChunks: null,
+      generatedAudioSeconds: 0,
+      progress: null,
+      error: null,
+    });
+    await deleteEpisodeAudio(podcastId, episodeId).catch((err) => {
+      console.error(
+        `Failed to clear cached audio for episode ${podcastId}/${episodeId} before (re)generating:`,
+        err,
+      );
+    });
 
     const hosts = podcast.hosts.filter((h) => episode.participantHostIds.includes(h.id));
     const guests: Person[] = episode.guests;
@@ -46,18 +76,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       if (history.length > 0) condensedHistoryBySpeakerId.set(speaker.id, history.join("\n\n"));
     }
 
-    // Built directly from each speaker's own persona/accent data — no LLM
-    // call, no need for podcast/episode context, never needed the
-    // transcript (see producerPrompt.service.ts).
-    const ttsPrompt = generateBaseTtsPrompt(cast.speakers);
-    const basePromptTokens = await countTokens(ttsPrompt);
-
-    await patchEpisodeState(podcastId, episodeId, {
-      ttsPrompt,
-      ttsChunks: [],
-      progress: { stage: "producer_prompt", targetWordRange: wordTarget },
-    });
-
     await patchEpisodeState(podcastId, episodeId, {
       progress: { stage: "conversation", targetWordRange: wordTarget },
     });
@@ -69,14 +87,35 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // whole script comes back, so a crash mid-call loses the whole
     // not-yet-persisted episode (recoverable via /regenerate), not just an
     // in-flight turn.
-    const script = await generateEpisodeScript(
+    const scriptPromise = generateEpisodeScript(
       cast,
       { podcast, episode, sources, condensedHistoryBySpeakerId },
       wordTarget,
     );
 
-    const ttsChunks = chunkTranscript(script.transcript, basePromptTokens);
+    // Voice resolution (host Voice Design cache hit/miss, guest Voice
+    // Design/Library mint) runs in parallel with script generation rather
+    // than lazily at first `/stream` request — see AGENTS.md and
+    // audio.service.ts's resolveCastVoices, which now just reads the ids
+    // this persists. A failure here doesn't fail episode generation itself:
+    // audio.service.ts still falls back to resolving lazily (and
+    // persisting) if a cast member's resolvedVoiceId ends up missing.
+    const voiceResolutionPromise = Promise.all([
+      ...hosts.map((host) => resolveHostVoice(podcastId, host)),
+      ...guests.map((guest) => resolveGuestVoice(podcastId, episodeId, guest)),
+    ]).catch((err) => {
+      console.error(
+        `Voice resolution failed for episode ${podcastId}/${episodeId} (will resolve lazily at stream time instead):`,
+        err,
+      );
+    });
 
+    const [script] = await Promise.all([scriptPromise, voiceResolutionPromise]);
+
+    const ttsChunks = chunkTranscript(script.transcript);
+
+    // "streamable" as soon as the script exists and is chunked — /stream can
+    // start generating audio on demand per chunk. Condensation may still be running.
     await patchEpisodeState(podcastId, episodeId, {
       transcript: script.transcript,
       ttsChunks,

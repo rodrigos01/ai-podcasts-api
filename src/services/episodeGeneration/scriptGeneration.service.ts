@@ -79,7 +79,11 @@ async function generateOnce(
   validateSpeakerTurns(turns, labelA, labelB);
 
   const transcript = buildTranscript(
-    turns.map((turn) => ({ speakerName: turn.speaker, text: sanitizeTurnText(turn.text) })),
+    turns.map((turn) => ({
+      speakerName: turn.speaker,
+      text: sanitizeTurnText(turn.text),
+      style: turn.style,
+    })),
   );
 
   return { transcript, wordCount: countWords(transcript) };

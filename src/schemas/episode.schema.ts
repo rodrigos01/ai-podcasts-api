@@ -48,23 +48,18 @@ export const episodeUpdateSchema = z.object({
 });
 
 export const episodeProgressSchema = z.object({
-  stage: z.enum([
-    "kickoff",
-    "producer_prompt",
-    "conversation",
-    "chunking",
-    "condensation",
-    "done",
-  ]),
+  stage: z.enum(["kickoff", "conversation", "chunking", "condensation", "done"]),
   currentWordCount: z.number().int().nonnegative().optional(),
   targetWordRange: z.object({ min: z.number(), max: z.number() }).optional(),
 });
 
 export const ttsChunkSchema = z.object({
   index: z.number().int().nonnegative(),
+  startTurnIndex: z.number().int().nonnegative(),
+  endTurnIndex: z.number().int().nonnegative(),
   startOffset: z.number().int().nonnegative(),
   endOffset: z.number().int().nonnegative(),
-  estimatedTokens: z.number().int().nonnegative(),
+  turnCount: z.number().int().positive(),
 });
 
 export const episodeSchema = z.object({
@@ -85,14 +80,13 @@ export const episodeSchema = z.object({
   status: z.enum(["generating", "streamable", "ready", "failed"]),
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),
-  ttsPrompt: z.string().nullable(),
   ttsChunks: z.array(ttsChunkSchema).nullable(),
-  // Total audio duration generated and cached so far, in seconds — updated
-  // in Firestore once per chunk as it finishes generating (audio.service.ts),
-  // not computed at request time, so polling clients (GET .../status) can
-  // build a "how far can I scrub" UI without probing GCS themselves. Reads
-  // of episodes created before this field existed get `undefined` here
-  // (Firestore is schemaless and this isn't backfilled) — treat as 0.
+  // Total audio duration generated so far, in seconds — updated in
+  // Firestore as chunks finish generating (audio.service.ts), not computed
+  // at request time, so polling clients (GET .../status) can build a "how
+  // far can I scrub" UI without probing GCS themselves. Reads of episodes
+  // created before this field existed get `undefined` here (Firestore is
+  // schemaless and this isn't backfilled) — treat as 0.
   generatedAudioSeconds: z.number().nonnegative(),
   condensedSummaries: z.record(z.string(), z.string()).nullable(),
   error: z.string().nullable(),

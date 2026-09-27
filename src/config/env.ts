@@ -15,6 +15,17 @@ const envSchema = z.object({
   // introducing a second project id.
   VERTEX_AI_LOCATION: z.string().min(1).default("global"),
   FIREBASE_PROJECT_ID: z.string().min(1, "FIREBASE_PROJECT_ID is required"),
+  // TTS only (see llm/ttsClient.ts) — the new Gemini 3.8 Flash TTS
+  // interactions/voices API isn't reachable via Vertex AI on this project
+  // (confirmed empirically: voices.list/voices.create 404 at Vertex's
+  // routing layer, every location/api_version tried). ttsClient.ts probes
+  // Vertex once per process and falls back to the AI Studio Generative
+  // Language API with this key when Vertex doesn't work. Left optional at
+  // the env-schema level (Vertex may start working in some environment, or
+  // some day on its own) — ttsClient.ts throws a clear error at first TTS
+  // call if a fallback is needed but this isn't set. Text generation
+  // (geminiClient.ts) is unaffected — it stays on Vertex only.
+  GEMINI_API_KEY: z.string().min(1).optional(),
   // Local dev only — a downloaded service-account JSON key. Left unset in
   // any deployed environment (Cloud Run, Cloud Functions, GKE); firebase.ts
   // falls back to Application Default Credentials via the runtime's

@@ -1,10 +1,7 @@
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import { VOICES } from "../../constants/voices";
 import { LENGTH_RANGES, type EpisodeLength } from "../../constants/lengthRanges";
 import type { EpisodeSuggestion } from "../../schemas/wizard.schema";
-
-const voiceCatalog = VOICES.map((v) => `${v.id} (${v.gender}, ${v.trait})`).join(", ");
 
 // Built from LENGTH_RANGES (the same source of truth episode confirmation
 // itself validates against) so the model reasons about concrete word
@@ -23,7 +20,7 @@ Podcast description: ${podcast.description}
 Podcast structure:
 ${podcast.structure}
 
-Fixed hosts on this show, with their assigned voices: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice}${h.accent ? `; accent: ${h.accent}` : ""})`).join("; ")}
+Fixed hosts on this show, with their voice descriptions: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice}${h.accent ? `; accent: ${h.accent}` : ""})`).join("; ")}
 
 The user has already chosen a target episode length of "${length}" (${targetRange.min}-${targetRange.max} \
 spoken words, roughly matching the studio's length options: ${lengthCatalog}) before you draft anything — \
@@ -35,10 +32,11 @@ episode, referencing the show's structure), and — if this episode calls for on
 character with a life-like persona relevant to the topics. Not every episode needs a guest; only include \
 one if it clearly fits.
 
-If you include a guest, their "voice" field must be exactly one of these IDs (pick the best natural \
-gender/trait match for the persona): ${voiceCatalog}. Never assign the guest a voice ID already used by \
-one of this show's fixed hosts listed above — every speaker who might appear together in an episode needs \
-a distinct voice so listeners can tell them apart.
+If you include a guest, their "voice" field is a short, free-text description of how they should sound — \
+age, tone, gender, pacing, energy — the same kind of description a fixed host has (see above), not a pick \
+from a fixed list; a voice will be found or designed from this description and the persona later. Write a \
+description clearly distinguishable from every fixed host's listed above — every speaker who might appear \
+together in an episode needs to sound distinct so listeners can tell them apart.
 
 Only when the guest's persona specifically calls for a distinctive spoken accent (regional, national, or \
 non-native) may you also set their "accent" field — a short, plain-English description (e.g. "Northern \

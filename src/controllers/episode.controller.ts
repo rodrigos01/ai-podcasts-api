@@ -131,10 +131,14 @@ export async function regenerate(req: Request, res: Response) {
   const episodeId = requireParam(req.params, "episodeId");
   const episode = await getEpisode(podcastId, episodeId);
   if (!episode) throw HttpError.notFound("Episode not found");
-  if (episode.status === "ready") {
-    throw HttpError.badRequest("Episode is already ready; nothing to regenerate");
-  }
 
+  // Regenerating a "ready" episode is deliberately allowed — a fresh
+  // script/transcript (and, downstream, fresh audio) even when the last
+  // attempt fully succeeded, e.g. after a chunking/prompt change, or
+  // because the user just wants a different take. orchestrator.ts's
+  // runEpisodeGeneration resets the episode's transcript/chunks/cached
+  // audio back to a clean slate as its first step, so this is safe to
+  // fire regardless of the episode's current status.
   void runEpisodeGeneration(podcastId, episodeId).catch((err: unknown) => {
     console.error(`Episode regeneration failed for ${podcastId}/${episodeId}:`, err);
   });

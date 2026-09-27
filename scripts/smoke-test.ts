@@ -2,10 +2,14 @@
  * End-to-end smoke test against a running instance of this API
  * (`npm run dev` in another terminal first). Exercises the full flow:
  * podcast wizard -> confirm -> source upload -> episode wizard -> confirm
- * -> poll status until ready -> fetch transcript/ttsPrompt -> fetch an
- * audio chunk (miss) -> refetch (hit).
+ * -> poll status until ready -> fetch transcript -> stream audio (first
+ * request generates it live; a second request serves the cached/finished
+ * result).
  *
- * Uses real Gemini API calls — costs quota and takes a few minutes.
+ * Uses real Gemini API calls, including real TTS synthesis — costs quota
+ * and billed usage, and takes several minutes (audio generation is no
+ * longer chunked; a whole episode synthesizes as one streaming call — see
+ * AGENTS.md).
  */
 const BASE_URL = process.env.SMOKE_TEST_BASE_URL ?? "http://localhost:3000";
 
@@ -82,22 +86,18 @@ async function main() {
   }
   if (status !== "ready") throw new Error(`Episode ended in status: ${status}`);
 
-  log("7. Fetch full episode (transcript/ttsPrompt)");
+  log("7. Fetch full episode (transcript)");
   const final = await api<any>("GET", `/podcasts/${podcast.id}/episodes/${episode.id}`);
   console.log("transcript chars:", final.transcript.length);
-  console.log("chunk count:", final.ttsChunks.length);
 
-  log("8. Fetch audio chunk 0 (expect MISS)");
-  const res1 = await fetch(
-    `${BASE_URL}/podcasts/${podcast.id}/episodes/${episode.id}/audio/chunks/0`,
-  );
-  console.log("X-Cache:", res1.headers.get("x-cache"));
+  log("8. Stream audio (first request: generates it live)");
+  const res1 = await fetch(`${BASE_URL}/podcasts/${podcast.id}/episodes/${episode.id}/audio/stream`);
+  console.log("content-type:", res1.headers.get("content-type"), "status:", res1.status);
+  await res1.arrayBuffer(); // drain the whole response so generation actually completes
 
-  log("9. Refetch audio chunk 0 (expect HIT)");
-  const res2 = await fetch(
-    `${BASE_URL}/podcasts/${podcast.id}/episodes/${episode.id}/audio/chunks/0`,
-  );
-  console.log("X-Cache:", res2.headers.get("x-cache"));
+  log("9. Stream audio again (expect the finished, cached Ogg)");
+  const res2 = await fetch(`${BASE_URL}/podcasts/${podcast.id}/episodes/${episode.id}/audio/stream`);
+  console.log("content-type:", res2.headers.get("content-type"), "content-length:", res2.headers.get("content-length"));
 
   log("Smoke test passed", { podcastId: podcast.id, episodeId: episode.id });
 }
