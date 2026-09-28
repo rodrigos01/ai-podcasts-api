@@ -249,27 +249,41 @@ export interface TtsVoiceAssignment {
   languageCode?: string;
 }
 
+/**
+ * Turns with no spoken text are dropped rather than sent — the API rejects
+ * a `{ type: "text", text: "" }` content item outright with "400 Missing
+ * text in content of type text.", failing the whole synthesis call over a
+ * turn with nothing to speak. scriptGeneration.service.ts's
+ * resolveEmptyTurnText already folds a bare "Speaker:\nStyle: laughs"
+ * turn's style into an inline vocal-burst tag at generation time (so it's
+ * *not* empty by the time it gets here), but this is still the last stop
+ * before the actual API call — it's what catches a turn with genuinely
+ * nothing at all (no text, no style either), and any transcript
+ * cached/persisted before that fix existed.
+ */
 export function buildContentItems(turns: ScriptTurn[], multiSpeaker: boolean) {
-  return turns.map((turn) => {
-    const annotations: { type: "speech_metadata"; speaker?: string; style?: string }[] = [];
-    if (multiSpeaker) {
-      annotations.push({
-        type: "speech_metadata" as const,
-        speaker: turn.speaker,
-        ...(turn.style ? { style: turn.style } : {}),
-      });
-    } else if (turn.style) {
-      annotations.push({
-        type: "speech_metadata" as const,
-        style: turn.style,
-      });
-    }
-    return {
-      type: "text" as const,
-      text: turn.text.replaceAll(/\[/g, "<").replaceAll(/\]/g, ">").trim(),
-      annotations: annotations.length > 0 ? annotations : undefined,
-    };
-  });
+  return turns
+    .filter((turn) => turn.text.trim().length > 0)
+    .map((turn) => {
+      const annotations: { type: "speech_metadata"; speaker?: string; style?: string }[] = [];
+      if (multiSpeaker) {
+        annotations.push({
+          type: "speech_metadata" as const,
+          speaker: turn.speaker,
+          ...(turn.style ? { style: turn.style } : {}),
+        });
+      } else if (turn.style) {
+        annotations.push({
+          type: "speech_metadata" as const,
+          style: turn.style,
+        });
+      }
+      return {
+        type: "text" as const,
+        text: turn.text.replaceAll(/\[/g, "<").replaceAll(/\]/g, ">").trim(),
+        annotations: annotations.length > 0 ? annotations : undefined,
+      };
+    });
 }
 
 /**

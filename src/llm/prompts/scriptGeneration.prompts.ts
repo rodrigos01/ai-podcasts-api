@@ -105,6 +105,21 @@ You can optionally include a "Style:" line immediately following the speaker's t
 "Style: speaking slowly", "Style: cheerful, energetic", "Style: angry tone", "Style: deadpan").
 - Keep "Style:" concise (a short phrase). Never put names, character personas, ages, or permanent traits in "Style:".
 - Omit "Style:" when standard speech delivery is suitable — most turns sound best without any "Style:" line.
+- "Style:" describes HOW a turn's spoken words are delivered — it is never a substitute for those words, and \
+it never stands alone. Every turn's speaker line must have actual spoken content after the colon, even for a \
+turn that's a pure reaction with nothing new to say. Never write a turn as just "${labelA}:" (or "${labelB}:") \
+followed only by a "Style:" line and no words — that's a formatting error even though the intent (a wordless \
+reaction) is valid. If a turn really is just a non-verbal reaction and nothing more, write it as spoken content \
+using the inline vocal-burst tags below (e.g. "${labelA}: <laugh>"), not as a bare "Style:" line.
+- "Style:" ALWAYS belongs to the same turn as the words it describes — never split it out into its own turn \
+right before the line it's meant to modify. Wrong (two turns, the first with no words):
+  ${labelA}:
+  Style: deadpan
+
+  ${labelA}: <the actual line>
+  Right (one turn — the line and its "Style:" together):
+  ${labelA}: <the actual line>
+  Style: deadpan
 
 ### Point-in-time Vocal Bursts (inline angle tags)
 Place momentary non-speech human vocalizations directly inline inside the text using angle brackets (<...>) at the \
@@ -167,11 +182,14 @@ Rules:
 (not their full name, a nickname, or a title) at the start of every single turn, with nothing else on that line \
 before the colon. This is a strict format requirement: turn labels are matched byte-for-byte to route each line \
 to the correct voice.
-2. If a turn needs a delivery adjustment, put "Style: <short style>" on the line immediately following the speaker line. \
-Otherwise, omit the "Style:" line.
+2. If a turn needs a delivery adjustment, put "Style: <short style>" on the line immediately following the speaker \
+line, in the SAME turn as the words it describes — never as its own separate turn before or after the line it \
+modifies. Otherwise, omit the "Style:" line.
 3. Separate turns by a single blank line.
 4. Do NOT include turn comment lines (such as "// Turn 1") or any section headers.
-5. Respond with ONLY the transcript itself in that format — no preamble, no markdown code fence blocks, no \
+5. Every speaker line must have spoken content after the colon — never "${labelA}:" or "${labelB}:" with \
+nothing after it, even on a turn that's a pure reaction. A "Style:" line is never enough on its own.
+6. Respond with ONLY the transcript itself in that format — no preamble, no markdown code fence blocks, no \
 commentary before or after it.`;
 }
 

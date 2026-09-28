@@ -56,6 +56,21 @@ describe("buildContentItems", () => {
     ]);
   });
 
+  it("drops turns with no spoken text instead of sending an empty text item", () => {
+    // A turn that parsed with a speaker label but no words (e.g. the only
+    // content was a Style annotation) must never reach the API as
+    // `{ type: "text", text: "" }` — Gemini TTS rejects that outright with
+    // "400 Missing text in content of type text.".
+    const turns: ScriptTurn[] = [
+      { speaker: "Marcus", text: "Hey Ray." },
+      { speaker: "Ray", text: "  ", style: "laughs" },
+      { speaker: "Marcus", text: "Anyway." },
+    ];
+    const items = buildContentItems(turns, true);
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => item.text.length > 0)).toBe(true);
+  });
+
   it("builds content items with style in single speaker mode", () => {
     const turns: ScriptTurn[] = [
       { speaker: "Marcus", text: "Quiet now.", style: "softly" },

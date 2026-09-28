@@ -30,6 +30,67 @@ function sanitizeTurnText(text: string): string {
 }
 
 /**
+ * A turn can parse with a speaker label but no spoken text at all — e.g.
+ * "Maya:\nStyle: laughs" — the model's way of writing a pure non-verbal
+ * reaction using the wrong slot for it (prompted against in
+ * scriptGeneration.prompts.ts, but not structurally guaranteed). "Style:"
+ * describes how a turn's own words are delivered, never a substitute for
+ * them — sent as-is, an empty turn becomes an empty
+ * `{ type: "text", text: "" }` content item and Gemini TTS's
+ * interactions.create rejects the whole request with "400 Missing text in
+ * content of type text." Rather than lose the reaction, the style value is
+ * treated as what it's actually describing — a momentary vocal burst — using
+ * the same "<...>" inline-tag convention the prompt already teaches for
+ * that. The style is dropped from the resulting turn since it's now the
+ * turn's own text, not a separate delivery annotation on top of it.
+ *
+ * Only reached for a turn `reattachOrphanedStyle` didn't already resolve —
+ * i.e. one with no same-speaker turn right after it to reattach the style
+ * to, so it really does look like a standalone reaction rather than a
+ * misplaced "Style:" line.
+ */
+export function resolveEmptyTurnText(turn: ScriptTurn): ScriptTurn {
+  const text = sanitizeTurnText(turn.text);
+  if (text.length > 0) return { speaker: turn.speaker, text, ...(turn.style ? { style: turn.style } : {}) };
+  if (turn.style) return { speaker: turn.speaker, text: `<${turn.style.trim()}>` };
+  return { speaker: turn.speaker, text: "" };
+}
+
+/**
+ * The model has also been observed splitting a turn's own "Style:" line
+ * into a separate, preceding empty turn instead of attaching it to the
+ * turn it actually describes — e.g.
+ *   Chloe:
+ *   Style: deadpan
+ *
+ *   Chloe: <the actual line>
+ * instead of the requested single turn
+ *   Chloe: <the actual line>
+ *   Style: deadpan
+ * Both turns share a speaker and the first is otherwise a content-free
+ * orphan, so unlike the pure-reaction case `resolveEmptyTurnText` handles,
+ * there's an unambiguous real turn right here to reattach the style to.
+ * Reattaching recovers the model's actual intent (a styled line) instead
+ * of misreading the orphan as a standalone vocal burst. Runs before
+ * `resolveEmptyTurnText` so only a genuinely standalone empty+style turn
+ * (no same-speaker turn immediately following) reaches that fallback.
+ */
+export function reattachOrphanedStyle(turns: ScriptTurn[]): ScriptTurn[] {
+  const merged: ScriptTurn[] = [];
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i]!;
+    const next = turns[i + 1];
+    if (sanitizeTurnText(turn.text).length === 0 && turn.style && next && next.speaker === turn.speaker) {
+      merged.push({ speaker: next.speaker, text: next.text, style: next.style ?? turn.style });
+      i++; // the next turn has been consumed into the merge above
+      continue;
+    }
+    merged.push(turn);
+  }
+  return merged;
+}
+
+/**
  * Validates that every parsed turn uses one of the two labels we told the
  * model to use (see scriptGeneration.prompts.ts — first name only, unless
  * the cast shares a first name) and that both actually appear at least
@@ -76,12 +137,19 @@ async function generateOnce(
   if (turns.length === 0) {
     throw new Error("Gemini returned a script with no recognizable turns");
   }
-  validateSpeakerTurns(turns, labelA, labelB);
+
+  const sanitizedTurns = reattachOrphanedStyle(turns)
+    .map(resolveEmptyTurnText)
+    .filter((turn) => turn.text.length > 0);
+  if (sanitizedTurns.length === 0) {
+    throw new Error("Gemini returned a script with no turns containing spoken text");
+  }
+  validateSpeakerTurns(sanitizedTurns, labelA, labelB);
 
   const transcript = buildTranscript(
-    turns.map((turn) => ({
+    sanitizedTurns.map((turn) => ({
       speakerName: turn.speaker,
-      text: sanitizeTurnText(turn.text),
+      text: turn.text,
       style: turn.style,
     })),
   );
