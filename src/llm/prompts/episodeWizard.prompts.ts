@@ -1,7 +1,9 @@
+import type { PriorEpisode } from "../../utils/episodeHistory";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { LENGTH_RANGES, type EpisodeLength } from "../../constants/lengthRanges";
 import type { EpisodeSuggestion } from "../../schemas/wizard.schema";
+import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
 
 // Built from LENGTH_RANGES (the same source of truth episode confirmation
 // itself validates against) so the model reasons about concrete word
@@ -10,8 +12,18 @@ const lengthCatalog = (Object.keys(LENGTH_RANGES) as EpisodeLength[])
   .map((length) => `${length} (${LENGTH_RANGES[length].min}-${LENGTH_RANGES[length].max} words)`)
   .join(", ");
 
-export function episodeWizardSystemInstruction(podcast: Podcast, length: EpisodeLength): string {
+export function episodeWizardSystemInstruction(
+  podcast: Podcast,
+  length: EpisodeLength,
+  previousEpisodes: PriorEpisode[],
+): string {
   const targetRange = LENGTH_RANGES[length];
+  const history = buildEpisodeHistoryBlock(previousEpisodes, podcast);
+  const historySection = history
+    ? `\n\n${history}\n\nWhen drafting, keep this history in mind: build on it rather than repeating it, and \
+reference it in the production notes where a callback or follow-up would help (a guest appearing again is fine \
+when it fits, but don't reuse a past guest just because they existed).`
+    : "";
 
   return `You are the producer for the podcast "${podcast.title}".
 
@@ -20,7 +32,7 @@ Podcast description: ${podcast.description}
 Podcast structure:
 ${podcast.structure}
 
-Fixed hosts on this show, with their voice descriptions: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice}${h.accent ? `; accent: ${h.accent}` : ""})`).join("; ")}
+Fixed hosts on this show, with their voice descriptions: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice}${h.accent ? `; accent: ${h.accent}` : ""})`).join("; ")}${historySection}
 
 The user has already chosen a target episode length of "${length}" (${targetRange.min}-${targetRange.max} \
 spoken words, roughly matching the studio's length options: ${lengthCatalog}) before you draft anything — \

@@ -4,6 +4,7 @@ import {
   buildEpisodeRevisePrompt,
   episodeWizardSystemInstruction,
 } from "../llm/prompts/episodeWizard.prompts";
+import type { PriorEpisode } from "../utils/episodeHistory";
 import type { EpisodeLength } from "../constants/lengthRanges";
 import type { Podcast } from "../schemas/podcast.schema";
 import type { Source } from "../schemas/source.schema";
@@ -23,10 +24,11 @@ export async function generateSuggestions(
   podcast: Podcast,
   sources: Source[],
   length: EpisodeLength,
+  previousEpisodes: PriorEpisode[],
   prompt?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast, length),
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
     schema: episodeWizardOptionsResponseSchema,
   });
@@ -36,12 +38,13 @@ export async function reviseSuggestions(
   podcast: Podcast,
   suggestions: EpisodeSuggestion[],
   length: EpisodeLength,
+  previousEpisodes: PriorEpisode[],
   targetSuggestionIndex: number,
   targetEpisodeIndex: number | undefined,
   instruction: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast, length),
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
     prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
     schema: episodeWizardOptionsResponseSchema,
   });
