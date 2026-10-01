@@ -36,6 +36,18 @@ function voiceHash(person: Person): string {
     .digest("hex");
 }
 
+/**
+ * True when `person` already has a stored voice that's still valid: an id,
+ * recorded under the same hash `voiceHash` computes today (same backend
+ * version, same name/persona/accent/hint). Anything else — no id, no hash
+ * (a voice stored before hashes were recorded, or on another platform) or a
+ * different one — means the stored id can't be trusted and a fresh voice
+ * must be designed. Applies to hosts and guests alike.
+ */
+export function hasCurrentVoice(person: Person): person is Person & { resolvedVoiceId: string } {
+  return !!person.resolvedVoiceId && person.resolvedVoiceHash === voiceHash(person);
+}
+
 async function designFor(person: Person): Promise<ResolvedVoice> {
   const req = await generateText({
     systemInstruction: VOICE_DESIGN_SYSTEM_INSTRUCTION,
@@ -58,8 +70,7 @@ async function designFor(person: Person): Promise<ResolvedVoice> {
  * persona/accent/voice hint actually changes) rather than per episode.
  */
 export async function resolveHostVoice(podcastId: string, host: Person): Promise<ResolvedVoice> {
-  const hash = voiceHash(host);
-  if (host.resolvedVoiceId && host.resolvedVoiceHash === hash) {
+  if (hasCurrentVoice(host)) {
     return { voiceId: host.resolvedVoiceId };
   }
 
@@ -67,7 +78,7 @@ export async function resolveHostVoice(podcastId: string, host: Person): Promise
   await setHostResolvedVoice(podcastId, host.id, {
     resolvedVoiceId: resolved.voiceId,
     resolvedVoiceOrigin: "design",
-    resolvedVoiceHash: hash,
+    resolvedVoiceHash: voiceHash(host),
   });
   return resolved;
 }
@@ -94,7 +105,12 @@ export async function resolveGuestVoice(
   episodeId: string,
   guest: Person,
 ): Promise<ResolvedVoice & { origin: "design" }> {
-  const staleVoiceId = guest.resolvedVoiceOrigin === "design" ? guest.resolvedVoiceId : null;
+  // A voice with no recorded hash predates hash tracking for guests — i.e. it
+  // was designed on the previous (AI Studio) platform, where it isn't ours to
+  // delete here and the delete would just fail. Only a voice recorded under
+  // a hash (this platform) is cleaned up.
+  const staleVoiceId =
+    guest.resolvedVoiceOrigin === "design" && guest.resolvedVoiceHash ? guest.resolvedVoiceId : null;
 
   const r = await designFor(guest);
   const resolved = { voiceId: r.voiceId, origin: "design" as const };
@@ -102,6 +118,7 @@ export async function resolveGuestVoice(
   await setGuestResolvedVoice(podcastId, episodeId, guest.id, {
     resolvedVoiceId: resolved.voiceId,
     resolvedVoiceOrigin: resolved.origin,
+    resolvedVoiceHash: voiceHash(guest),
   });
 
   if (staleVoiceId) await deleteVoice(staleVoiceId);

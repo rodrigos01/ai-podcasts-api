@@ -11,7 +11,7 @@ import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
-import { resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
+import { hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
 import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service";
 import { chunkTranscript, getChunkTurns } from "./episodeGeneration/chunker";
 import type { ScriptTurn } from "../utils/scriptText";
@@ -38,7 +38,9 @@ function assertAudioAvailable(episode: Episode): asserts episode is Episode & { 
 
 /**
  * Resolves both cast members' TTS voices. The normal path reads persisted
- * `resolvedVoiceId` values; falls back to resolving lazily if missing.
+ * `resolvedVoiceId` values; a voice that's missing or not current (see
+ * voiceResolution.service.ts's hasCurrentVoice — e.g. one stored before the
+ * move to the Enterprise Voices API) is designed lazily here instead.
  */
 async function resolveCastVoices(
   podcastId: string,
@@ -61,7 +63,7 @@ async function resolveCastVoices(
   ] as const) {
     const resolved = hostIds.has(person.id)
       ? await resolveHostVoice(podcastId, person)
-      : person.resolvedVoiceId
+      : hasCurrentVoice(person)
         ? { voiceId: person.resolvedVoiceId }
         : await resolveGuestVoice(podcastId, episodeId, person);
     assignments.push({
@@ -184,8 +186,6 @@ export async function streamEpisodeAudio(
       ? episode.ttsChunks
       : chunkTranscript(episode.transcript);
 
-  const voices = await resolveCastVoices(podcastId, episodeId, podcast, episode);
-
   const cachedSizes = await Promise.all(
     chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
   );
@@ -278,6 +278,11 @@ export async function streamEpisodeAudio(
   }
 
   // Path 2: Live streaming path (chunks still generating)
+  // Voices are only needed here — resolved after the all-cached fast path so
+  // replaying a fully cached episode never triggers a (slow, billed) voice
+  // design just to hand an unused voice id to nothing.
+  const voices = await resolveCastVoices(podcastId, episodeId, podcast, episode);
+
   // NEVER return Content-Length while chunks are still generating (chunked transfer only)
   if (typeof res.removeHeader === "function") {
     res.removeHeader("Content-Length");
