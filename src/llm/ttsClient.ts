@@ -35,8 +35,7 @@ import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
 const TTS_MODEL = "gemini-3.8-flash-tts";
 
 // The Gemini 3.8 TTS models and the Voices API are only served from the
-// `global` location, regardless of env.VERTEX_AI_LOCATION (which text
-// generation uses and may legitimately differ).
+// `global` location.
 const TTS_LOCATION = "global";
 
 let clientPromise: Promise<GoogleGenAIClient> | null = null;

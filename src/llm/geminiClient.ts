@@ -1,6 +1,6 @@
 import type { ApiError, GoogleGenAI as GoogleGenAIClient } from "@google/genai" with { "resolution-mode": "import" };
 import type { ZodType } from "zod";
-import { unknown, z } from "zod";
+import { z } from "zod";
 import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
 
@@ -28,9 +28,22 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 // service account/runtime identity does need the `roles/aiplatform.user`
 // role for calls to succeed.
 //
+// All text generation goes through the Interactions API
+// (`client.interactions.create`), which is where Google launches new
+// models/features going forward; `generateContent` remains supported but
+// isn't used here. Two things about it that aren't obvious:
+//  - It only serves the `global` location (hence the constant below; there
+//    is no location env var anymore).
+//  - Interactions are stored server-side for 7 days BY DEFAULT. Every call
+//    here sets `store: false` (stateless / zero data retention): prompts
+//    carry users' source material and the responses are full transcripts,
+//    and nothing here uses `previous_interaction_id` chaining.
+//
 // TTS is a separate concern — see llm/ttsClient.ts, which uses the same
 // platform and credentials but talks to Gemini 3.8 Flash TTS's
-// `generateContent` and Voices APIs (always in the `global` location).
+// `generateContent` and Voices APIs (the Enterprise surface for that model).
+const LOCATION = "global";
+
 function getClient(): Promise<GoogleGenAIClient> {
   if (!clientPromise) {
     clientPromise = import("@google/genai").then(
@@ -38,7 +51,7 @@ function getClient(): Promise<GoogleGenAIClient> {
         new GoogleGenAI({
           enterprise: true,
           project: env.FIREBASE_PROJECT_ID,
-          location: env.VERTEX_AI_LOCATION,
+          location: LOCATION,
           googleAuthOptions: serviceAccount ? { credentials: serviceAccount } : undefined,
         }),
     );
@@ -78,7 +91,7 @@ interface GenerateTextOptions<T> {
   schema: ZodType<T>;
 }
 
-// Vertex AI's per-minute quota for TEXT_MODEL trips under bursts of
+// The platform's per-minute quota for TEXT_MODEL trips under bursts of
 // concurrent calls (confirmed empirically: 1/30 concurrent requests came
 // back 429 RESOURCE_EXHAUSTED while the other 29 succeeded) — the flat
 // `attempt * 500ms` backoff below isn't built for that, since it barely
@@ -105,26 +118,37 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   throw lastError;
 }
 
+/**
+ * Reads the text out of a finished interaction. A non-"completed" status
+ * (e.g. "incomplete" when the output hit its token limit) is an error, not
+ * a result: for plain text especially, a truncated transcript would
+ * otherwise be accepted silently as if it were whole.
+ */
+function readOutputText(interaction: { status?: string; output_text?: string }): string {
+  if (interaction.status !== "completed") {
+    throw new Error(`Gemini interaction ended with status "${interaction.status}" instead of "completed"`);
+  }
+  if (!interaction.output_text) {
+    throw new Error("Gemini returned an empty response");
+  }
+  return interaction.output_text;
+}
+
 export async function generateText<T>(options: GenerateTextOptions<T>): Promise<T> {
-  const responseSchema = toGeminiSchema(options.schema);
+  const responseSchema = toGeminiSchema(options.schema) as Record<string, unknown>;
   const client = await getClient();
 
-  const response = await withRetry(() =>
-    client.models.generateContent({
+  const interaction = await withRetry(() =>
+    client.interactions.create({
       model: TEXT_MODEL,
-      contents: options.prompt,
-      config: {
-        systemInstruction: options.systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema,
-      },
+      input: options.prompt,
+      system_instruction: options.systemInstruction,
+      response_format: responseSchema,
+      store: false,
     }),
   );
 
-  const text = response.text;
-  if (!text) {
-    throw new Error("Gemini returned an empty response");
-  }
+  const text = readOutputText(interaction);
 
   let parsed: unknown;
   try {
@@ -157,17 +181,14 @@ interface GeneratePlainTextOptions {
 export async function generatePlainText(options: GeneratePlainTextOptions): Promise<string> {
   const client = await getClient();
 
-  const response = await withRetry(() =>
+  const interaction = await withRetry(() =>
     client.interactions.create({
       model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
+      store: false,
     }),
   );
 
-  const text = response.output_text;
-  if (!text) {
-    throw new Error("Gemini returned an empty response");
-  }
-  return text;
+  return readOutputText(interaction);
 }

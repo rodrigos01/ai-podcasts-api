@@ -52,11 +52,10 @@ FIREBASE_PROJECT_ID=...
 FIREBASE_SERVICE_ACCOUNT_PATH=./path-to-service-account.json
 FIREBASE_STORAGE_BUCKET=your-bucket-name
 FIRESTORE_DATABASE_ID=podcasts
-VERTEX_AI_LOCATION=global
 PORT=3000
 ```
 
-`FIREBASE_SERVICE_ACCOUNT_PATH` is optional — set it for local dev (pointing at a downloaded service-account JSON key); leave it unset in any deployed environment. `VERTEX_AI_LOCATION` is also optional (defaults to `global`) and only affects text generation — speech is always `global`. `FIREBASE_PROJECT_ID` doubles as the Gemini Enterprise project — Firebase projects are GCP projects, and text generation and speech run against this same project.
+`FIREBASE_SERVICE_ACCOUNT_PATH` is optional — set it for local dev (pointing at a downloaded service-account JSON key); leave it unset in any deployed environment. `FIREBASE_PROJECT_ID` doubles as the Gemini Enterprise project — Firebase projects are GCP projects, and text generation and speech run against this same project.
 
 ### 3. Install & run
 
