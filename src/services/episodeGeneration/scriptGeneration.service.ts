@@ -128,10 +128,11 @@ async function generateOnce(
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
 
-  const raw = await generatePlainText({
+  const scriptParams = {
     systemInstruction: buildScriptSystemInstruction(cast, ctx),
-    prompt: buildScriptGenerationPrompt(cast, wordTarget),
-  });
+    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
+  }
+  const raw = await generatePlainText(scriptParams);
 
   const turns = parseScriptTurns(raw);
   if (turns.length === 0) {

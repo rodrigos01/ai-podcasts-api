@@ -1,6 +1,6 @@
 import type { ApiError, GoogleGenAI as GoogleGenAIClient } from "@google/genai" with { "resolution-mode": "import" };
 import type { ZodType } from "zod";
-import { z } from "zod";
+import { unknown, z } from "zod";
 import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
 
@@ -155,16 +155,14 @@ export async function generatePlainText(options: GeneratePlainTextOptions): Prom
   const client = await getClient();
 
   const response = await withRetry(() =>
-    client.models.generateContent({
+    client.interactions.create({
       model: TEXT_MODEL,
-      contents: options.prompt,
-      config: {
-        systemInstruction: options.systemInstruction,
-      },
+      input: options.prompt,
+      system_instruction: options.systemInstruction,
     }),
   );
 
-  const text = response.text;
+  const text = response.output_text;
   if (!text) {
     throw new Error("Gemini returned an empty response");
   }
