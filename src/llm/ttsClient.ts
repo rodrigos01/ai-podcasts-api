@@ -9,13 +9,24 @@ import { stream } from "../controllers/audio.controller";
 // The Gemini 3.8 Flash TTS "interactions"/"voices" bridge, replacing the old
 // @google-cloud/text-to-speech pipeline entirely (see AGENTS.md). Confirmed
 // empirically in the investigation spike: this API is NOT reachable via
-// Vertex AI on this project today (voices.list/voices.create 404 at
-// Vertex's own routing layer, every location/api_version tried;
-// interactions.create rejects every model tried there, including one that
-// works fine via geminiClient.ts's Vertex text-gen path) — only the AI
-// Studio Generative Language API (a plain API key) works. getTtsClient
-// below defaults to Vertex, probes it once, and falls back to AI Studio so
-// this is ready the moment Vertex support lands, without a code change.
+// Vertex AI on this project today — only the AI Studio Generative Language
+// API (a plain API key) works. getTtsClient below defaults to Vertex,
+// probes it once, and falls back to AI Studio so this is ready the moment
+// Vertex support lands, without a code change.
+//
+// The probe specifically has to exercise `interactions.create` (synthesis),
+// not just `voices.list` (browsing) — confirmed live (2026-10-01) that
+// Vertex's rollout of this preview API is partial and the two don't move
+// together: `voices.list` now returns a real catalog (prebuilt voices like
+// "achernar"), but both `voices.create` (any voice type, "prompted" or
+// "prebuilt") and `interactions.create` (this model, any voice id,
+// including ones straight from that same list) still reject outright with
+// a 400 ("Unsupported voice type." / "Unsupported model interaction: ...").
+// A `voices.list`-only probe was passing on the strength of an endpoint
+// this app doesn't actually need standalone, while the two endpoints that
+// matter — minting a voice and running synthesis — were both still down,
+// so every real request after startup 400'd. Probing `interactions.create`
+// itself is the only signal that actually reflects what this app needs.
 //
 // @google/genai ships ESM-only type declarations that trip up TS's Node16
 // module resolution for a static import — same issue geminiClient.ts's
@@ -40,9 +51,30 @@ let resolvedModel: string | null = null;
 
 let clientPromise: Promise<TtsClientHandle> | null = null;
 
-async function probeVertexVoicesApi(client: GoogleGenAIClient): Promise<boolean> {
+// Exercises the actual synthesis endpoint rather than `voices.list` (see
+// the module comment above for why) — needs a real voice id to put in the
+// request, which this pulls straight from `voices.list` rather than
+// hardcoding one of Vertex's prebuilt names, so the probe can't itself go
+// stale if that catalog changes. On success, the call is cancelled
+// immediately without reading from the stream: `interactions.create`
+// rejects an unsupported model/voice synchronously, before any audio is
+// produced, so a failing probe costs nothing, and a successful one is only
+// ever asked to validate the request, never to actually synthesize.
+async function probeVertexInteractionsApi(client: GoogleGenAIClient): Promise<boolean> {
   try {
-    await client.voices.list({ page_size: 1 });
+    const voices = await client.voices.list({ page_size: 1 });
+    const probeVoiceId = voices.voices?.[0]?.id;
+    if (!probeVoiceId) return false;
+    const probeStream = await client.interactions.create({
+      model: TTS_MODEL_CANDIDATES[0],
+      input: [{ type: "user_input", content: [{ type: "text", text: "Testing." }] }],
+      response_format: { type: "audio" },
+      generation_config: {
+        speech_config: { mode: "conversational", speakers: [{ voice: probeVoiceId }] },
+      },
+      stream: true,
+    } as Parameters<typeof client.interactions.create>[0]);
+    await (probeStream as unknown as { return?: () => Promise<unknown> }).return?.();
     return true;
   } catch {
     return false;
@@ -57,7 +89,7 @@ async function loadTtsClient(): Promise<TtsClientHandle> {
     location: env.VERTEX_AI_LOCATION,
     googleAuthOptions: serviceAccount ? { credentials: serviceAccount } : undefined,
   });
-  if (await probeVertexVoicesApi(vertexClient)) {
+  if (await probeVertexInteractionsApi(vertexClient)) {
     return { client: vertexClient, backend: "vertex" };
   }
   if (!env.GEMINI_API_KEY) {
