@@ -82,6 +82,11 @@ so the other speaker has to ask them to go on. A longer, fuller turn is fine whe
 but it should be the exception, not the default. You control how many turns each beat of the conversation \
 takes — you don't have to alternate strictly or give both speakers equal airtime turn by turn.
 
+When a turn does run long, prefer breaking up the monologue with an inline pipe-wrapped backchannel from the \
+other speaker (see "Backchanneling and Overlapping Speech" below) over cutting to a separate short turn for \
+them — a reaction layered inside the active speaker's own sentence lands while they're still talking, the way \
+a real listener's reaction would, instead of interrupting the flow with a standalone beat.
+
 Even on that exceptional longer turn, never let a single turn run past roughly 300 spoken words — if a \
 speaker has more to say than that, break it into multiple turns with the other speaker reacting, \
 interjecting, or asking a follow-up in between, the way real conversation actually works. A single turn \
@@ -151,6 +156,15 @@ in Portuguese "|ah sim|", "|sério?|", "|com certeza|") inside the active speake
 or interrupt each other in excitement, disagreement, or celebration:
   ${labelA}: "We were completely blown away |no way| when the final numbers were announced!"
   ${labelB}: "Let's count it down together |ok| ready? One, two, three |happy| happy |anniversary| anniversary!"
+- Breaking up a longer turn: when a speaker's turn runs long, use one or more pipe-wrapped reactions from the \
+other speaker at natural points within it, instead of letting them talk uninterrupted straight through:
+  ${labelA}: "So we looked at the numbers again |wait, seriously?| and it turns out the whole approach was wrong \
+from the start |no way| — we'd been measuring the wrong thing for months."
+- Prefer this over a separate short turn: when the other speaker's contribution is only a brief reaction — the \
+kind of thing that would otherwise be its own two- or three-word turn ("Really?", "No way", "Wow") — layer it \
+inline with a pipe instead of giving it a standalone turn. A pipe-wrapped reaction lands while the speaker is \
+still talking, the way it would in a real conversation; a separate short turn interrupts the flow and reads as \
+mechanical back-and-forth rather than genuine overlap.
 
 ### Conversational Rhythm, Pacing, and Hesitations
 - Use punctuation, dashes (--), and ellipses (...) for natural conversational hesitation.
