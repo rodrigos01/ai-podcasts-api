@@ -83,8 +83,13 @@ async function probeVertexInteractionsApi(client: GoogleGenAIClient): Promise<bo
 
 async function loadTtsClient(): Promise<TtsClientHandle> {
   const { GoogleGenAI } = await import("@google/genai");
+  // `enterprise: true` is the SDK's current name for what used to be the
+  // `vertexai` flag (same aiplatform.googleapis.com endpoint either way —
+  // see geminiClient.ts's getClient for the longer version of this note).
+  // "vertex"/"vertexClient" below keep their names since this file's own
+  // backend-selection logic/types are unaffected by the SDK's renaming.
   const vertexClient = new GoogleGenAI({
-    vertexai: true,
+    enterprise: true,
     project: env.FIREBASE_PROJECT_ID,
     location: env.VERTEX_AI_LOCATION,
     googleAuthOptions: serviceAccount ? { credentials: serviceAccount } : undefined,

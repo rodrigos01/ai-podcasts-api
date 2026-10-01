@@ -12,28 +12,33 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 // import/require conditions, which trips up TS's Node16 module resolution
 // for a static `require`. A dynamic import sidesteps that entirely.
 //
-// Routed through the Vertex AI API (`vertexai: true` + project/location),
-// not the API-key-based Generative Language API ("AI Studio") this client
-// used before 2026-09-20 — AI Studio bills through a separate, pre-paid
-// path, whereas Vertex bills the same GCP project (standard metered
-// billing) that Firebase Admin already uses, so this reuses the same
-// credentials resolution: the loaded service-account object locally,
-// Application Default Credentials (the runtime's attached service account)
-// in any deployed environment. The GCP project backing Firebase IS the
-// Vertex AI project (see env.ts), so no separate project id or API key is
-// needed here — but the service account/runtime identity does need the
-// `roles/aiplatform.user` role for Vertex AI calls to succeed.
+// Routed through the Gemini Enterprise Agent Platform API (`enterprise:
+// true` + project/location — the SDK's current name for what used to be
+// called "Vertex AI"; the `vertexai` flag still works but the SDK's own
+// types now say `enterprise` is recommended instead, same underlying
+// aiplatform.googleapis.com endpoint either way), not the API-key-based
+// Generative Language API ("AI Studio") this client used before
+// 2026-09-20 — AI Studio bills through a separate, pre-paid path, whereas
+// this bills the same GCP project (standard metered billing) that Firebase
+// Admin already uses, so this reuses the same credentials resolution: the
+// loaded service-account object locally, Application Default Credentials
+// (the runtime's attached service account) in any deployed environment.
+// The GCP project backing Firebase IS the Gemini Enterprise project (see
+// env.ts), so no separate project id or API key is needed here — but the
+// service account/runtime identity does need the `roles/aiplatform.user`
+// role for calls to succeed.
 //
 // TTS is a separate concern entirely now — see llm/ttsClient.ts, which
 // talks to Gemini 3.8 Flash TTS's `interactions`/`voices` API and (unlike
 // text generation here) has to fall back to the AI Studio API with a plain
-// API key, since that API isn't reachable via Vertex AI on this project.
+// API key, since that API isn't fully usable there yet on this project
+// (see ttsClient.ts's module comment).
 function getClient(): Promise<GoogleGenAIClient> {
   if (!clientPromise) {
     clientPromise = import("@google/genai").then(
       ({ GoogleGenAI }) =>
         new GoogleGenAI({
-          vertexai: true,
+          enterprise: true,
           project: env.FIREBASE_PROJECT_ID,
           location: env.VERTEX_AI_LOCATION,
           googleAuthOptions: serviceAccount ? { credentials: serviceAccount } : undefined,
