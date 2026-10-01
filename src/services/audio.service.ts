@@ -67,7 +67,6 @@ async function resolveCastVoices(
     assignments.push({
       label: speakerLabel(person.name, other.name),
       voiceId: resolved.voiceId,
-      languageCode: resolved.languageCode,
     });
   }
   return assignments;

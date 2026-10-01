@@ -28,11 +28,9 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 // service account/runtime identity does need the `roles/aiplatform.user`
 // role for calls to succeed.
 //
-// TTS is a separate concern entirely now — see llm/ttsClient.ts, which
-// talks to Gemini 3.8 Flash TTS's `interactions`/`voices` API and (unlike
-// text generation here) has to fall back to the AI Studio API with a plain
-// API key, since that API isn't fully usable there yet on this project
-// (see ttsClient.ts's module comment).
+// TTS is a separate concern — see llm/ttsClient.ts, which uses the same
+// platform and credentials but talks to Gemini 3.8 Flash TTS's
+// `generateContent` and Voices APIs (always in the `global` location).
 function getClient(): Promise<GoogleGenAIClient> {
   if (!clientPromise) {
     clientPromise = import("@google/genai").then(

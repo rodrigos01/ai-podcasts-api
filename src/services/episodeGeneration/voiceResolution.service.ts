@@ -12,8 +12,15 @@ import {
 
 export interface ResolvedVoice {
   voiceId: string;
-  languageCode?: string;
 }
+
+// Bumped whenever previously-stored `voice_...` ids stop being valid (e.g.
+// the 2026-10 move from the AI Studio Voices API to the Gemini Enterprise
+// Agent Platform's — a voice designed on one doesn't exist on the other).
+// Mixed into voiceHash so every host's cached voice is treated as stale and
+// re-designed once on its next use, instead of reusing an id the current
+// backend has never heard of.
+const VOICE_BACKEND_VERSION = "enterprise-1";
 
 /**
  * Detects a stale cached voice — an edit to name/persona/accent/voice hint
@@ -23,7 +30,9 @@ export interface ResolvedVoice {
  */
 function voiceHash(person: Person): string {
   return createHash("sha256")
-    .update(`${person.name}\u0000${person.persona}\u0000${person.accent ?? ""}\u0000${person.voice}`)
+    .update(
+      `${VOICE_BACKEND_VERSION}\u0000${person.name}\u0000${person.persona}\u0000${person.accent ?? ""}\u0000${person.voice}`,
+    )
     .digest("hex");
 }
 
@@ -39,7 +48,7 @@ async function designFor(person: Person): Promise<ResolvedVoice> {
     gender: req.gender,
     voiceDescription: req.voiceDescription,
   });
-  return { voiceId, languageCode: req.languageCode };
+  return { voiceId };
 }
 
 /**
@@ -88,7 +97,7 @@ export async function resolveGuestVoice(
   const staleVoiceId = guest.resolvedVoiceOrigin === "design" ? guest.resolvedVoiceId : null;
 
   const r = await designFor(guest);
-  const resolved = { voiceId: r.voiceId, origin: "design" as const, languageCode: r.languageCode };
+  const resolved = { voiceId: r.voiceId, origin: "design" as const };
 
   await setGuestResolvedVoice(podcastId, episodeId, guest.id, {
     resolvedVoiceId: resolved.voiceId,

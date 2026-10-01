@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { Person } from "../src/schemas/person.schema";
 
 vi.mock("../src/llm/geminiClient", () => ({
@@ -8,7 +9,6 @@ vi.mock("../src/llm/geminiClient", () => ({
 vi.mock("../src/llm/ttsClient", () => ({
   designVoice: vi.fn(),
   deleteVoice: vi.fn(),
-  findLibraryVoice: vi.fn(),
 }));
 
 vi.mock("../src/data/episode.repository", () => ({
@@ -22,7 +22,8 @@ vi.mock("../src/data/podcast.repository", () => ({
 import { generateText } from "../src/llm/geminiClient";
 import { deleteVoice, designVoice } from "../src/llm/ttsClient";
 import { setGuestResolvedVoice } from "../src/data/episode.repository";
-import { cleanupGuestVoice, resolveGuestVoice } from "../src/services/episodeGeneration/voiceResolution.service";
+import { setHostResolvedVoice } from "../src/data/podcast.repository";
+import { cleanupGuestVoice, resolveGuestVoice, resolveHostVoice } from "../src/services/episodeGeneration/voiceResolution.service";
 
 describe("voiceResolution.service", () => {
   beforeEach(() => {
@@ -83,7 +84,6 @@ describe("voiceResolution.service", () => {
       expect(result).toEqual({
         voiceId: "custom-voice-123",
         origin: "design",
-        languageCode: "en-US",
       });
     });
 
@@ -119,7 +119,6 @@ describe("voiceResolution.service", () => {
       expect(result).toEqual({
         voiceId: "custom-voice-456",
         origin: "design",
-        languageCode: "es-AR",
       });
     });
 
@@ -146,6 +145,45 @@ describe("voiceResolution.service", () => {
       await resolveGuestVoice("pod-1", "ep-1", guestWithStaleVoice);
 
       expect(deleteVoice).toHaveBeenCalledWith("old-voice-789");
+    });
+  });
+
+  describe("resolveHostVoice", () => {
+    it("re-designs a host whose cached voice was stored before the move to the Enterprise Voices API", async () => {
+      // The hash a host's voice was cached under before VOICE_BACKEND_VERSION
+      // existed — a `voice_...` id designed on AI Studio, which the
+      // Enterprise Voices API has never heard of. It must NOT be reused.
+      const legacyHash = createHash("sha256")
+        .update("Maya Cruz\u0000A curious host.\u0000\u0000warm and quick")
+        .digest("hex");
+      const host: Person = {
+        id: "host-1",
+        name: "Maya Cruz",
+        persona: "A curious host.",
+        voice: "warm and quick",
+        resolvedVoiceId: "voice_designed_on_ai_studio",
+        resolvedVoiceOrigin: "design",
+        resolvedVoiceHash: legacyHash,
+      };
+
+      vi.mocked(generateText).mockResolvedValueOnce({
+        languageCode: "en-US",
+        languageName: "English",
+        gender: "female",
+        voiceDescription: "A warm, quick female voice.",
+        displayName: "Maya Cruz Voice",
+      });
+      vi.mocked(designVoice).mockResolvedValueOnce("voice_designed_on_enterprise");
+
+      const result = await resolveHostVoice("pod-1", host);
+
+      expect(result).toEqual({ voiceId: "voice_designed_on_enterprise" });
+      expect(designVoice).toHaveBeenCalledTimes(1);
+      expect(setHostResolvedVoice).toHaveBeenCalledWith(
+        "pod-1",
+        "host-1",
+        expect.objectContaining({ resolvedVoiceId: "voice_designed_on_enterprise" }),
+      );
     });
   });
 

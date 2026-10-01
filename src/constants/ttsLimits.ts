@@ -7,10 +7,13 @@
 // constant for why the word cap exists.
 export const TURNS_PER_CHUNK = 10;
 
-// Gemini's `interactions.create` now outright rejects (not just eventually
-// times out) a request whose synthesized audio would exceed ~300s — a hard
-// server-side limit discovered live, not the soft "runaway generation"
-// ceiling MAX_CHUNK_AUDIO_SECONDS below already guarded against. A fixed
+// Gemini TTS outright rejects (not just eventually times out) a request
+// whose synthesized audio would exceed ~300s — a hard server-side limit
+// discovered live on the AI Studio `interactions.create` surface (not
+// re-measured since moving to the Enterprise `generateContent` one, which
+// documents no limit either way, so the same conservative cap is kept) —
+// and not the soft "runaway generation" ceiling MAX_CHUNK_AUDIO_SECONDS
+// below already guarded against. A fixed
 // 10-turns-per-chunk size doesn't bound audio duration at all (a chunk of
 // 10 short backchannel turns and a chunk of 10 long monologue turns produce
 // wildly different audio lengths), so chunkTranscript also caps each
@@ -43,7 +46,7 @@ export const MAX_WORDS_PER_CHUNK = 650;
 export const STREAM_INACTIVITY_TIMEOUT_MS = 20_000;
 
 // Client-side abort threshold for a single chunk's synthesized audio,
-// checked live as PCM deltas arrive (ttsClient.ts's consumeInteractionStream)
+// checked live as PCM deltas arrive (ttsClient.ts's consumeStream)
 // — a defense-in-depth backstop, not the primary guard against Gemini's
 // ~300s hard server-side limit (see MAX_WORDS_PER_CHUNK above, which sizes
 // chunks to stay under that limit proactively, before the request is even
