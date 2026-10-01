@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildContentItems, looksLikeModerationRejection, soloSpeakerLabel } from "../src/llm/ttsClient";
+import { buildSpeechParts, looksLikeModerationRejection, soloSpeakerLabel } from "../src/llm/ttsClient";
 import type { ScriptTurn } from "../src/utils/scriptText";
 
 describe("soloSpeakerLabel", () => {
@@ -24,76 +24,49 @@ describe("soloSpeakerLabel", () => {
   });
 });
 
-describe("buildContentItems", () => {
-  it("builds content items with speaker and style in multiSpeaker mode", () => {
+describe("buildSpeechParts", () => {
+  it("builds parts with speaker and style metadata in multiSpeaker mode", () => {
     const turns: ScriptTurn[] = [
       { speaker: "Marcus", text: "Look at this [whispers] carefully.", style: "whispering" },
       { speaker: "Ray", text: "I see it!" },
     ];
-    const items = buildContentItems(turns, true);
-    expect(items).toEqual([
+    expect(buildSpeechParts(turns, true)).toEqual([
       {
-        type: "text",
         text: "Look at this <whispers> carefully.",
-        annotations: [
-          {
-            type: "speech_metadata",
-            speaker: "Marcus",
-            style: "whispering",
-          },
-        ],
+        speechMetadata: { speaker: "Marcus", style: "whispering" },
       },
       {
-        type: "text",
         text: "I see it!",
-        annotations: [
-          {
-            type: "speech_metadata",
-            speaker: "Ray",
-          },
-        ],
+        speechMetadata: { speaker: "Ray" },
       },
     ]);
   });
 
-  it("drops turns with no spoken text instead of sending an empty text item", () => {
+  it("drops turns with no spoken text instead of sending an empty text part", () => {
     // A turn that parsed with a speaker label but no words (e.g. the only
-    // content was a Style annotation) must never reach the API as
-    // `{ type: "text", text: "" }` — Gemini TTS rejects that outright with
-    // "400 Missing text in content of type text.".
+    // content was a Style annotation) must never reach the API as an empty
+    // text part — Gemini TTS rejects that outright with "400 Missing text".
     const turns: ScriptTurn[] = [
       { speaker: "Marcus", text: "Hey Ray." },
       { speaker: "Ray", text: "  ", style: "laughs" },
       { speaker: "Marcus", text: "Anyway." },
     ];
-    const items = buildContentItems(turns, true);
-    expect(items).toHaveLength(2);
-    expect(items.every((item) => item.text.length > 0)).toBe(true);
+    const parts = buildSpeechParts(turns, true);
+    expect(parts).toHaveLength(2);
+    expect(parts.every((part) => part.text.length > 0)).toBe(true);
   });
 
-  it("builds content items with style in single speaker mode", () => {
+  it("omits the speaker and attaches only style in single speaker mode", () => {
     const turns: ScriptTurn[] = [
       { speaker: "Marcus", text: "Quiet now.", style: "softly" },
       { speaker: "Marcus", text: "Back to normal." },
     ];
-    const items = buildContentItems(turns, false);
-    expect(items).toEqual([
-      {
-        type: "text",
-        text: "Quiet now.",
-        annotations: [
-          {
-            type: "speech_metadata",
-            style: "softly",
-          },
-        ],
-      },
-      {
-        type: "text",
-        text: "Back to normal.",
-        annotations: undefined,
-      },
+    const parts = buildSpeechParts(turns, false);
+    expect(parts).toEqual([
+      { text: "Quiet now.", speechMetadata: { style: "softly" } },
+      { text: "Back to normal." },
     ]);
+    expect("speechMetadata" in parts[1]!).toBe(false);
   });
 });
 
