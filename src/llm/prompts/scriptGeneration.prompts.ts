@@ -68,121 +68,84 @@ Pre-production source material for this episode:
 ${sourceBlock(ctx.sources)}
 
 Even though you are authoring both sides of the conversation, keep ${a.name} and ${b.name} as fully \
-independent individuals. Each of them only knows their own persona and background, plus whatever has \
-actually been said aloud so far in the conversation — never let one of them react to, reference, or build \
-on something the other hasn't actually said out loud, even though you (the writer) already know it. Give \
-them distinct voices and opinions: they should react naturally, disagree when it fits their persona, and \
-not simply agree with everything the other says.
+independent individuals: each only knows their own persona and background, plus whatever has actually been \
+said aloud so far — never let one react to, reference, or build on something the other hasn't actually said \
+out loud, even though you (the writer) already know it. Give them distinct voices and opinions; they should \
+disagree when it fits their persona rather than simply agreeing with everything the other says.
 
-Real conversation is uneven in length and rhythm, not a series of balanced statements. Most turns should \
-be short — as brief as a single reaction, a short interjection, or a partial thought — rather than a full \
-explanation, even when a speaker has more to say. A speaker can also leave something deliberately \
-unfinished: naming that something happened, or hinting at an opinion, without immediately explaining it, \
-so the other speaker has to ask them to go on. A longer, fuller turn is fine when it's genuinely earned, \
-but it should be the exception, not the default. You control how many turns each beat of the conversation \
-takes — you don't have to alternate strictly or give both speakers equal airtime turn by turn.
+## Pacing
 
-When a turn does run long, prefer breaking up the monologue with an inline pipe-wrapped backchannel from the \
-other speaker (see "Backchanneling and Overlapping Speech" below) over cutting to a separate short turn for \
-them — a reaction layered inside the active speaker's own sentence lands while they're still talking, the way \
-a real listener's reaction would, instead of interrupting the flow with a standalone beat.
+Real conversation is uneven, not a series of balanced statements. Most turns should be short — a reaction, \
+a short interjection, a partial thought — rather than a full explanation, even when a speaker has more to \
+say. A speaker can leave something deliberately unfinished (naming that something happened, or hinting at \
+an opinion, without explaining it) so the other has to ask them to go on. A longer, fuller turn is fine when \
+genuinely earned, but it's the exception, not the default — you control how many turns each beat takes, and \
+don't have to alternate strictly or give both speakers equal airtime.
 
-Even on that exceptional longer turn, never let a single turn run past roughly 300 spoken words — if a \
-speaker has more to say than that, break it into multiple turns with the other speaker reacting, \
-interjecting, or asking a follow-up in between, the way real conversation actually works. A single turn \
-that runs too long causes real problems downstream in production, so treat this as a hard ceiling, not a \
-soft target.
+When a turn does run long, break it up with the other speaker reacting or interjecting — prefer an inline \
+pipe-wrapped backchannel (see Backchanneling below) over cutting to a separate short turn, since a reaction \
+layered inside the active speaker's own sentence lands while they're still talking, the way a real listener's \
+would. Regardless of technique, never let a single turn run past roughly 300 spoken words — this is a hard \
+ceiling, not a soft target, since an overlong turn causes real problems downstream in production.
 
-Don't have every turn end with a question. Real conversational partners mostly react, state an opinion, \
-add their own angle, or just let a point land — they don't interview each other. An occasional question is \
-natural and welcome when it's genuinely what the moment calls for, but if a turn is about to ask something \
-just to keep the other person talking, make it something substantive instead. The one exception is if this \
-show's format (see the structure/production notes above) specifically calls for one speaker to interview \
-the other — follow that format if so.
+Don't have every turn end with a question — real conversational partners mostly react, state an opinion, or \
+let a point land rather than interviewing each other. An occasional question is fine when the moment calls \
+for it, but don't ask one just to hand the conversation back. The exception: if this show's format (see the \
+structure/production notes above) specifically calls for one speaker to interview the other, follow that.
 
-The script feeds Gemini 3.8 Flash TTS directly, which treats text strictly as a verbatim transcript and \
-separates turn-level delivery style from inline vocal tags. Follow these guidelines:
+## Formatting for Gemini 3.8 Flash TTS
 
-### Turn-Level Delivery Style (the "Style:" line)
-You can optionally include a "Style:" line immediately following the speaker's text for that turn:
-- Use "Style:" for sustained delivery attributes across the turn: emotion, prosody, pace, or delivery style \
-(e.g. "Style: whispering", "Style: out of breath", "Style: muttering", "Style: sarcastic", "Style: speaking rapidly", \
-"Style: speaking slowly", "Style: cheerful, energetic", "Style: angry tone", "Style: deadpan").
-- Keep "Style:" concise (a short phrase). Never put names, character personas, ages, or permanent traits in "Style:".
-- Omit "Style:" when standard speech delivery is suitable — most turns sound best without any "Style:" line.
-- "Style:" describes HOW a turn's spoken words are delivered — it is never a substitute for those words, and \
-it never stands alone. Every turn's speaker line must have actual spoken content after the colon, even for a \
-turn that's a pure reaction with nothing new to say. Never write a turn as just "${labelA}:" (or "${labelB}:") \
-followed only by a "Style:" line and no words — that's a formatting error even though the intent (a wordless \
-reaction) is valid. If a turn really is just a non-verbal reaction and nothing more, write it as spoken content \
-using the inline vocal-burst tags below (e.g. "${labelA}: <laugh>"), not as a bare "Style:" line.
-- "Style:" ALWAYS belongs to the same turn as the words it describes — never split it out into its own turn \
-right before the line it's meant to modify. Wrong (two turns, the first with no words):
-  ${labelA}:
-  Style: deadpan
+The script feeds Gemini TTS directly as a verbatim transcript. It supports four kinds of markup, each with a \
+distinct purpose — don't mix them up:
 
-  ${labelA}: <the actual line>
-  Right (one turn — the line and its "Style:" together):
-  ${labelA}: <the actual line>
-  Style: deadpan
+### "Style:" — sustained delivery for a whole turn
+An optional line immediately after a turn's text, describing how it's delivered: emotion, prosody, pace (e.g. \
+"Style: whispering", "Style: sarcastic", "Style: speaking rapidly", "Style: deadpan"). Keep it a short phrase \
+— never a name, persona, age, or other permanent trait — and omit it when standard delivery is fine, which is \
+most turns.
 
-### Point-in-time Vocal Bursts (inline angle tags)
-Place momentary non-speech human vocalizations directly inline inside the text using angle brackets (<...>) at the \
-exact point where the sound should occur:
-- Common cues: <cough>, <breath>, <heavy breath>, <exhales>, <cackle>, <cheer>, <chuckle>, <chuckles>, <gasp>, \
-<giggle>, <groan>, <grunt>, <laugh>, <laughter>, <pant>, <phew>, <sigh>, <sighs>, <snicker>, <snort>, <sob>, \
-<throat-clearing>, <tsk>, <whimper>, <yawn>, <short pause>, <long pause>.
-- Stick to human vocalizations rather than non-vocal sound effects.
+"Style:" describes delivery; it is never a substitute for the words themselves and never stands alone. Every \
+turn needs actual spoken content after the colon, even a pure reaction — write that as an inline vocal-burst \
+tag (e.g. "${labelA}: <laugh>"), never as a bare "Style:" line with no text. "Style:" also always belongs to \
+the turn it describes, never a separate turn before it:
+  Wrong: "${labelA}:" / "Style: deadpan" (its own turn, no words) followed by "${labelA}: <the actual line>"
+  Right: "${labelA}: <the actual line>" / "Style: deadpan" (one turn)
 
-### Delivery Cues & Style in Transcript's Language
-Write all delivery cues (<...>) and "Style:" descriptions in the same language as the transcript \
-(matching the dialogue, podcast description, topics, and source material). For example:
-- In English: use cues like <laughter>, <sigh>, <gasp>, <short pause>, and styles like "Style: whispering", "Style: sarcastic", "Style: speaking rapidly".
-- In Spanish: use cues like <risas>, <suspiro>, <jadeo>, <pausa corta>, and styles like "Style: susurrando", "Style: sarcástico", "Style: hablando rápido".
-- In Portuguese: use cues like <risos>, <suspiro>, <ofegante>, <pausa curta>, and styles like "Style: sussurrando", "Style: sarcástico", "Style: falando rápido".
-- In French: use cues like <rires>, <soupir>, <halètement>, <pause courte>, and styles like "Style: chuchoté", "Style: sarcastique", "Style: parlant rapidement".
+### Inline vocal bursts — momentary, at an exact point
+Human vocalizations placed inline with angle brackets (<...>) at the exact point they occur: <cough>, \
+<breath>, <exhales>, <chuckle>, <gasp>, <giggle>, <groan>, <laugh>, <sigh>, <snort>, <sob>, <short pause>, \
+<long pause>, and similar. Stick to human vocalizations, not non-vocal sound effects.
 
-### Backchanneling and Overlapping Speech (using pipe characters |...|)
-In natural conversations, listeners react, interject, or speak over each other without waiting for a full turn change. \
-Gemini 3.8 Flash TTS natively synthesizes concurrent multi-speaker audio when you wrap listener reactions in \
-pipe characters (|reaction|) directly inside the active speaker's line. Use this capability whenever it fits the natural \
-conversational flow:
-- Short backchannel reactions: Layer brief listener acknowledgments, affirmations, or reactions in the transcript's \
-language (e.g. in English "|oh hmm|", "|really?|", "|totally|", "|absolutely|"; in Spanish "|ah claro|", "|en serio?|", "|totalmente|"; \
-in Portuguese "|ah sim|", "|sério?|", "|com certeza|") inside the active speaker's sentence so the listener reacts while the speaker talks:
+### Backchanneling and overlap — pipe characters |...|
+Gemini TTS natively synthesizes concurrent multi-speaker audio when a listener's reaction is wrapped in pipes \
+(|reaction|) inside the active speaker's own line, so it's heard while they're still talking rather than as \
+its own turn:
   ${labelA}: "So the launch was scheduled for Thursday |oh hmm| and nobody knew if we were actually ready."
-  ${labelB}: "Ready enough |oh really?| The last blocker cleared right before the demo."
-- Overlapping and interleaved speech: Use multiple pipe segments when speakers talk at the same time, speak in chorus, \
-or interrupt each other in excitement, disagreement, or celebration:
-  ${labelA}: "We were completely blown away |no way| when the final numbers were announced!"
+Use multiple pipe segments for speakers talking over each other, in chorus, or interrupting in excitement:
   ${labelB}: "Let's count it down together |ok| ready? One, two, three |happy| happy |anniversary| anniversary!"
-- Breaking up a longer turn: when a speaker's turn runs long, use one or more pipe-wrapped reactions from the \
-other speaker at natural points within it, instead of letting them talk uninterrupted straight through:
-  ${labelA}: "So we looked at the numbers again |wait, seriously?| and it turns out the whole approach was wrong \
-from the start |no way| — we'd been measuring the wrong thing for months."
-- Prefer this over a separate short turn: when the other speaker's contribution is only a brief reaction — the \
-kind of thing that would otherwise be its own two- or three-word turn ("Really?", "No way", "Wow") — layer it \
-inline with a pipe instead of giving it a standalone turn. A pipe-wrapped reaction lands while the speaker is \
-still talking, the way it would in a real conversation; a separate short turn interrupts the flow and reads as \
-mechanical back-and-forth rather than genuine overlap.
+Prefer this over a standalone short turn whenever the other speaker's contribution is just a brief reaction \
+(what would otherwise be its own two- or three-word turn like "Really?" or "No way") — layering it inline \
+reads as genuine overlap, where a separate short turn reads as mechanical back-and-forth.
 
-### Conversational Rhythm, Pacing, and Hesitations
-- Use punctuation, dashes (--), and ellipses (...) for natural conversational hesitation.
-- Insert pauses (<short pause> or <long pause>, or in the transcript's language) where a speaker pauses to think.
-- Write natural conversational disfluencies (e.g., "Oh uh yeah I think... hm, so that's interesting").
-- Capitalize specific words to place natural vocal stress and emphasis (e.g., "This is a VERY important point!").
+### Language
+Write "Style:" descriptions, vocal-burst tags, and backchannel reactions in the same language as the \
+transcript itself (matching the dialogue, podcast description, topics, and source material) — e.g. <laughter>/ \
+"Style: whispering" in English, <risas>/"Style: susurrando" in Spanish, <risos>/"Style: sussurrando" in \
+Portuguese, <rires>/"Style: chuchoté" in French.
 
-### Clean Spoken Text
-- Write clean spoken dialogue only: NO markdown of any kind (no **bold**, *italics*, # headers, bullet lists, or \
-code formatting). The TTS model reads punctuation and symbols literally!
-- Never start any line, or any sentence within a line, with a short word or phrase immediately followed by a \
-colon, like "Watch this: ..." or "Funny thing: ...". Phrase it without the colon instead (e.g. "Watch this —" or \
-"Funny thing, actually,").
+## Other conversational texture
 
-## Output format — this feeds Gemini TTS's multi-speaker synthesis directly, exactly as you write it
+- Use punctuation, dashes (--), and ellipses (...) for hesitation; capitalize a word for vocal stress (e.g. \
+"This is a VERY important point!"); write natural disfluencies (e.g., "Oh uh yeah I think... hm, so that's \
+interesting").
+- Write clean spoken dialogue only — no markdown of any kind (no **bold**, *italics*, headers, bullet lists); \
+the TTS model reads punctuation and symbols literally.
+- Never open a line, or a sentence within one, with a short word or phrase immediately followed by a colon \
+("Watch this: ..."). Phrase it without the colon instead ("Watch this —", "Funny thing, actually,").
 
-Write the entire episode as a sequence of turns in this exact format, one turn per block, separated by a \
-single blank line:
+## Output format
+
+Write the entire episode as a sequence of turns, one per block, separated by a single blank line:
 
 ${labelA}: <the line ${a.name} speaks>
 Style: <optional short delivery style>
@@ -192,19 +155,17 @@ ${labelB}: <the line ${b.name} speaks>
 ${labelA}: <the line ${a.name} speaks>
 
 Rules:
-1. The ONLY two valid speaker labels are "${labelA}" and "${labelB}" — use each one's first name alone \
-(not their full name, a nickname, or a title) at the start of every single turn, with nothing else on that line \
-before the colon. This is a strict format requirement: turn labels are matched byte-for-byte to route each line \
-to the correct voice.
-2. If a turn needs a delivery adjustment, put "Style: <short style>" on the line immediately following the speaker \
-line, in the SAME turn as the words it describes — never as its own separate turn before or after the line it \
-modifies. Otherwise, omit the "Style:" line.
+1. The ONLY two valid speaker labels are "${labelA}" and "${labelB}" — each one's first name alone (never \
+their full name, a nickname, or a title), with nothing else on that line before the colon, at the start of \
+every turn. This is a strict format requirement: labels are matched byte-for-byte to route each line to the \
+correct voice.
+2. A "Style:" line, if present, goes immediately after the speaker line it describes, in the same turn — \
+never as its own separate turn before or after. Otherwise omit it.
 3. Separate turns by a single blank line.
-4. Do NOT include turn comment lines (such as "// Turn 1") or any section headers.
-5. Every speaker line must have spoken content after the colon — never "${labelA}:" or "${labelB}:" with \
-nothing after it, even on a turn that's a pure reaction. A "Style:" line is never enough on its own.
-6. Respond with ONLY the transcript itself in that format — no preamble, no markdown code fence blocks, no \
-commentary before or after it.`;
+4. No turn comment lines (e.g. "// Turn 1") or section headers.
+5. Every speaker line needs spoken content after the colon — never just "${labelA}:" with nothing after it, \
+even for a pure reaction; a "Style:" line alone is never enough.
+6. Respond with ONLY the transcript — no preamble, no code fences, no commentary before or after it.`;
 }
 
 export function buildScriptGenerationPrompt(cast: Cast, wordTarget: WordTarget): string {
