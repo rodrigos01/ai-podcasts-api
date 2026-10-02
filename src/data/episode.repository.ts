@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { firestore } from "../config/firebase";
 import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
+import {
+  compareBySeriesOrder,
+  selectPriorEpisodes,
+  type EpisodeAnchor,
+  type PriorEpisode,
+} from "../utils/episodeHistory";
 
 function episodesCollection(podcastId: string) {
   return firestore.collection("podcasts").doc(podcastId).collection("episodes");
@@ -33,7 +39,6 @@ export async function createEpisode(
     transcript: null,
     ttsChunks: null,
     generatedAudioSeconds: 0,
-    condensedSummaries: null,
     error: null,
     createdAt: now,
     updatedAt: now,
@@ -75,26 +80,21 @@ export async function deleteEpisode(podcastId: string, episodeId: string): Promi
   return true;
 }
 
-export async function getRecentCondensedSummariesForHost(
+// Filtered in memory (rather than a Firestore range query on createdAt) to
+// avoid depending on a manually-provisioned composite index and to keep the
+// tiebreak/null-transcript rules in one testable place — fine at this app's
+// expected scale of episodes per podcast.
+export async function getPriorEpisodes(
   podcastId: string,
-  hostId: string,
-  excludeEpisodeId: string,
-  limit = 5,
-): Promise<string[]> {
-  // Filtered in memory (rather than a Firestore array-contains + orderBy
-  // compound query) to avoid depending on a manually-provisioned composite
-  // index — fine at this app's expected scale of episodes per podcast.
-  const episodes = await listEpisodes(podcastId);
-  return episodes
-    .filter(
-      (episode) =>
-        episode.id !== excludeEpisodeId &&
-        episode.status === "ready" &&
-        episode.participantHostIds.includes(hostId),
-    )
-    .slice(0, limit)
-    .map((episode) => episode.condensedSummaries?.[hostId])
-    .filter((summary): summary is string => Boolean(summary));
+  anchor: EpisodeAnchor | undefined,
+  limit: number,
+): Promise<PriorEpisode[]> {
+  const all = (await listEpisodes(podcastId)).sort(compareBySeriesOrder);
+  const numberById = new Map(all.map((episode, index) => [episode.id, index + 1]));
+  return selectPriorEpisodes(all, anchor, limit).map((episode) => ({
+    number: numberById.get(episode.id) ?? 0,
+    episode,
+  }));
 }
 
 export async function patchEpisodeState(

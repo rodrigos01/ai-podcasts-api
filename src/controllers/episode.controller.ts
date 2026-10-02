@@ -3,9 +3,11 @@ import {
   createEpisode,
   deleteEpisode,
   getEpisode,
+  getPriorEpisodes,
   listEpisodes,
   updateEpisode,
 } from "../data/episode.repository";
+import { MAX_HISTORY_EPISODES } from "../constants/episodeHistory";
 import { getSource } from "../data/source.repository";
 import { requireUserId } from "../middleware/requireAuth";
 import { episodeCreateRequestSchema, episodeUpdateSchema } from "../schemas/episode.schema";
@@ -31,22 +33,27 @@ export async function wizardOptions(req: Request, res: Response) {
     await Promise.all(input.sourceIds.map((sourceId) => getSource(podcastId, sourceId)))
   ).filter((s): s is NonNullable<typeof s> => s !== null);
 
+  const previousEpisodes = await getPriorEpisodes(podcastId, undefined, MAX_HISTORY_EPISODES);
   const result = await episodeWizardService.generateSuggestions(
     podcast,
     sources,
     input.length,
+    previousEpisodes,
     input.prompt,
   );
   res.json(result);
 }
 
 export async function wizardRevise(req: Request, res: Response) {
-  const podcast = await requireOwnedPodcast(requireParam(req.params, "podcastId"), requireUserId(req));
+  const podcastId = requireParam(req.params, "podcastId");
+  const podcast = await requireOwnedPodcast(podcastId, requireUserId(req));
   const input = episodeWizardReviseRequestSchema.parse(req.body);
+  const previousEpisodes = await getPriorEpisodes(podcastId, undefined, MAX_HISTORY_EPISODES);
   const result = await episodeWizardService.reviseSuggestions(
     podcast,
     input.suggestions,
     input.length,
+    previousEpisodes,
     input.targetSuggestionIndex,
     input.targetEpisodeIndex,
     input.instruction,

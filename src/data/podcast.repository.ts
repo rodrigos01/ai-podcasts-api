@@ -35,7 +35,7 @@ export async function getPodcast(podcastId: string): Promise<Podcast | null> {
 
 // Filtered in memory rather than a Firestore `where(ownerId==) + orderBy`
 // compound query, to avoid depending on a manually-provisioned composite
-// index — same reasoning as getRecentCondensedSummariesForHost, fine at
+// index — same reasoning as episode.repository.ts's getPriorEpisodes, fine at
 // this app's expected scale (podcasts per user).
 export async function listPodcasts(ownerId: string): Promise<Podcast[]> {
   const snap = await podcastsCollection.orderBy("createdAt", "desc").get();

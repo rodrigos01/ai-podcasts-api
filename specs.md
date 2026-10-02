@@ -79,7 +79,7 @@ The app will use Firebase Firestore as its database with the following structure
         - contents
 
 ### Episode Generation
-This app generates an episode's transcript with a single LLM call that writes both speakers' lines itself, given the podcast and episode information as context, including the source material selected. Hosts are also given condensed past episodes' transcripts for continuity. Due to TTS limitations, each episode can only have 2 voices, being either 2 hosts or 1 host and one guest.
+This app generates an episode's transcript with a single LLM call that writes both speakers' lines itself, given the podcast and episode information as context, including the source material selected. It is also given the full transcripts of up to the 15 preceding episodes for continuity (the 15 immediately before the episode in series order, so regenerating an old episode never sees later ones). Due to TTS limitations, each episode can only have 2 voices, being either 2 hosts or 1 host and one guest.
 * **Hosts and Guests:** The two speakers are written as independent individuals as far as the generated dialogue goes — each only reacts to their own persona, their own background material, and whatever the other has actually said aloud — even though a single model is authoring both sides. This is a prompting goal, not a structural guarantee the way giving each speaker its own separately-scoped generation call would be.
 * **Realistic Conversation:** 
     * **Kickoff**: The Episode's host (or one of them, decided randomly, if the podcast has more than one), opens the episode following the podcast's structure and the production notes.

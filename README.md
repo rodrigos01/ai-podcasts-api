@@ -248,7 +248,7 @@ There's no positional convention here — a suggestion's shape is entirely descr
 { "episodes": [ /* created Episode objects, in the same order */ ] }
 ```
 
-For a split, both episodes are created right away, but generation runs sequentially behind the scenes: the second one's script generation doesn't actually start until the first reaches `ready`, so it can inherit the first's `condensedSummaries` — the same continuity any other follow-up episode gets. This is entirely transparent to the caller: poll each episode's own `/status` as usual, and the second one just shows no progress yet until its turn comes.
+For a split, both episodes are created right away, but generation runs sequentially behind the scenes: the second one's script generation doesn't actually start until the first reaches `ready`, so it can see the first's transcript — the same continuity any other follow-up episode gets (the transcripts of up to the 15 episodes before it, by `createdAt`). This is entirely transparent to the caller: poll each episode's own `/status` as usual, and the second one just shows no progress yet until its turn comes.
 
 **Important constraint**: `participantHostIds.length + guests.length` must equal exactly **2** — every episode is voiced by either 2 hosts or 1 host + 1 guest, never more or fewer. A single-host podcast therefore requires a guest on every episode.
 
@@ -260,7 +260,7 @@ Episode length word/time targets:
 | `medium` | 6500-8000 | 40-50 min |
 | `long` | 8000-9000 | ~50-65 min |
 
-**Episode status lifecycle**: `generating` → `streamable` → `ready` (or `failed`, with `error` set). The transcript is written by a single LLM call and chunked for TTS in one pass, not incrementally — `streamable` means that pass has finished (all TTS chunks are known) and `/stream` will serve audio, even though the per-host continuity summary (`condensedSummaries`) may still be generating. Treat `streamable` the same as `ready` for "go ahead and play this," and only wait for `ready` specifically if you need the episode fully finished. Poll `/status` (returns `{status, progress, error, generatedAudioSeconds}`, where `progress` includes the current stage and word count, and `generatedAudioSeconds` is the total audio duration generated/cached so far) rather than the full episode while waiting.
+**Episode status lifecycle**: `generating` → `ready` (or `failed`, with `error` set). The transcript is written by a single LLM call and chunked for TTS in one pass, not incrementally; once that finishes the episode is `ready` and `/stream` will serve audio. (`streamable` is still a valid value clients should treat the same as `ready` — generation no longer sets it now that there's no post-script step, but older episodes may carry it.) Poll `/status` (returns `{status, progress, error, generatedAudioSeconds}`, where `progress` includes the current stage and word count, and `generatedAudioSeconds` is the total audio duration generated/cached so far) rather than the full episode while waiting.
 
 ### Audio
 
@@ -280,7 +280,7 @@ This is a single audio resource for the whole episode (not per-chunk), designed 
 
 - **Podcast**: `title`, `description`, `structure` (markdown), `hosts[]` (each with `id`, `name`, `voice`, `persona`).
 - **Source**: `title`, `contents` (extracted plain text), `sourceType`.
-- **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]`, `productionNotes`, `status`, `progress`, `transcript`, `generatedAudioSeconds` (total audio duration generated so far), `condensedSummaries` (per-host continuity notes carried into future episodes), `error`.
+- **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]`, `productionNotes`, `status`, `progress`, `transcript`, `generatedAudioSeconds` (total audio duration generated so far), `error`.
 
 ## Known limitations
 

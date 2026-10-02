@@ -1,14 +1,16 @@
+import type { PriorEpisode } from "../../utils/episodeHistory";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
+import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
   podcast: Podcast;
   episode: Episode;
   sources: Source[];
-  /** Only ever populated for hosts — condensed continuity from past episodes they were in. */
-  condensedHistoryBySpeakerId: Map<string, string>;
+  /** Earlier episodes' transcripts, oldest first — see episodeHistory.prompts.ts. */
+  previousEpisodes: PriorEpisode[];
 }
 
 export interface WordTarget {
@@ -25,9 +27,7 @@ function speakerBlock(speaker: Speaker, ctx: ScriptGenerationContext): string {
   const roleLine = speaker.isHost
     ? `${speaker.name} — a host of the podcast "${ctx.podcast.title}".`
     : `${speaker.name} — a guest on this episode of the podcast "${ctx.podcast.title}".`;
-  const history = ctx.condensedHistoryBySpeakerId.get(speaker.id);
-  const historyBlock = history ? `\nWhat ${speaker.name} remembers from past episodes:\n${history}` : "";
-  return `${roleLine}\nPersona: ${speaker.persona}${historyBlock}`;
+  return `${roleLine}\nPersona: ${speaker.persona}`;
 }
 
 /**
@@ -47,13 +47,15 @@ export function buildScriptSystemInstruction(
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
+  const history = buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
+  const historySection = history ? `\n\n${history}` : "";
 
   return `You are a scriptwriter for the podcast "${ctx.podcast.title}".
 
 Podcast description: ${ctx.podcast.description}
 
 Podcast structure (how episodes of this show are built):
-${ctx.podcast.structure}
+${ctx.podcast.structure}${historySection}
 
 The Scripts you write should strictly follow this formatting:
 ${labelA}: "line 1"

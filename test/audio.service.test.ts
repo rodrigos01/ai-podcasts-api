@@ -166,7 +166,6 @@ const mockEpisode: Episode = {
     },
   ],
   generatedAudioSeconds: 0,
-  condensedSummaries: null,
   error: null,
   createdAt: 1000,
   updatedAt: 1000,

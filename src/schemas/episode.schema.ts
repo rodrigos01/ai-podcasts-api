@@ -48,7 +48,7 @@ export const episodeUpdateSchema = z.object({
 });
 
 export const episodeProgressSchema = z.object({
-  stage: z.enum(["kickoff", "conversation", "chunking", "condensation", "done"]),
+  stage: z.enum(["kickoff", "conversation", "chunking", "done"]),
   currentWordCount: z.number().int().nonnegative().optional(),
   targetWordRange: z.object({ min: z.number(), max: z.number() }).optional(),
 });
@@ -71,12 +71,10 @@ export const episodeSchema = z.object({
   participantHostIds: z.array(z.string().min(1)),
   guests: z.array(personSchema),
   productionNotes: z.string().min(1),
-  // "streamable" sits between "generating" and "ready": the episode's
-  // script has been written and chunked (see
-  // episodeGeneration/scriptGeneration.service.ts and chunker.ts), so
-  // /stream will serve audio, but condensation may still be in progress.
-  // Clients should treat both "streamable" and "ready" as "go ahead and hit
-  // /stream" — the difference is only whether more is still being generated.
+  // "streamable" is no longer set by generation itself (the script is written,
+  // chunked, and marked "ready" in one step now that there's no condensation
+  // pass after it) but stays in the enum: clients treat both "streamable" and
+  // "ready" as "go ahead and hit /stream", and older episode docs may hold it.
   status: z.enum(["generating", "streamable", "ready", "failed"]),
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),
@@ -88,7 +86,6 @@ export const episodeSchema = z.object({
   // created before this field existed get `undefined` here (Firestore is
   // schemaless and this isn't backfilled) — treat as 0.
   generatedAudioSeconds: z.number().nonnegative(),
-  condensedSummaries: z.record(z.string(), z.string()).nullable(),
   error: z.string().nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),

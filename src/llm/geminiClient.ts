@@ -175,7 +175,7 @@ interface GeneratePlainTextOptions {
  * single-LLM episode script writer (episodeGeneration/scriptGeneration.service.ts),
  * whose output is just the "Name: line" transcript text itself, parsed by
  * scriptText.ts rather than JSON-decoded. If a caller genuinely needs a
- * validated structured shape (the wizards, condensation, voiceResolution),
+ * validated structured shape (the wizards, voiceResolution),
  * keep using `generateText`.
  */
 export async function generatePlainText(options: GeneratePlainTextOptions): Promise<string> {

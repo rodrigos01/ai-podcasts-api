@@ -1,14 +1,10 @@
 import { LENGTH_RANGES } from "../../constants/lengthRanges";
-import {
-  getEpisode,
-  getRecentCondensedSummariesForHost,
-  patchEpisodeState,
-} from "../../data/episode.repository";
+import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
+import { getEpisode, getPriorEpisodes, patchEpisodeState } from "../../data/episode.repository";
 import { getPodcast } from "../../data/podcast.repository";
 import { getSource } from "../../data/source.repository";
 import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Person } from "../../schemas/person.schema";
-import { condenseForAllHosts } from "./condensation.service";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
@@ -65,16 +61,14 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget },
     });
 
-    // Condensed continuity is fetched once up front for both hosts (a guest
-    // never has one) — the single script-writing call below needs both
-    // speakers' histories in the same prompt, unlike the old per-agent
-    // pipeline where each independent AgentSession fetched only its own.
-    const condensedHistoryBySpeakerId = new Map<string, string>();
-    for (const speaker of cast.speakers) {
-      if (!speaker.isHost) continue;
-      const history = await getRecentCondensedSummariesForHost(podcastId, speaker.id, episodeId);
-      if (history.length > 0) condensedHistoryBySpeakerId.set(speaker.id, history.join("\n\n"));
-    }
+    // Continuity: the transcripts of the episodes that come *before* this one
+    // in series order (not merely the newest ones), so regenerating an old
+    // episode never sees episodes that were written after it.
+    const previousEpisodes = await getPriorEpisodes(
+      podcastId,
+      { id: episode.id, createdAt: episode.createdAt },
+      MAX_HISTORY_EPISODES,
+    );
 
     await patchEpisodeState(podcastId, episodeId, {
       progress: { stage: "conversation", targetWordRange: wordTarget },
@@ -89,7 +83,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // in-flight turn.
     const scriptPromise = generateEpisodeScript(
       cast,
-      { podcast, episode, sources, condensedHistoryBySpeakerId },
+      { podcast, episode, sources, previousEpisodes },
       wordTarget,
     );
 
@@ -114,29 +108,11 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     const ttsChunks = chunkTranscript(script.transcript);
 
-    // "streamable" as soon as the script exists and is chunked — /stream can
-    // start generating audio on demand per chunk. Condensation may still be running.
     await patchEpisodeState(podcastId, episodeId, {
       transcript: script.transcript,
       ttsChunks,
-      status: "streamable",
-      progress: {
-        stage: "chunking",
-        currentWordCount: script.wordCount,
-        targetWordRange: wordTarget,
-      },
-    });
-
-    const participatingHosts = hosts;
-    const condensedSummaries =
-      participatingHosts.length > 0
-        ? await condenseForAllHosts(participatingHosts, script.transcript)
-        : {};
-
-    await patchEpisodeState(podcastId, episodeId, {
-      condensedSummaries,
       status: "ready",
-      progress: { stage: "done", targetWordRange: wordTarget },
+      progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,
     });
   } catch (err) {
@@ -154,9 +130,9 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
  * Runs a confirmed multi-episode suggestion's episodes one at a time, in
  * order — the product decision behind confirming a 2-episode split in one
  * request (see episode.controller.ts's `create`): part 2 should inherit
- * part 1's `condensedSummaries`, which only exist once part 1 has actually
- * finished (`getRecentCondensedSummariesForHost` only looks at `"ready"`
- * episodes), so it can't start generating until part 1 does. Callers don't
+ * part 1's transcript, which only exists once part 1 has actually finished
+ * (`getPriorEpisodes` only counts episodes that have one), so it can't start
+ * generating until part 1 does. Callers don't
  * need to do anything to get this — every episode in the request is created
  * immediately and returned right away; this just controls when each one's
  * *generation* actually starts, invisibly from the caller's perspective
