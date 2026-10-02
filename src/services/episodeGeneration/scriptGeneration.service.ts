@@ -35,10 +35,9 @@ function sanitizeTurnText(text: string): string {
  * reaction using the wrong slot for it (prompted against in
  * scriptGeneration.prompts.ts, but not structurally guaranteed). "Style:"
  * describes how a turn's own words are delivered, never a substitute for
- * them — sent as-is, an empty turn becomes an empty
- * `{ type: "text", text: "" }` content item and Gemini TTS's
- * interactions.create rejects the whole request with "400 Missing text in
- * content of type text." Rather than lose the reaction, the style value is
+ * them — sent as-is, an empty turn becomes an empty text part and the TTS
+ * API rejects the whole request with "400 Missing text in content of type
+ * text." Rather than lose the reaction, the style value is
  * treated as what it's actually describing — a momentary vocal burst — using
  * the same "<...>" inline-tag convention the prompt already teaches for
  * that. The style is dropped from the resulting turn since it's now the
@@ -128,10 +127,11 @@ async function generateOnce(
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
 
-  const raw = await generatePlainText({
+  const scriptParams = {
     systemInstruction: buildScriptSystemInstruction(cast, ctx),
-    prompt: buildScriptGenerationPrompt(cast, wordTarget),
-  });
+    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
+  }
+  const raw = await generatePlainText(scriptParams);
 
   const turns = parseScriptTurns(raw);
   if (turns.length === 0) {

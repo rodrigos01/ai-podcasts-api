@@ -128,7 +128,7 @@ export async function setGuestResolvedVoice(
   podcastId: string,
   episodeId: string,
   guestId: string,
-  resolved: { resolvedVoiceId: string; resolvedVoiceOrigin: "design" | "library" },
+  resolved: { resolvedVoiceId: string; resolvedVoiceOrigin: "design" | "library"; resolvedVoiceHash: string },
 ): Promise<void> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   await firestore.runTransaction(async (tx) => {
