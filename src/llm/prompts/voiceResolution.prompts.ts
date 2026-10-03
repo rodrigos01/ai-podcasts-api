@@ -1,75 +1,41 @@
 import { z } from "zod";
-import type { Person } from "../../schemas/person.schema";
 
-// Adapted from the investigation spike's HOST_SYSTEM_INSTRUCTION/
-// GUEST_SYSTEM_INSTRUCTION (scripts/test-gemini-3.8-tts.ts on
-// claude/gemini-3.8-flash-tts-test-cphacd) — confirmed live against the
-// real Voice Design/Library APIs. Called by
+// Voice Design builds a voice from a natural-language description. Confirmed
+// by ear against the live API: the best input is the speaker's bio, in
+// English (a voice designed from an English prompt still speaks any language,
+// with the intended accent), plus an explicit accent statement when there is
+// one — stating the accent is far more effective than leaving it to be
+// inferred from the bio's origin story. The name goes first because a bio
+// doesn't always make the speaker's gender clear and the name does. That is
+// all we send; no LLM rewrite step sits in between. Called by
 // services/episodeGeneration/voiceResolution.service.ts.
 
-export function buildPersonaPrompt(person: Person): string {
-  const lines = [`Name: ${person.name}`, `Persona:\n${person.persona}`, `Voice hint: ${person.voice}`];
-  if (person.accent) lines.push(`Stated accent: ${person.accent}`);
+export function buildVoiceDesignInput(name: string, personaEn: string, accentEn?: string): string {
+  const lines = [`Name: ${name}`, personaEn];
+  if (accentEn) lines.push(`Accent: ${accentEn}`);
   return lines.join("\n\n");
 }
 
-export const hostVoiceDesignSchema = z.object({
-  languageCode: z.string().min(2).max(10),
-  languageName: z.string().min(1),
-  gender: z.enum(["male", "female", "neutral"]),
-  voiceDescription: z.string().min(30),
-  displayName: z.string().min(1).max(60),
+// Fallback for people who have no English persona/accent stored (created
+// before those fields existed, or by a client that didn't send them): one
+// small call produces them, so such a person gets the same voice-design
+// input a freshly wizard-written one has.
+export const englishVoiceInputSchema = z.object({
+  personaEn: z.string().min(1),
+  accentEn: z.string().min(1).optional(),
 });
-export type HostVoiceDesignRequest = z.infer<typeof hostVoiceDesignSchema>;
 
-// Used for hosts and guests — both get bespoke Voice Design voices built from
-// their name, persona, voice hint, and accent data (see voiceResolution.service.ts).
-export const VOICE_DESIGN_SYSTEM_INSTRUCTION =
-  "You are casting a bespoke synthetic voice for a podcast speaker using a text-to-speech " +
-  "'voice design' system that builds a brand-new voice purely from a natural-language " +
-  "description of how it sounds (age, timbre, pacing, energy, gender presentation, and — " +
-  "when relevant — a spoken accent). That system never reads the description aloud, so it " +
-  "must describe only the VOICE, never the speaker's name, biography, opinions, or topics. " +
-  "The speaker's name, their free-text voice hint, and any stated accent are given below as " +
-  "signals — the name for perceived gender presentation (most first names strongly imply one; " +
-  "fall back to the persona's own phrasing when a name is ambiguous or gender-neutral), the " +
-  "voice hint for the tone/character to design toward, and any stated accent for their vocal " +
-  "accent, though you should still write your own complete, vivid description rather than " +
-  "repeating them verbatim.\n\n" +
-  "First, work out what natural language the persona text below is itself written in — that " +
-  "is the language this speaker will actually speak on the show — and report it as a BCP-47 " +
-  "tag (e.g. 'en-US', 'es-ES', 'pt-BR', 'fr-FR', 'ja-JP'), preferring a specific regional tag " +
-  "the text's diction suggests, otherwise a common default for that language.\n\n" +
-  "Then write a vivid, 2-4 sentence voice-design description, plus a perceived gender " +
-  "presentation and a short display name for this voice. If a stated accent is provided, or " +
-  "if the persona describes the speaker as being from a place, culture, or background distinct " +
-  "from that language's home region — e.g. a native speaker of one language or region speaking " +
-  "a different one on the show — explicitly incorporate and describe the resulting accent in the " +
-  "voice-design text (e.g. 'a warm male voice speaking Portuguese with a noticeable Peruvian Spanish " +
-  "accent'), rather than describing a neutral/native accent by default.";
+export const ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION =
+  "You prepare a podcast speaker's description for a text-to-speech voice-design system that " +
+  "works best from English text. Given the speaker's persona (and optionally a stated accent), " +
+  "which may be in any language, return the persona translated into English, keeping every " +
+  "detail that bears on how the person would sound (age, background, origin, temperament) and " +
+  "adding nothing; and, only if an accent was stated, that accent described in plain English " +
+  "(e.g. 'Northern Irish', 'light French accent when speaking Portuguese'). If the text is " +
+  "already in English, return it unchanged. Never invent an accent that wasn't stated.";
 
-export const guestVoiceLibrarySchema = z.object({
-  languageCode: z.string().min(2).max(10),
-  languageName: z.string().min(1),
-  gender: z.enum(["male", "female", "neutral"]),
-  pitch: z.enum(["low", "medium", "high"]).optional(),
-  accent: z.string().min(1).optional(),
-  personaKeywords: z.array(z.string().min(1)).min(1).max(3),
-  contexts: z.array(z.string().min(1)).min(1).max(2),
-  search: z.string().min(1).optional(),
-});
-export type GuestVoiceLibraryRequest = z.infer<typeof guestVoiceLibrarySchema>;
-
-export const VOICE_LIBRARY_SYSTEM_INSTRUCTION =
-  "You are selecting a stock voice for a podcast guest from a text-to-speech voice library, " +
-  "by proposing filters for a ListVoices-style query: perceived gender, pitch, one to three " +
-  "persona/archetype keywords (e.g. 'Warm, Friendly' or 'Narrator'), one or two usage-context " +
-  "keywords (e.g. 'Conversational', 'News'), an optional accent descriptor, and an optional " +
-  "free-text search string. The guest's name and their own free-text voice hint are given " +
-  "below only as signals — the name for perceived gender presentation (most first names " +
-  "strongly imply one; fall back to the persona's own phrasing when a name is ambiguous or " +
-  "gender-neutral), and the voice hint for the tone/character to search for.\n\n" +
-  "First, work out what natural language the persona text below is itself written in — that " +
-  "is the language this guest will actually speak — and report it as a BCP-47 tag (e.g. " +
-  "'en-US', 'es-ES', 'pt-BR', 'fr-FR', 'ja-JP').\n\n" +
-  "Then propose filter values most likely to surface a fitting available voice for this guest.";
+export function buildEnglishVoiceInputPrompt(persona: string, accent?: string): string {
+  const lines = [`Persona:\n${persona}`];
+  if (accent) lines.push(`Stated accent: ${accent}`);
+  return lines.join("\n\n");
+}

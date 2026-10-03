@@ -5,9 +5,10 @@ import { setHostResolvedVoice } from "../../data/podcast.repository";
 import { setGuestResolvedVoice } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
 import {
-  buildPersonaPrompt,
-  hostVoiceDesignSchema,
-  VOICE_DESIGN_SYSTEM_INSTRUCTION,
+  buildEnglishVoiceInputPrompt,
+  buildVoiceDesignInput,
+  ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION,
+  englishVoiceInputSchema,
 } from "../../llm/prompts/voiceResolution.prompts";
 
 export interface ResolvedVoice {
@@ -24,14 +25,24 @@ const VOICE_BACKEND_VERSION = "enterprise-1";
 
 /**
  * Detects a stale cached voice — an edit to name/persona/accent/voice hint
- * should trigger a fresh Voice Design call, not silently keep reusing a
- * voice designed for the old text. Same pattern as the investigation
- * spike's own `voiceCacheKey`.
+ * (or to their English counterparts) should trigger a fresh Voice Design
+ * call, not silently keep reusing a voice designed for the old text. Same
+ * pattern as the investigation spike's own `voiceCacheKey`.
+ *
+ * The English fields are appended only when present, so a person who has
+ * none hashes exactly as before they existed — every voice already stored
+ * stays valid instead of the whole catalogue being re-designed. (The voice
+ * hint is no longer sent to Voice Design but stays in the hash for the same
+ * reason; an edit to it costs one redundant, harmless re-design.)
  */
 function voiceHash(person: Person): string {
+  const english =
+    person.personaEn || person.accentEn
+      ? `\u0000${person.personaEn ?? ""}\u0000${person.accentEn ?? ""}`
+      : "";
   return createHash("sha256")
     .update(
-      `${VOICE_BACKEND_VERSION}\u0000${person.name}\u0000${person.persona}\u0000${person.accent ?? ""}\u0000${person.voice}`,
+      `${VOICE_BACKEND_VERSION}\u0000${person.name}\u0000${person.persona}\u0000${person.accent ?? ""}\u0000${person.voice}${english}`,
     )
     .digest("hex");
 }
@@ -48,18 +59,29 @@ export function hasCurrentVoice(person: Person): person is Person & { resolvedVo
   return !!person.resolvedVoiceId && person.resolvedVoiceHash === voiceHash(person);
 }
 
+/**
+ * The English persona/accent to design from: the ones the wizard wrote when
+ * they're there, otherwise translated on demand (people predating the
+ * English fields). An accent is only ever sent when the person has one set.
+ */
+async function englishInputFor(person: Person): Promise<{ personaEn: string; accentEn?: string }> {
+  if (person.personaEn && (!person.accent || person.accentEn)) {
+    return { personaEn: person.personaEn, ...(person.accent ? { accentEn: person.accentEn } : {}) };
+  }
+  const translated = await generateText({
+    systemInstruction: ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION,
+    prompt: buildEnglishVoiceInputPrompt(person.persona, person.accent),
+    schema: englishVoiceInputSchema,
+  });
+  return {
+    personaEn: translated.personaEn,
+    ...(person.accent && translated.accentEn ? { accentEn: translated.accentEn } : {}),
+  };
+}
+
 async function designFor(person: Person): Promise<ResolvedVoice> {
-  const req = await generateText({
-    systemInstruction: VOICE_DESIGN_SYSTEM_INSTRUCTION,
-    prompt: buildPersonaPrompt(person),
-    schema: hostVoiceDesignSchema,
-  });
-  const voiceId = await designVoice({
-    displayName: req.displayName,
-    languageCode: req.languageCode,
-    gender: req.gender,
-    voiceDescription: req.voiceDescription,
-  });
+  const { personaEn, accentEn } = await englishInputFor(person);
+  const voiceId = await designVoice({ voiceDescription: buildVoiceDesignInput(person.name, personaEn, accentEn) });
   return { voiceId };
 }
 
@@ -86,8 +108,7 @@ export async function resolveHostVoice(podcastId: string, host: Person): Promise
 /**
  * Guests always resolve fresh — a guest is scoped to one episode, never
  * reused across episodes, so there's no cache to check. Guests always get
- * a bespoke Voice Design voice created using their name, persona, voice hint,
- * and accent data.
+ * a bespoke Voice Design voice designed from their English persona and accent.
  *
  * Called once per generation attempt (episode creation or `/regenerate`)
  * from orchestrator.ts, in parallel with script generation — not lazily at

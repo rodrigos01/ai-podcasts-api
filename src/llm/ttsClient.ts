@@ -107,9 +107,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 // ---------------------------------------------------------------------------
 
 export interface DesignVoiceInput {
-  displayName: string;
-  languageCode: string;
-  gender: "male" | "female" | "neutral";
+  /** The whole Voice Design prompt: an English bio plus, if any, an accent line. */
   voiceDescription: string;
 }
 
@@ -131,9 +129,6 @@ export async function designVoice(input: DesignVoiceInput): Promise<string> {
           store: true,
           voice: {
             type: "VOICE_TYPE_PROMPTED",
-            display_name: input.displayName,
-            language_code: input.languageCode,
-            gender: input.gender,
             prompted: { input: input.voiceDescription },
           },
         },
