@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { voiceHintSchema } from "./common.schema";
 
+// An empty string from a wizard LLM's structured output means "not set", the
+// same as an absent key — see the accent comment below.
+const optionalText = z.preprocess((v) => (v === "" ? undefined : v), z.string().min(1).optional());
+
 export const personInputSchema = z.object({
   name: z.string().min(1),
   // A free-text voice hint (e.g. "warm, gravelly older British male"), not a
@@ -23,7 +27,19 @@ export const personInputSchema = z.object({
   // body — can't always be trusted to omit an optional key it doesn't want
   // to set; the preprocess step treats an empty string as "no accent" the
   // same as an absent key, rather than failing `.min(1)` re-validation.
-  accent: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(1).optional()),
+  accent: optionalText,
+  // English counterparts of `persona` and `accent`, written by the same
+  // wizard LLM call that wrote the originals (identical to them when the
+  // show is already in English). `persona`/`accent` stay in the show's own
+  // language for display and for script generation; these two are what
+  // voiceResolution.service.ts sends to Voice Design, which gives better
+  // voices from English prompts and still speaks any language with the
+  // intended accent. Optional because people created before they existed
+  // (and clients that don't echo them) lack them — the voice service
+  // translates on demand in that case. Kept in sync with persona/accent on
+  // host edits by podcast.repository.ts's reconcileEnglishFields.
+  personaEn: optionalText,
+  accentEn: optionalText,
 });
 
 export const personSchema = personInputSchema.extend({

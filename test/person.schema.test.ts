@@ -36,6 +36,28 @@ describe("personInputSchema voice field", () => {
   });
 });
 
+describe("personInputSchema English fields", () => {
+  const base = { name: "Maya Cruz", voice: "warm voice", persona: "Uma anfitriã curiosa." };
+
+  it("accepts a person with or without personaEn/accentEn", () => {
+    expect(personInputSchema.safeParse(base).success).toBe(true);
+    const full = personInputSchema.parse({
+      ...base,
+      accent: "sotaque carioca",
+      personaEn: "A curious host.",
+      accentEn: "Rio de Janeiro accent",
+    });
+    expect(full.personaEn).toBe("A curious host.");
+    expect(full.accentEn).toBe("Rio de Janeiro accent");
+  });
+
+  it("treats empty-string English fields from a wizard LLM as unset", () => {
+    const parsed = personInputSchema.parse({ ...base, personaEn: "", accentEn: "" });
+    expect(parsed.personaEn).toBeUndefined();
+    expect(parsed.accentEn).toBeUndefined();
+  });
+});
+
 describe("personSchema (persisted shape)", () => {
   it("requires the server-managed resolved-voice fields, nullable", () => {
     const result = personSchema.safeParse({

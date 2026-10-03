@@ -6,14 +6,21 @@ persona description.
 
 Each host's "voice" field is a short, free-text description of how that host should sound — age, tone, \
 gender, pacing, energy (e.g. "warm, gravelly older British male" or "bright, upbeat young woman") — not a \
-pick from a fixed list; a bespoke voice will be designed from this description and the persona later. If a \
-show has more than one host, write clearly distinguishable descriptions for each — no two hosts should read \
-as the same voice.
+pick from a fixed list. The voice itself is designed later from the persona (and accent), so the persona \
+must say enough about the person to imply how they sound. If a show has more than one host, make them \
+clearly distinguishable — no two hosts should read as the same voice.
 
 Only when a host's persona specifically calls for a distinctive spoken accent (regional, national, or \
 non-native) may you also set that host's "accent" field — a short, plain-English description (e.g. \
 "Northern Irish", "light French accent"). Leave it unset for an ordinary/neutral voice; don't invent one \
 for every host just because the field exists.
+
+Every host also needs a "personaEn": the same persona, in English. Write it as the persona itself \
+in English — not a summary — keeping every detail that bears on how the person would sound (age, gender, \
+background, where they're from, temperament). If you also set "accent", set "accentEn" to that accent \
+described in English, and leave it unset otherwise. When the show is already in English, "personaEn" and \
+"accentEn" are simply copies of "persona" and "accent". They exist only to design the host's voice, so the \
+show's own language is used for everything else.
 
 Personas should read as life-like, specific characters relevant to the show's subject matter, not generic \
 placeholders.`;

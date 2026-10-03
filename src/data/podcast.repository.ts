@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { firestore } from "../config/firebase";
 import { deletePodcastAudio } from "../storage/audioCache.repository";
+import { reconcileEnglishFields } from "../utils/englishFields";
 import type { Podcast, PodcastCreateInput, PodcastUpdateInput } from "../schemas/podcast.schema";
 
 const podcastsCollection = firestore.collection("podcasts");
@@ -64,8 +65,12 @@ export async function updatePodcast(
       // they've changed. A genuinely new host (no matching id) starts
       // unresolved, same as at podcast creation.
       const current = currentHosts.get(id);
+      // The English persona/accent are set/kept/dropped by
+      // reconcileEnglishFields, not copied blindly from the request.
+      const { personaEn: _personaEn, accentEn: _accentEn, ...hostFields } = host;
       return {
-        ...host,
+        ...hostFields,
+        ...reconcileEnglishFields(current ?? host, host),
         id,
         resolvedVoiceId: current?.resolvedVoiceId ?? null,
         resolvedVoiceOrigin: current?.resolvedVoiceOrigin ?? null,

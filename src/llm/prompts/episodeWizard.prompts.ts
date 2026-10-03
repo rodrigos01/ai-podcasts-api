@@ -46,14 +46,20 @@ one if it clearly fits.
 
 If you include a guest, their "voice" field is a short, free-text description of how they should sound — \
 age, tone, gender, pacing, energy — the same kind of description a fixed host has (see above), not a pick \
-from a fixed list; a voice will be found or designed from this description and the persona later. Write a \
-description clearly distinguishable from every fixed host's listed above — every speaker who might appear \
+from a fixed list. The voice itself is designed later from the persona (and accent), so the persona must \
+say enough about the guest to imply how they sound. Make them clearly distinguishable from every fixed host's listed above — every speaker who might appear \
 together in an episode needs to sound distinct so listeners can tell them apart.
 
 Only when the guest's persona specifically calls for a distinctive spoken accent (regional, national, or \
 non-native) may you also set their "accent" field — a short, plain-English description (e.g. "Northern \
 Irish", "light French accent"), the same optional field a fixed host may have (see above). Leave it unset \
 for an ordinary/neutral voice.
+
+A guest also needs a "personaEn": their persona, in English — the persona itself, not a summary, keeping \
+every detail that bears on how they'd sound (age, gender, background, where they're from, temperament). If you \
+set "accent", also set "accentEn" to that accent described in English, otherwise leave it unset. When the show \
+is in English, "personaEn" and "accentEn" are simply copies of "persona" and "accent". They exist only to \
+design the guest's voice; write everything else in the show's own language.
 
 You return an array of 1 or 2 "suggestions". There is no fixed pattern of which suggestion has how many \
 episodes — decide each suggestion's shape independently, on its own merits.
