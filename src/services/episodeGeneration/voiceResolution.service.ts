@@ -81,7 +81,7 @@ async function englishInputFor(person: Person): Promise<{ personaEn: string; acc
 
 async function designFor(person: Person): Promise<ResolvedVoice> {
   const { personaEn, accentEn } = await englishInputFor(person);
-  const voiceId = await designVoice({ voiceDescription: buildVoiceDesignInput(personaEn, accentEn) });
+  const voiceId = await designVoice({ voiceDescription: buildVoiceDesignInput(person.name, personaEn, accentEn) });
   return { voiceId };
 }
 

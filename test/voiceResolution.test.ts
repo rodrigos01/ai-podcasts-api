@@ -48,7 +48,7 @@ describe("voiceResolution.service", () => {
 
       expect(generateText).not.toHaveBeenCalled();
       expect(designVoice).toHaveBeenCalledWith({
-        voiceDescription: "A marine biologist passionate about deep-sea exploration.",
+        voiceDescription: "Name: Dr. Evelyn Reed\n\nA marine biologist passionate about deep-sea exploration.",
       });
       expect(setGuestResolvedVoice).toHaveBeenCalledWith("pod-1", "ep-1", "guest-1", {
         resolvedVoiceId: "custom-voice-123",
@@ -78,7 +78,7 @@ describe("voiceResolution.service", () => {
       expect(generateText).not.toHaveBeenCalled();
       expect(designVoice).toHaveBeenCalledWith({
         voiceDescription:
-          "Jessica Miller, 35, an American from Boston who has lived in Brazil for five years.\n\n" +
+          "Name: Jessica Miller\n\nJessica Miller, 35, an American from Boston who has lived in Brazil for five years.\n\n" +
           "Accent: strong American accent when speaking Portuguese",
       });
     });
@@ -108,7 +108,7 @@ describe("voiceResolution.service", () => {
         }),
       );
       expect(designVoice).toHaveBeenCalledWith({
-        voiceDescription: "Lúcia, 56, a cook from Recife.\n\nAccent: Northeastern Brazilian accent",
+        voiceDescription: "Name: Lúcia Barbosa\n\nLúcia, 56, a cook from Recife.\n\nAccent: Northeastern Brazilian accent",
       });
     });
 
@@ -140,7 +140,7 @@ describe("voiceResolution.service", () => {
         resolvedVoiceOrigin: null,
         resolvedVoiceHash: null,
       });
-      expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "A host." });
+      expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "Name: G\n\nA host." });
     });
 
     it("cleans up stale voice if guest already had a designed voice on regeneration", async () => {

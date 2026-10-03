@@ -1,16 +1,19 @@
 import { z } from "zod";
 
 // Voice Design builds a voice from a natural-language description. Confirmed
-// by ear against the live API: the best input is just the speaker's bio, in
+// by ear against the live API: the best input is the speaker's bio, in
 // English (a voice designed from an English prompt still speaks any language,
 // with the intended accent), plus an explicit accent statement when there is
 // one — stating the accent is far more effective than leaving it to be
-// inferred from the bio's origin story. So that is all we send; no LLM
-// rewrite step sits in between. Called by
+// inferred from the bio's origin story. The name goes first because a bio
+// doesn't always make the speaker's gender clear and the name does. That is
+// all we send; no LLM rewrite step sits in between. Called by
 // services/episodeGeneration/voiceResolution.service.ts.
 
-export function buildVoiceDesignInput(personaEn: string, accentEn?: string): string {
-  return accentEn ? `${personaEn}\n\nAccent: ${accentEn}` : personaEn;
+export function buildVoiceDesignInput(name: string, personaEn: string, accentEn?: string): string {
+  const lines = [`Name: ${name}`, personaEn];
+  if (accentEn) lines.push(`Accent: ${accentEn}`);
+  return lines.join("\n\n");
 }
 
 // Fallback for people who have no English persona/accent stored (created
