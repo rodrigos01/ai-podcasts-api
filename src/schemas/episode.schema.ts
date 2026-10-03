@@ -88,6 +88,12 @@ export const episodeSchema = z.object({
   // created before this field existed get `undefined` here (Firestore is
   // schemaless and this isn't backfilled) — treat as 0.
   generatedAudioSeconds: z.number().nonnegative(),
+  // True once every audio chunk is cached, i.e. /audio/stream is a finished,
+  // fixed-length file. Lets clients tell a genuine end-of-stream from a
+  // stream that merely caught up to the live generation edge. Absent on
+  // episodes created before this field existed (treated as false until
+  // their next /stream request, which sets it if everything is cached).
+  audioComplete: z.boolean().optional(),
   condensedSummaries: z.record(z.string(), z.string()).nullable(),
   error: z.string().nullable(),
   createdAt: z.number(),

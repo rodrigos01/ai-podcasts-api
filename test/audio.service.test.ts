@@ -18,6 +18,7 @@ vi.mock("../src/data/audioLock.repository", () => ({
 
 vi.mock("../src/data/episode.repository", () => ({
   bumpGeneratedAudioSeconds: vi.fn(),
+  markAudioComplete: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../src/services/episodeGeneration/audioFinalize.service", () => ({

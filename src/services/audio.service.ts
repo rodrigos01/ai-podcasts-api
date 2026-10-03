@@ -6,7 +6,7 @@ import {
   putCachedChunk,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
-import { bumpGeneratedAudioSeconds } from "../data/episode.repository";
+import { bumpGeneratedAudioSeconds, markAudioComplete } from "../data/episode.repository";
 import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
@@ -197,6 +197,13 @@ export async function streamEpisodeAudio(
 
   // Path 1: All chunks are cached -> serve seekable static AAC resource
   if (allCached) {
+    // Flag completion before any bytes go out, so clients that see this
+    // stream end can already tell it's a genuine end, not the live edge.
+    if (!episode.audioComplete) {
+      await markAudioComplete(podcastId, episodeId).catch((err) =>
+        console.error(`Failed to mark audio complete for ${podcastId}/${episodeId}:`, err),
+      );
+    }
     const totalAacBytes = cachedSizes.reduce((sum, s) => sum + (s ?? 0), 0);
 
     // Handle HTTP Range request (e.g. Range: bytes=1000- or bytes=0-)
@@ -387,15 +394,24 @@ export async function streamEpisodeAudio(
     }
   }
 
+  // If that was the last chunk, flag completion *before* ending the response,
+  // so a client seeing this stream end can already tell it's the real end.
+  const finalCachedSizes = await Promise.all(
+    chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
+  );
+  const nowComplete = chunks.length > 0 && finalCachedSizes.every((s) => s !== null);
+  if (nowComplete) {
+    await markAudioComplete(podcastId, episodeId).catch((err) =>
+      console.error(`Failed to mark audio complete for ${podcastId}/${episodeId}:`, err),
+    );
+  }
+
   if (!res.destroyed && !res.writableEnded) {
     res.end();
   }
 
   // Trigger voice cleanup if all chunks are now ready
-  const finalCachedSizes = await Promise.all(
-    chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
-  );
-  if (finalCachedSizes.every((s) => s !== null)) {
+  if (nowComplete) {
     void finalizeEpisodeAudio(podcastId, episodeId);
   }
 }

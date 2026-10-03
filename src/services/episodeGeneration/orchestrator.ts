@@ -41,6 +41,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       transcript: null,
       ttsChunks: null,
       generatedAudioSeconds: 0,
+      audioComplete: false,
       progress: null,
       error: null,
     });

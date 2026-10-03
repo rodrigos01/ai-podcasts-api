@@ -33,6 +33,7 @@ export async function createEpisode(
     transcript: null,
     ttsChunks: null,
     generatedAudioSeconds: 0,
+    audioComplete: false,
     condensedSummaries: null,
     error: null,
     createdAt: now,
@@ -138,6 +139,10 @@ export async function setGuestResolvedVoice(
     const guests = episode.guests.map((guest) => (guest.id === guestId ? { ...guest, ...resolved } : guest));
     tx.update(ref, { guests, updatedAt: Date.now() });
   });
+}
+
+export async function markAudioComplete(podcastId: string, episodeId: string): Promise<void> {
+  await episodesCollection(podcastId).doc(episodeId).update({ audioComplete: true, updatedAt: Date.now() });
 }
 
 export async function bumpGeneratedAudioSeconds(
