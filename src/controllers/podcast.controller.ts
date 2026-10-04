@@ -6,6 +6,7 @@ import {
   podcastWizardOptionsRequestSchema,
   podcastWizardReviseRequestSchema,
 } from "../schemas/wizard.schema";
+import { prepareHostsForUpdate, withEnglishFields } from "../services/personEnglish.service";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import * as podcastWizardService from "../services/podcastWizard.service";
 import { HttpError } from "../utils/HttpError";
@@ -13,7 +14,8 @@ import { requireParam } from "../utils/params";
 
 export async function create(req: Request, res: Response) {
   const input = podcastCreateSchema.parse(req.body);
-  const podcast = await createPodcast(input, requireUserId(req));
+  const hosts = await Promise.all(input.hosts.map(withEnglishFields));
+  const podcast = await createPodcast({ ...input, hosts }, requireUserId(req));
   res.status(201).json(podcast);
 }
 
@@ -28,9 +30,10 @@ export async function get(req: Request, res: Response) {
 
 export async function update(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  const existing = await requireOwnedPodcast(podcastId, requireUserId(req));
   const input = podcastUpdateSchema.parse(req.body);
-  const podcast = await updatePodcast(podcastId, input);
+  const hosts = input.hosts ? await prepareHostsForUpdate(existing.hosts, input.hosts) : undefined;
+  const podcast = await updatePodcast(podcastId, { ...input, ...(hosts ? { hosts } : {}) });
   if (!podcast) throw HttpError.notFound("Podcast not found");
   res.json(podcast);
 }

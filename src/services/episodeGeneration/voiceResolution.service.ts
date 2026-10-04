@@ -1,15 +1,10 @@
 import { createHash } from "node:crypto";
-import { generateText } from "../../llm/geminiClient";
 import { deleteVoice, designVoice } from "../../llm/ttsClient";
 import { setHostResolvedVoice } from "../../data/podcast.repository";
 import { setGuestResolvedVoice } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
-import {
-  buildEnglishVoiceInputPrompt,
-  buildVoiceDesignInput,
-  ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION,
-  englishVoiceInputSchema,
-} from "../../llm/prompts/voiceResolution.prompts";
+import { buildVoiceDesignInput } from "../../llm/prompts/voiceResolution.prompts";
+import { hasEnglishFields, translateForVoice } from "../personEnglish.service";
 
 export interface ResolvedVoice {
   voiceId: string;
@@ -60,23 +55,15 @@ export function hasCurrentVoice(person: Person): person is Person & { resolvedVo
 }
 
 /**
- * The English persona/accent to design from: the ones the wizard wrote when
- * they're there, otherwise translated on demand (people predating the
- * English fields). An accent is only ever sent when the person has one set.
+ * The English persona/accent to design from: the ones saved with the person
+ * (written when they were created or last edited) when they're there,
+ * otherwise translated on demand (people saved before that existed).
  */
 async function englishInputFor(person: Person): Promise<{ personaEn: string; accentEn?: string }> {
-  if (person.personaEn && (!person.accent || person.accentEn)) {
-    return { personaEn: person.personaEn, ...(person.accent ? { accentEn: person.accentEn } : {}) };
+  if (hasEnglishFields(person)) {
+    return { personaEn: person.personaEn, ...(person.accentEn ? { accentEn: person.accentEn } : {}) };
   }
-  const translated = await generateText({
-    systemInstruction: ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION,
-    prompt: buildEnglishVoiceInputPrompt(person.persona, person.accent),
-    schema: englishVoiceInputSchema,
-  });
-  return {
-    personaEn: translated.personaEn,
-    ...(person.accent && translated.accentEn ? { accentEn: translated.accentEn } : {}),
-  };
+  return translateForVoice(person);
 }
 
 async function designFor(person: Person): Promise<ResolvedVoice> {

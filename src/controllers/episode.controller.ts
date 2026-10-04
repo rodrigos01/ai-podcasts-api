@@ -20,6 +20,7 @@ import {
   runEpisodeGenerationSequence,
 } from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
+import { withEnglishFields } from "../services/personEnglish.service";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
@@ -68,7 +69,8 @@ export async function create(req: Request, res: Response) {
 
   const episodes = [];
   for (const episodeInput of input.episodes) {
-    episodes.push(await createEpisode(podcastId, episodeInput));
+    const guests = await Promise.all(episodeInput.guests.map(withEnglishFields));
+    episodes.push(await createEpisode(podcastId, { ...episodeInput, guests }));
   }
 
   // Every episode is created and returned immediately; generation itself
