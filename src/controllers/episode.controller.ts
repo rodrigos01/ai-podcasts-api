@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import {
   createEpisode,
@@ -42,7 +43,8 @@ export async function wizardOptions(req: Request, res: Response) {
     previousEpisodes,
     input.prompt,
   );
-  res.json(result);
+  // Voice-design session for this wizard run — see voiceDesign.service.ts.
+  res.json({ sessionId: randomUUID(), ...result });
 }
 
 export async function wizardRevise(req: Request, res: Response) {
@@ -59,7 +61,7 @@ export async function wizardRevise(req: Request, res: Response) {
     input.targetEpisodeIndex,
     input.instruction,
   );
-  res.json(result);
+  res.json({ sessionId: input.sessionId ?? randomUUID(), ...result });
 }
 
 export async function create(req: Request, res: Response) {

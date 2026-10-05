@@ -9,6 +9,10 @@ import { voicesRouter } from "./routes/voices.routes";
 export function createApp() {
   const app = express();
 
+  // Behind Cloud Run's TLS-terminating proxy: lets req.protocol be "https",
+  // which the absolute voice preview URLs depend on.
+  app.set("trust proxy", true);
+
   app.use(express.json());
   app.use(healthRouter);
   app.use(voicesRouter);

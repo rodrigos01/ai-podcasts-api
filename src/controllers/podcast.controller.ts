@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { createPodcast, deletePodcast, listPodcasts, updatePodcast } from "../data/podcast.repository";
 import { requireUserId } from "../middleware/requireAuth";
@@ -48,7 +49,8 @@ export async function remove(req: Request, res: Response) {
 export async function wizardOptions(req: Request, res: Response) {
   const input = podcastWizardOptionsRequestSchema.parse(req.body);
   const options = await podcastWizardService.generateOptions(input.prompt, input.sourceMaterial);
-  res.json({ options });
+  // Voice-design session for this wizard run — see voiceDesign.service.ts.
+  res.json({ sessionId: randomUUID(), options });
 }
 
 export async function wizardRevise(req: Request, res: Response) {
@@ -58,5 +60,5 @@ export async function wizardRevise(req: Request, res: Response) {
     input.instruction,
     input.targetIndex,
   );
-  res.json({ options });
+  res.json({ sessionId: input.sessionId ?? randomUUID(), options });
 }

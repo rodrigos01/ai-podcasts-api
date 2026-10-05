@@ -1,5 +1,8 @@
 import type { Request, Response } from "express";
+import { z } from "zod";
+import { requireUserId } from "../middleware/requireAuth";
 import { isDesignedVoiceId } from "../llm/ttsClient";
+import { designCandidates } from "../services/voiceDesign.service";
 import { getVoicePreviewWav } from "../services/voicePreview.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
@@ -20,4 +23,28 @@ export async function preview(req: Request, res: Response) {
     "Cache-Control": "public, max-age=3600",
   });
   res.send(wav);
+}
+
+const designRequestSchema = z.object({
+  // A wizard run's id (from the wizard responses), or the podcast/episode id
+  // when editing an existing one — see designedVoice.repository.ts.
+  sessionId: z.string().min(1).max(128),
+  prompt: z.string().min(1).max(4000),
+});
+
+export async function design(req: Request, res: Response) {
+  const input = designRequestSchema.parse(req.body);
+  const voiceIds = await designCandidates({
+    ownerId: requireUserId(req),
+    sessionId: input.sessionId,
+    prompt: input.prompt,
+  });
+
+  // Absolute, so a client can hand it straight to an <audio> tag or ExoPlayer.
+  // Behind Cloud Run's proxy this relies on `trust proxy` (see app.ts).
+  const origin = `${req.protocol}://${req.get("host")}`;
+  res.json({
+    sessionId: input.sessionId,
+    voices: voiceIds.map((voiceId) => ({ voiceId, previewUrl: `${origin}/voices/${voiceId}/preview` })),
+  });
 }

@@ -24,6 +24,9 @@ export const podcastWizardOptionsRequestSchema = z.object({
 
 export const podcastWizardReviseRequestSchema = z.object({
   options: z.array(podcastOptionSchema).length(3),
+  // Echoed back from the options response so a revision stays in the same
+  // voice-design session; a client that omits it just gets a new one.
+  sessionId: z.string().min(1).max(128).optional(),
   targetIndex: z.number().int().min(0).max(2).optional(),
   instruction: z.string().min(1),
 });
@@ -83,6 +86,8 @@ export const episodeWizardOptionsRequestSchema = z.object({
 
 export const episodeWizardReviseRequestSchema = z.object({
   suggestions: z.array(episodeSuggestionSchema).min(1).max(2),
+  // See podcastWizardReviseRequestSchema.
+  sessionId: z.string().min(1).max(128).optional(),
   length: episodeLengthSchema,
   targetSuggestionIndex: z.number().int().min(0).max(1),
   // Omit to revise every episode within that suggestion; set to revise just

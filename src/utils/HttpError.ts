@@ -15,4 +15,8 @@ export class HttpError extends Error {
   static badRequest(message: string, details?: unknown): HttpError {
     return new HttpError(400, message, details);
   }
+
+  static badGateway(message: string): HttpError {
+    return new HttpError(502, message);
+  }
 }

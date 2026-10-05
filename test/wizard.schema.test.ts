@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { episodeWizardOptionsResponseSchema } from "../src/schemas/wizard.schema";
+import {
+  episodeWizardOptionsResponseSchema,
+  podcastWizardReviseRequestSchema,
+} from "../src/schemas/wizard.schema";
 
 const draft = {
   title: "Ep 1",
@@ -63,5 +66,21 @@ describe("episodeWizardOptionsResponseSchema suggestions shape", () => {
       suggestions: [{ episodes: [draft] }, { episodes: [draft, draft] }, { episodes: [draft] }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("wizard revise requests", () => {
+  it("accept an optional voice-design sessionId", () => {
+    const option = {
+      title: "t",
+      description: "d",
+      structure: "s",
+      hosts: [{ name: "A", voice: "warm", persona: "p" }],
+      predictedChanges: ["a", "b", "c"],
+    };
+    const base = { options: [option, option, option], instruction: "x" };
+    expect(podcastWizardReviseRequestSchema.safeParse(base).success).toBe(true);
+    expect(podcastWizardReviseRequestSchema.safeParse({ ...base, sessionId: "abc" }).success).toBe(true);
+    expect(podcastWizardReviseRequestSchema.safeParse({ ...base, sessionId: "" }).success).toBe(false);
   });
 });
