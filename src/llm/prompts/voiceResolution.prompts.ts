@@ -16,10 +16,14 @@ export function buildVoiceDesignInput(name: string, personaEn: string, accentEn?
   return lines.join("\n\n");
 }
 
-// Fallback for people who have no English persona/accent stored (created
-// before those fields existed, or by a client that didn't send them): one
-// small call produces them, so such a person gets the same voice-design
-// input a freshly wizard-written one has.
+// Produces the English persona/accent for a person whose own record doesn't
+// carry them: the server runs this when it saves a person (see
+// services/personEnglish.service.ts) rather than trusting the client to echo
+// what the wizard wrote, and again on demand for people saved before that.
+// The accent can only come from what the person's text actually says — the
+// stated-accent field, or an explicit mention in the voice hint or persona —
+// since the wizards often describe an accent in the voice hint and leave the
+// accent field itself empty.
 export const englishVoiceInputSchema = z.object({
   personaEn: z.string().min(1),
   accentEn: z.string().min(1).optional(),
@@ -27,15 +31,19 @@ export const englishVoiceInputSchema = z.object({
 
 export const ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION =
   "You prepare a podcast speaker's description for a text-to-speech voice-design system that " +
-  "works best from English text. Given the speaker's persona (and optionally a stated accent), " +
-  "which may be in any language, return the persona translated into English, keeping every " +
-  "detail that bears on how the person would sound (age, background, origin, temperament) and " +
-  "adding nothing; and, only if an accent was stated, that accent described in plain English " +
-  "(e.g. 'Northern Irish', 'light French accent when speaking Portuguese'). If the text is " +
-  "already in English, return it unchanged. Never invent an accent that wasn't stated.";
+  "works best from English text. You are given the speaker's persona, a short voice hint, and " +
+  "optionally a stated accent, any of which may be in any language. Return:\n" +
+  "- personaEn: the persona translated into English, keeping every detail that bears on how " +
+  "the person would sound (age, gender, background, origin, temperament) and adding nothing. " +
+  "If it is already in English, return it unchanged.\n" +
+  "- accentEn: ONLY if an accent is stated — in the stated-accent field, or explicitly in the " +
+  "voice hint or persona (e.g. 'sotaque britânico', 'cadência porteña') — that accent described " +
+  "in plain English, including the language it is spoken in when that matters (e.g. 'British " +
+  "accent when speaking Portuguese', 'Northern Irish'). Do not infer an accent from where " +
+  "someone is from alone, and leave accentEn out entirely when none is stated.";
 
-export function buildEnglishVoiceInputPrompt(persona: string, accent?: string): string {
-  const lines = [`Persona:\n${persona}`];
+export function buildEnglishVoiceInputPrompt(persona: string, voice: string, accent?: string): string {
+  const lines = [`Persona:\n${persona}`, `Voice hint: ${voice}`];
   if (accent) lines.push(`Stated accent: ${accent}`);
   return lines.join("\n\n");
 }

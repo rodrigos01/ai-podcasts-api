@@ -104,7 +104,7 @@ describe("voiceResolution.service", () => {
 
       expect(generateText).toHaveBeenCalledWith(
         expect.objectContaining({
-          prompt: expect.stringContaining("Stated accent: sotaque nordestino"),
+          prompt: expect.stringContaining("Voice hint: calorosa"),
         }),
       );
       expect(designVoice).toHaveBeenCalledWith({
@@ -112,8 +112,8 @@ describe("voiceResolution.service", () => {
       });
     });
 
-    it("translates when the accent has no English counterpart, and never invents an accent for an accent-less person", async () => {
-      vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A host.", accentEn: "made-up accent" });
+    it("translates when the accent is set but has no English counterpart", async () => {
+      vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A host.", accentEn: "Carioca accent" });
       vi.mocked(designVoice).mockResolvedValueOnce("v1");
       await resolveGuestVoice("pod-1", "ep-1", {
         id: "g",
@@ -127,20 +127,26 @@ describe("voiceResolution.service", () => {
         resolvedVoiceHash: null,
       });
       expect(generateText).toHaveBeenCalledTimes(1);
+      expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "Name: G\n\nA host.\n\nAccent: Carioca accent" });
+    });
 
-      vi.clearAllMocks();
-      vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A host.", accentEn: "made-up accent" });
+    it("uses a saved accentEn even when the accent field is empty (accent that came from the voice hint)", async () => {
       vi.mocked(designVoice).mockResolvedValueOnce("v2");
       await resolveGuestVoice("pod-1", "ep-1", {
         id: "g",
         name: "G",
-        persona: "Uma anfitriã.",
-        voice: "v",
+        persona: "Londrino.",
+        personaEn: "A Londoner.",
+        accentEn: "British accent when speaking Portuguese",
+        voice: "sotaque britânico",
         resolvedVoiceId: null,
         resolvedVoiceOrigin: null,
         resolvedVoiceHash: null,
       });
-      expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "Name: G\n\nA host." });
+      expect(generateText).not.toHaveBeenCalled();
+      expect(designVoice).toHaveBeenCalledWith({
+        voiceDescription: "Name: G\n\nA Londoner.\n\nAccent: British accent when speaking Portuguese",
+      });
     });
 
     it("cleans up stale voice if guest already had a designed voice on regeneration", async () => {

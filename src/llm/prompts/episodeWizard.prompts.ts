@@ -53,7 +53,7 @@ together in an episode needs to sound distinct so listeners can tell them apart.
 Only when the guest's persona specifically calls for a distinctive spoken accent (regional, national, or \
 non-native) may you also set their "accent" field — a short, plain-English description (e.g. "Northern \
 Irish", "light French accent"), the same optional field a fixed host may have (see above). Leave it unset \
-for an ordinary/neutral voice.
+for an ordinary/neutral voice — but if the guest's voice description mentions an accent, set it.
 
 A guest also needs a "personaEn": their persona, in English — the persona itself, not a summary, keeping \
 every detail that bears on how they'd sound (age, gender, background, where they're from, temperament). If you \

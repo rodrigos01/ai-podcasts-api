@@ -142,7 +142,7 @@ All request/response bodies are JSON unless noted.
 // response: same shape as /wizard/options
 ```
 
-**`POST /podcasts`** — body is `{ title, description, structure, hosts: [{name, voice, persona}] }` (drop `predictedChanges` from a chosen option). `voice` is a free-text description (e.g. "warm, gravelly older British male"), not a pick from `GET /voices`'s legacy catalog — the real synthesizable voice is designed lazily, the first time the podcast's audio is generated, from the host's persona and accent (their English versions, `personaEn`/`accentEn`, which the wizard writes alongside them and which are optional on input — they're translated on demand if absent). Returns `201` with the created podcast, including a generated `id` and per-host `id`s.
+**`POST /podcasts`** — body is `{ title, description, structure, hosts: [{name, voice, persona}] }` (drop `predictedChanges` from a chosen option). `voice` is a free-text description (e.g. "warm, gravelly older British male"), not a pick from `GET /voices`'s legacy catalog — the real synthesizable voice is designed lazily, the first time the podcast's audio is generated, from the host's persona and accent (their English versions, `personaEn`/`accentEn`, which the server fills in when it saves a person if the request doesn't carry them — the accent is read from the voice hint too). Returns `201` with the created podcast, including a generated `id` and per-host `id`s.
 
 **`PATCH /podcasts/:podcastId`** — any subset of `{title, description, structure, hosts}`. When editing `hosts`, include each existing host's `id` to keep it stable (episodes reference hosts by id); omit `id` on a new host.
 

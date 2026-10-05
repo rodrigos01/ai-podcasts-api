@@ -13,7 +13,7 @@ clearly distinguishable — no two hosts should read as the same voice.
 Only when a host's persona specifically calls for a distinctive spoken accent (regional, national, or \
 non-native) may you also set that host's "accent" field — a short, plain-English description (e.g. \
 "Northern Irish", "light French accent"). Leave it unset for an ordinary/neutral voice; don't invent one \
-for every host just because the field exists.
+for every host just because the field exists. Conversely, if a host's voice description mentions an accent, set the "accent" field too.
 
 Every host also needs a "personaEn": the same persona, in English. Write it as the persona itself \
 in English — not a summary — keeping every detail that bears on how the person would sound (age, gender, \

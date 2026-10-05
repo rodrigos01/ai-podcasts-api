@@ -1,35 +1,49 @@
 import type { PersonInput } from "../schemas/person.schema";
 
-type EnglishSource = Pick<PersonInput, "persona" | "accent" | "personaEn" | "accentEn">;
+type EnglishSource = Pick<PersonInput, "persona" | "voice" | "accent" | "personaEn" | "accentEn">;
+
+/**
+ * True when something the English fields are derived from changed. Both
+ * English fields come from the persona, voice hint and accent together (an
+ * accent is often only mentioned in the hint), so an edit to any of them
+ * makes both stale.
+ */
+export function englishSourceChanged(current: EnglishSource, incoming: EnglishSource): boolean {
+  return (
+    current.persona !== incoming.persona ||
+    current.voice !== incoming.voice ||
+    current.accent !== incoming.accent
+  );
+}
 
 /**
  * Decides which English persona/accent (see person.schema.ts) a host keeps
- * when a client updates them. An English field only means anything next to
- * the original it was written from, so:
+ * when a client updates them:
  *  - the client sent one that differs from what's stored → it's a deliberate
  *    new value, keep it;
- *  - the original is unchanged and the client omitted the English one (or
- *    echoed it back) → keep the stored one, so a client that doesn't know
- *    these fields doesn't wipe them;
- *  - the original changed but the English one wasn't touched → it's stale,
- *    drop it, and voiceResolution.service.ts translates on demand instead.
+ *  - nothing it was derived from changed and the client omitted the English
+ *    one (or echoed it back) → keep the stored one, so a client that doesn't
+ *    know these fields doesn't wipe them;
+ *  - the persona, voice hint or accent changed but the English one wasn't
+ *    touched → it's stale, drop it (personEnglish.service.ts then writes a
+ *    fresh one).
  * Returns only the keys that should be set (Firestore rejects `undefined`).
  */
 export function reconcileEnglishFields(
   current: EnglishSource,
   incoming: EnglishSource,
 ): { personaEn?: string; accentEn?: string } {
-  const personaEn = reconcile(current.persona, current.personaEn, incoming.persona, incoming.personaEn);
-  const accentEn = reconcile(current.accent, current.accentEn, incoming.accent, incoming.accentEn);
+  const changed = englishSourceChanged(current, incoming);
+  const personaEn = reconcile(current.personaEn, incoming.personaEn, changed);
+  const accentEn = reconcile(current.accentEn, incoming.accentEn, changed);
   return { ...(personaEn ? { personaEn } : {}), ...(accentEn ? { accentEn } : {}) };
 }
 
 function reconcile(
-  currentOriginal: string | undefined,
   currentEnglish: string | undefined,
-  incomingOriginal: string | undefined,
   incomingEnglish: string | undefined,
+  sourceChanged: boolean,
 ): string | undefined {
   if (incomingEnglish !== undefined && incomingEnglish !== currentEnglish) return incomingEnglish;
-  return incomingOriginal === currentOriginal ? currentEnglish : undefined;
+  return sourceChanged ? undefined : currentEnglish;
 }
