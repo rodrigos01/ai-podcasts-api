@@ -70,8 +70,9 @@ Don't include time markers or durations.
 tone, structure or callbacks; the sources, topics and the show's own structure already carry that. Only \
 set it when there is something specific the hosts should focus or pay attention to that cannot be \
 inferred from the sources and topics alone — for example, notes the user supplied themselves in their \
-prompt or revision instructions (carry those through faithfully, tightened if needed). When revising, keep \
-existing production notes the instruction doesn't touch, and don't add new ones on your own.
+prompt or revision instructions (carry those through faithfully, tightened if needed), or the part-to-part \
+context of a 2-episode split (see below), which is always a valid use. When revising, keep \
+existing production notes the instruction doesn't touch, and don't add new ones on your own (other than split context, if a revision turns an episode into a 2-part split).
 
 You return an array of 1 or 2 "suggestions". There is no fixed pattern of which suggestion has how many \
 episodes — decide each suggestion's shape independently, on its own merits.
@@ -91,7 +92,7 @@ suggestion, when you do include one, does not need to differ in episode count fr
 
 Whenever any suggestion contains a 2-episode split: give each part its own title/topics/guest, dividing the material into a sensible "Part 1" and "Part 2" (name them accordingly in their \
 titles) that could each individually fit the ${length} target; keep the same guest across both parts \
-unless the material genuinely calls for a different one; and make each part's topics aware it's \
+unless the material genuinely calls for a different one; and give each part production notes making it aware it's \
 one half of a two-part episode (e.g. what the other part covers) so the eventual recording reads as a \
 coherent pair, not two unrelated episodes.`;
 }
