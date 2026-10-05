@@ -14,7 +14,8 @@ import { requireOwnedPodcast } from "../services/podcastAccess";
 import * as podcastWizardService from "../services/podcastWizard.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
-import { decideVoice } from "../utils/voiceDecision";
+import { decideVoice, needsVoiceNow } from "../utils/voiceDecision";
+import { designHostVoicesNow } from "../services/episodeGeneration/voiceResolution.service";
 import { createVoicePicker, deletePeopleVoices } from "../services/voiceSelection.service";
 
 // The wizard's own output has no voicePrompt (the model never writes it); the
@@ -88,6 +89,15 @@ export async function update(req: Request, res: Response) {
   if (!podcast) throw HttpError.notFound("Podcast not found");
   res.json(podcast);
   void picker.finish(decisions);
+
+  // Hosts this save left without a voice get one designed now, not at the
+  // next generation (which still designs any that are missing).
+  const needVoice = podcast.hosts.filter((saved, i) => {
+    const decision = decisions[i];
+    const hostId = prepared[i]?.id;
+    return !!decision && needsVoiceNow(hostId ? currentById.get(hostId) : undefined, decision, saved);
+  });
+  if (needVoice.length > 0) void designHostVoicesNow(podcastId, needVoice);
 }
 
 export async function remove(req: Request, res: Response) {

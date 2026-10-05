@@ -1,5 +1,5 @@
 import type { Person, PersonInput, ResolvedVoiceFields } from "../schemas/person.schema";
-import { voiceHash } from "./voiceHash";
+import { hasCurrentVoice, voiceHash } from "./voiceHash";
 
 export const NO_VOICE: ResolvedVoiceFields = {
   resolvedVoiceId: null,
@@ -77,4 +77,17 @@ export function decideVoice(
 // and a delete would only fail.
 function ownedVoiceId(person: Person | undefined): string | undefined {
   return person?.resolvedVoiceId && person.resolvedVoiceHash ? person.resolvedVoiceId : undefined;
+}
+
+/**
+ * Whether a save should design this person's voice right away instead of
+ * waiting for the next generation: they have no usable voice after the save,
+ * and the save is what left them without one — either it dropped the stored
+ * voice (the prompt changed) or the person is new. A person this save didn't
+ * touch (e.g. a host stored before voices were re-designed on this platform)
+ * stays on the lazy path, so editing a title never triggers billed designs.
+ */
+export function needsVoiceNow(current: Person | undefined, decision: VoiceDecision, saved: Person): boolean {
+  if (hasCurrentVoice(saved)) return false;
+  return decision.fields !== null || current === undefined;
 }

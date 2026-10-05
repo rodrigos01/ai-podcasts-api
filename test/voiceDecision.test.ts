@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Person } from "../src/schemas/person.schema";
-import { decideVoice, NO_VOICE } from "../src/utils/voiceDecision";
+import { decideVoice, needsVoiceNow, NO_VOICE } from "../src/utils/voiceDecision";
 import { hasCurrentVoice, voiceHash } from "../src/utils/voiceHash";
 
 const incoming = {
@@ -79,5 +79,28 @@ describe("hasCurrentVoice for a picked voice", () => {
     const pinned = stored({ resolvedVoiceHash: "stale", resolvedVoicePinned: true });
     expect(hasCurrentVoice(pinned)).toBe(true);
     expect(hasCurrentVoice({ ...pinned, resolvedVoicePinned: false })).toBe(false);
+  });
+});
+
+describe("needsVoiceNow", () => {
+  const noVoice = stored({ resolvedVoiceId: null, resolvedVoiceHash: null });
+
+  it("designs now for a voice the save dropped", () => {
+    const decision = decideVoice(stored(), { ...incoming, voicePrompt: "changed" }, null);
+    expect(needsVoiceNow(stored(), decision, noVoice)).toBe(true);
+  });
+
+  it("designs now for a brand-new person with no pick", () => {
+    expect(needsVoiceNow(undefined, { fields: null }, noVoice)).toBe(true);
+  });
+
+  it("leaves an untouched person without a current voice to the lazy path", () => {
+    expect(needsVoiceNow(stored(), { fields: null }, stored({ resolvedVoiceHash: "stale" }))).toBe(false);
+  });
+
+  it("does nothing when the person ends up with a usable voice (a pick)", () => {
+    const decision = decideVoice(undefined, incoming, { voiceId: "voice_new", prompt: "p" });
+    const saved = stored({ ...decision.fields, voicePrompt: "p" });
+    expect(needsVoiceNow(undefined, decision, saved)).toBe(false);
   });
 });

@@ -50,6 +50,21 @@ export async function resolveHostVoice(podcastId: string, host: Person): Promise
 }
 
 /**
+ * Designs voices for hosts a save left without one (see voiceDecision.ts's
+ * needsVoiceNow), in the background of that save so the next generation finds
+ * them ready. Best-effort: a failure is logged and the host's voice is simply
+ * designed at the next generation, as before.
+ */
+export async function designHostVoicesNow(podcastId: string, hosts: Person[]): Promise<void> {
+  const results = await Promise.allSettled(hosts.map((host) => resolveHostVoice(podcastId, host)));
+  results.forEach((result, i) => {
+    if (result.status === "rejected") {
+      console.error(`Could not design a voice for host ${hosts[i]?.id} after a save (will retry at generation):`, result.reason);
+    }
+  });
+}
+
+/**
  * Guests always resolve fresh — a guest is scoped to one episode, never
  * reused across episodes, so there's no cache to check. Guests always get
  * a bespoke Voice Design voice designed from their English persona and accent.
