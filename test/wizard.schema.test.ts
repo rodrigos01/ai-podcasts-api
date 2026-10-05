@@ -10,6 +10,14 @@ const draft = {
 };
 
 describe("episodeWizardOptionsResponseSchema suggestions shape", () => {
+  it("accepts a draft without production notes", () => {
+    const { productionNotes: _omitted, ...withoutNotes } = draft;
+    const result = episodeWizardOptionsResponseSchema.safeParse({
+      suggestions: [{ episodes: [withoutNotes] }],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts a single suggestion with one episode (no split needed)", () => {
     const result = episodeWizardOptionsResponseSchema.safeParse({
       suggestions: [{ episodes: [draft] }],

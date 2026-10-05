@@ -33,7 +33,7 @@ export async function createEpisode(
       resolvedVoiceOrigin: null,
       resolvedVoiceHash: null,
     })),
-    productionNotes: input.productionNotes,
+    ...(input.productionNotes ? { productionNotes: input.productionNotes } : {}),
     status: "generating",
     progress: null,
     transcript: null,

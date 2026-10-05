@@ -79,7 +79,9 @@ export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationCon
   const guestBlock = guest
     ? `\n\nThe guest for this episode is ${guest.name} and here's their bio: ${guest.persona}`
     : "";
-  const draft = `Title: ${ctx.episode.title}\nTopics: ${ctx.episode.topics}\nProduction notes: ${ctx.episode.productionNotes}`;
+  const draft = `Title: ${ctx.episode.title}\nTopics: ${ctx.episode.topics}${
+    ctx.episode.productionNotes ? `\nProduction notes: ${ctx.episode.productionNotes}` : ""
+  }`;
 
   return `Write the script for an episode based on the sources below, following this draft:
 ${draft}${guestBlock}

@@ -21,7 +21,7 @@ export function episodeWizardSystemInstruction(
   const history = buildEpisodeHistoryBlock(previousEpisodes, podcast);
   const historySection = history
     ? `\n\n${history}\n\nWhen drafting, keep this history in mind: build on it rather than repeating it, and \
-reference it in the production notes where a callback or follow-up would help (a guest appearing again is fine \
+build on it in the topics where a callback or follow-up would help (a guest appearing again is fine \
 when it fits, but don't reuse a past guest just because they existed).`
     : "";
 
@@ -39,7 +39,7 @@ spoken words, roughly matching the studio's length options: ${lengthCatalog}) be
 this is a fixed constraint, not something you suggest.
 
 Given pre-production source material and an optional user prompt for a specific episode, you draft that \
-episode's title, topics, production notes, and — if this episode calls for one — a single guest \
+episode's title, topics, optionally production notes, and — if this episode calls for one — a single guest \
 character with a life-like persona relevant to the topics. Not every episode needs a guest; only include \
 one if it clearly fits.
 
@@ -62,10 +62,16 @@ design the guest's voice; write everything else in the show's own language.
 
 Keep the draft short and high-level. It is an outline a script writer will use to structure the \
 transcript, not a prescription of it: "topics" is a brief list or sentence of the subjects and angles to \
-cover, and "productionNotes" is a few sentences at most on the episode's shape, tone and how it maps to the \
-show's structure (plus callbacks to earlier episodes where useful). Never script what the hosts or guest \
-should say, react to, joke about or come up with, and don't dictate specific lines, anecdotes, opinions or \
-beat-by-beat sequencing — leave that to the script writer. Don't include time markers or durations.
+cover. Never script what the hosts or guest should say, react to, joke about or come up with, and don't \
+dictate specific lines, anecdotes, opinions or beat-by-beat sequencing — leave that to the script writer. \
+Don't include time markers or durations.
+
+"productionNotes" is optional, and you should leave it out by default — don't use it to suggest angles, \
+tone, structure or callbacks; the sources, topics and the show's own structure already carry that. Only \
+set it when there is something specific the hosts should focus or pay attention to that cannot be \
+inferred from the sources and topics alone — for example, notes the user supplied themselves in their \
+prompt or revision instructions (carry those through faithfully, tightened if needed). When revising, keep \
+existing production notes the instruction doesn't touch, and don't add new ones on your own.
 
 You return an array of 1 or 2 "suggestions". There is no fixed pattern of which suggestion has how many \
 episodes — decide each suggestion's shape independently, on its own merits.
@@ -83,10 +89,9 @@ with the first — e.g. a tight single episode versus a fuller two-part treatmen
 a second suggestion at all; use it sparingly, and never just to pad the array out to 2. The second \
 suggestion, when you do include one, does not need to differ in episode count from the first.
 
-Whenever any suggestion contains a 2-episode split: give each part its own title/topics/production \
-notes/guest, dividing the material into a sensible "Part 1" and "Part 2" (name them accordingly in their \
+Whenever any suggestion contains a 2-episode split: give each part its own title/topics/guest, dividing the material into a sensible "Part 1" and "Part 2" (name them accordingly in their \
 titles) that could each individually fit the ${length} target; keep the same guest across both parts \
-unless the material genuinely calls for a different one; and make each part's production notes aware it's \
+unless the material genuinely calls for a different one; and make each part's topics aware it's \
 one half of a two-part episode (e.g. what the other part covers) so the eventual recording reads as a \
 coherent pair, not two unrelated episodes.`;
 }
