@@ -69,7 +69,7 @@ Very short reaction turns work best as backchanneling (see below).
 You can use the following tags to make the conversation more realistic:
 
 - Non vocal bursts: use instructions in angle brackets such as <laughs> or <gasps> to introduce these non spoken sounds in the speaker's turn.
-- Backchanneling: if you want the *other* speaker to say a quick reaction or interjection to what's been spoken, overlapping with the active speaker, you can inject those using pipes like |hm| or |yes|. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for intelligibility.
+- Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for intelligibility.
 `;
 }
 
@@ -84,7 +84,7 @@ export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationCon
   return `Write the script for an episode based on the sources below, following this draft:
 ${draft}${guestBlock}
 
-The script should have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
+The script *must* have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
 
 Sources:
 ${sourceBlock(ctx.sources)}`;
