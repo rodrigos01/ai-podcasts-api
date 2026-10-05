@@ -35,14 +35,12 @@ const WORDS_PER_MINUTE = 155;
 export function buildScriptSystemInstruction(
   cast: Cast,
   ctx: ScriptGenerationContext,
-  wordTarget: WordTarget,
 ): string {
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
   const history = buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
   const historySection = history ? `\n\n${history}` : "";
-  const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
@@ -53,8 +51,7 @@ ${ctx.podcast.structure}
 The show host(s) are:
 ${hosts}${historySection}
 
-The scripts will be used with a TTS engine, should have between ${wordTarget.min}-${wordTarget.max} words \
-(for a ~${minutes}m episode) and follow this format:
+The scripts will be used with a TTS engine, and follow this format:
 
 ${labelA}: line
 (Optional) Style: delivery directions for that turn
@@ -76,7 +73,8 @@ You can use the following tags to make the conversation more realistic:
 `;
 }
 
-export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationContext): string {
+export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationContext, wordTarget: WordTarget): string {
+  const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
   const guest = cast.speakers.find((s) => !s.isHost);
   const guestBlock = guest
     ? `\n\nThe guest for this episode is ${guest.name} and here's their bio: ${guest.persona}`
@@ -85,6 +83,8 @@ export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationCon
 
   return `Write the script for an episode based on the sources below, following this draft:
 ${draft}${guestBlock}
+
+The script should have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
 
 Sources:
 ${sourceBlock(ctx.sources)}`;
