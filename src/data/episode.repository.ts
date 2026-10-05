@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { firestore } from "../config/firebase";
 import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
+import type { ResolvedVoiceFields } from "../schemas/person.schema";
+import { NO_VOICE } from "../utils/voiceDecision";
 import {
   compareBySeriesOrder,
   selectPriorEpisodes,
@@ -16,6 +18,8 @@ function episodesCollection(podcastId: string) {
 export async function createEpisode(
   podcastId: string,
   input: EpisodeCreateInput,
+  // Lines up with `input.guests` by index — see podcast.repository.ts's createPodcast.
+  guestVoices: (ResolvedVoiceFields | null)[] = [],
 ): Promise<Episode> {
   const id = randomUUID();
   const now = Date.now();
@@ -26,13 +30,10 @@ export async function createEpisode(
     length: input.length,
     sourceIds: input.sourceIds,
     participantHostIds: input.participantHostIds,
-    guests: input.guests.map((guest) => ({
-      ...guest,
-      id: randomUUID(),
-      resolvedVoiceId: null,
-      resolvedVoiceOrigin: null,
-      resolvedVoiceHash: null,
-    })),
+    guests: input.guests.map((guest, index) => {
+      const { resolvedVoiceId: _clientValue, ...person } = guest;
+      return { ...person, id: randomUUID(), ...(guestVoices[index] ?? NO_VOICE) };
+    }),
     ...(input.productionNotes ? { productionNotes: input.productionNotes } : {}),
     status: "generating",
     progress: null,
@@ -61,12 +62,39 @@ export async function updateEpisode(
   podcastId: string,
   episodeId: string,
   input: EpisodeUpdateInput,
+  // Lines up with `input.guests` by index — see podcast.repository.ts's updatePodcast.
+  guestVoices: (ResolvedVoiceFields | null)[] = [],
 ): Promise<Episode | null> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   const existing = await ref.get();
   if (!existing.exists) return null;
 
-  await ref.update({ ...input, updatedAt: Date.now() });
+  const patch: Record<string, unknown> = { ...input, updatedAt: Date.now() };
+  if (input.guests) {
+    const currentGuests = new Map((existing.data() as Episode).guests.map((guest) => [guest.id, guest]));
+    patch.guests = input.guests.map((guest, index) => {
+      const id = guest.id && currentGuests.has(guest.id) ? guest.id : randomUUID();
+      const current = currentGuests.get(id);
+      const { resolvedVoiceId: _clientValue, ...person } = guest;
+      return {
+        ...person,
+        id,
+        ...(guestVoices[index] ??
+          (current
+            ? {
+                resolvedVoiceId: current.resolvedVoiceId,
+                resolvedVoiceOrigin: current.resolvedVoiceOrigin,
+                resolvedVoiceHash: current.resolvedVoiceHash,
+                ...(current.resolvedVoicePinned !== undefined
+                  ? { resolvedVoicePinned: current.resolvedVoicePinned }
+                  : {}),
+              }
+            : NO_VOICE)),
+      };
+    });
+  }
+
+  await ref.update(patch);
   const updated = await ref.get();
   return updated.data() as Episode;
 }

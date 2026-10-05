@@ -53,6 +53,13 @@ export const personSaveSchema = personInputSchema.extend({
   // itself (from personaEn/accentEn) whenever a person doesn't have one yet.
   // Not part of voiceHash: editing it never invalidates a stored voice.
   voicePrompt: optionalText,
+  // The voice a client picked for this person from POST /voices/design
+  // candidates (the id it got back). Echoing a GET response back sends the
+  // current value, which is a no-op. Only ever used after the server has
+  // checked it against the caller's own design session — anything else is
+  // ignored as if it hadn't been sent (see voiceSelection.service.ts). The
+  // stored field below is the same name; origin/hash stay server-managed.
+  resolvedVoiceId: z.string().min(1).optional(),
 });
 
 export const personSchema = personSaveSchema.extend({
@@ -73,7 +80,16 @@ export const personSchema = personSaveSchema.extend({
   resolvedVoiceId: z.string().nullable(),
   resolvedVoiceOrigin: z.enum(["design", "library"]).nullable(),
   resolvedVoiceHash: z.string().nullable(),
+  // True when the voice is one the user picked (not one the server designed
+  // on its own): it's kept until they pick another or the prompt it was
+  // designed from changes, instead of being re-designed on a hash mismatch,
+  // and a guest's isn't deleted after audio finalizes. Absent on older docs.
+  resolvedVoicePinned: z.boolean().optional(),
 });
 
+export type ResolvedVoiceFields = Pick<
+  Person,
+  "resolvedVoiceId" | "resolvedVoiceOrigin" | "resolvedVoiceHash" | "resolvedVoicePinned"
+>;
 export type PersonInput = z.infer<typeof personSaveSchema>;
 export type Person = z.infer<typeof personSchema>;

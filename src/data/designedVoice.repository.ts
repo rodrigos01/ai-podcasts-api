@@ -11,6 +11,11 @@ export interface DesignedVoice {
   sessionId: string;
   ownerId: string;
   prompt: string;
+  // Set once the voice is stored on a podcast host or episode guest. Linked
+  // voices are never cleaned up with their session (a session id is the
+  // podcast/episode id when editing, so it outlives the pick). Absent on
+  // records written before this field existed, which means false.
+  linked?: boolean;
   createdAt: number;
 }
 
@@ -29,4 +34,19 @@ export async function listSessionVoices(sessionId: string, ownerId: string): Pro
     .where("ownerId", "==", ownerId)
     .get();
   return snap.docs.map((doc) => doc.data() as DesignedVoice);
+}
+
+export async function markVoicesLinked(voiceIds: string[]): Promise<void> {
+  if (voiceIds.length === 0) return;
+  const batch = firestore.batch();
+  for (const id of voiceIds) batch.set(designedVoicesCollection.doc(id), { linked: true }, { merge: true });
+  await batch.commit();
+}
+
+/** Removes registry records (a record that doesn't exist is fine). */
+export async function deleteDesignedVoiceRecords(voiceIds: string[]): Promise<void> {
+  if (voiceIds.length === 0) return;
+  const batch = firestore.batch();
+  for (const id of voiceIds) batch.delete(designedVoicesCollection.doc(id));
+  await batch.commit();
 }

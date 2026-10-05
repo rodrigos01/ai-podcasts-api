@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { personInputSchema, personSchema } from "../src/schemas/person.schema";
+import { personInputSchema, personSaveSchema, personSchema } from "../src/schemas/person.schema";
 
 describe("personInputSchema voice field", () => {
   it("accepts a free-text voice description, not just a fixed catalog ID", () => {
@@ -96,5 +96,17 @@ describe("personSchema (persisted shape)", () => {
       resolvedVoiceHash: "somehash",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("personSaveSchema resolvedVoiceId", () => {
+  it("is an optional input, so a client can echo a GET back or omit it", () => {
+    const base = { name: "A", voice: "v", persona: "p" };
+    expect(personSaveSchema.safeParse(base).success).toBe(true);
+    expect(personSaveSchema.parse({ ...base, resolvedVoiceId: "voice_x" }).resolvedVoiceId).toBe("voice_x");
+    // The other server-managed fields are never accepted.
+    expect(personSaveSchema.parse({ ...base, resolvedVoiceHash: "x", resolvedVoicePinned: true })).not.toHaveProperty(
+      "resolvedVoicePinned",
+    );
   });
 });

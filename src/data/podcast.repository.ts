@@ -1,11 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { firestore } from "../config/firebase";
 import { deletePodcastAudio } from "../storage/audioCache.repository";
+import type { ResolvedVoiceFields } from "../schemas/person.schema";
 import type { Podcast, PodcastCreateInput, PodcastUpdateInput } from "../schemas/podcast.schema";
+import { NO_VOICE } from "../utils/voiceDecision";
 
 const podcastsCollection = firestore.collection("podcasts");
 
-export async function createPodcast(input: PodcastCreateInput, ownerId: string): Promise<Podcast> {
+/**
+ * `hostVoices` lines up with `input.hosts` by index: the voice each host starts
+ * with (a validated pick — see voiceSelection.service.ts), or none. A
+ * `resolvedVoiceId` a client sent on a host is never stored as-is.
+ */
+export async function createPodcast(
+  input: PodcastCreateInput,
+  ownerId: string,
+  hostVoices: (ResolvedVoiceFields | null)[] = [],
+): Promise<Podcast> {
   const id = randomUUID();
   const now = Date.now();
   const podcast: Podcast = {
@@ -13,13 +24,10 @@ export async function createPodcast(input: PodcastCreateInput, ownerId: string):
     title: input.title,
     description: input.description,
     structure: input.structure,
-    hosts: input.hosts.map((host) => ({
-      ...host,
-      id: randomUUID(),
-      resolvedVoiceId: null,
-      resolvedVoiceOrigin: null,
-      resolvedVoiceHash: null,
-    })),
+    hosts: input.hosts.map((host, index) => {
+      const { resolvedVoiceId: _clientValue, ...person } = host;
+      return { ...person, id: randomUUID(), ...(hostVoices[index] ?? NO_VOICE) };
+    }),
     ownerId,
     createdAt: now,
     updatedAt: now,
@@ -47,6 +55,9 @@ export async function listPodcasts(ownerId: string): Promise<Podcast[]> {
 export async function updatePodcast(
   podcastId: string,
   input: PodcastUpdateInput,
+  // Lines up with `input.hosts` by index: the voice fields to store for that
+  // host, or null to keep what it has (see voiceDecision.ts).
+  hostVoices: (ResolvedVoiceFields | null)[] = [],
 ): Promise<Podcast | null> {
   const ref = podcastsCollection.doc(podcastId);
   const existing = await ref.get();
@@ -55,7 +66,7 @@ export async function updatePodcast(
   const patch: Record<string, unknown> = { ...input, updatedAt: Date.now() };
   if (input.hosts) {
     const currentHosts = new Map((existing.data() as Podcast).hosts.map((host) => [host.id, host]));
-    patch.hosts = input.hosts.map((host) => {
+    patch.hosts = input.hosts.map((host, index) => {
       const id = host.id && currentHosts.has(host.id) ? host.id : randomUUID();
       // A matched existing host keeps its already-resolved voice — an edit
       // to persona/accent/voice hint doesn't need to be caught here;
@@ -67,12 +78,21 @@ export async function updatePodcast(
       // The hosts arrive with their English persona/accent already settled
       // (personEnglish.service.ts's prepareHostsForUpdate, run by the
       // controller), so they're stored as given.
+      const { resolvedVoiceId: _clientValue, ...person } = host;
       return {
-        ...host,
+        ...person,
         id,
-        resolvedVoiceId: current?.resolvedVoiceId ?? null,
-        resolvedVoiceOrigin: current?.resolvedVoiceOrigin ?? null,
-        resolvedVoiceHash: current?.resolvedVoiceHash ?? null,
+        ...(hostVoices[index] ??
+          (current
+            ? {
+                resolvedVoiceId: current.resolvedVoiceId,
+                resolvedVoiceOrigin: current.resolvedVoiceOrigin,
+                resolvedVoiceHash: current.resolvedVoiceHash,
+                ...(current.resolvedVoicePinned !== undefined
+                  ? { resolvedVoicePinned: current.resolvedVoicePinned }
+                  : {}),
+              }
+            : NO_VOICE)),
       };
     });
   }

@@ -10,6 +10,9 @@ import type { PodcastUpdateInput } from "../schemas/podcast.schema";
 import { englishSourceChanged, reconcileEnglishFields, reconcileVoicePrompt } from "../utils/englishFields";
 
 type HostUpdateInput = NonNullable<PodcastUpdateInput["hosts"]>[number];
+// The text fields everything here reads and writes — deliberately not the whole
+// person, so stored people (with their server-managed voice fields) fit too.
+type PersonText = Pick<PersonInput, "name" | "voice" | "persona" | "accent" | "personaEn" | "accentEn" | "voicePrompt">;
 type Translatable = Pick<PersonInput, "persona" | "voice" | "accent">;
 
 /**
@@ -45,7 +48,7 @@ export async function translateForVoice(
  * person is saved as-is and voiceResolution.service.ts translates on demand
  * when their voice is designed.
  */
-export async function withEnglishFields<T extends PersonInput>(person: T): Promise<T> {
+export async function withEnglishFields<T extends PersonText>(person: T): Promise<T> {
   if (hasEnglishFields(person)) return person;
   try {
     const english = await translateForVoice(person);
@@ -68,7 +71,7 @@ export async function withEnglishFields<T extends PersonInput>(person: T): Promi
  * the English fields can't be written, falls back to the original persona and
  * accent rather than leaving the person without one.
  */
-export async function withVoicePrompt<T extends PersonInput>(person: T): Promise<T & { voicePrompt: string }> {
+export async function withVoicePrompt<T extends PersonText>(person: T): Promise<T & { voicePrompt: string }> {
   if (person.voicePrompt) return person as T & { voicePrompt: string };
   const english = await withEnglishFields(person);
   return {
@@ -87,7 +90,7 @@ export async function withVoicePrompt<T extends PersonInput>(person: T): Promise
  * wizard call itself never fails over it (so existing clients, which don't
  * use the field, are unaffected).
  */
-export async function withVoicePromptIfPossible<T extends PersonInput>(
+export async function withVoicePromptIfPossible<T extends PersonText>(
   person: T,
 ): Promise<T | (T & { voicePrompt: string })> {
   try {

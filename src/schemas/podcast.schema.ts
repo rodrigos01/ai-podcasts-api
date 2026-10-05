@@ -8,6 +8,13 @@ export const podcastCreateSchema = z.object({
   hosts: z.array(personSaveSchema).min(1),
 });
 
+// POST /podcasts also takes the wizard's voice-design session id, which lets
+// the hosts' picked voices be validated and the session's unused candidates
+// deleted; optional — without it nothing is picked or cleaned.
+export const podcastCreateRequestSchema = podcastCreateSchema.extend({
+  sessionId: z.string().min(1).max(128).optional(),
+});
+
 // On update, an existing host keeps its id (passed back by the client) so
 // episodes' participantHostIds stay valid; a host with no id is treated as
 // newly added and gets a fresh one in the repository layer.
