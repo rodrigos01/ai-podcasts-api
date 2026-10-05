@@ -6,7 +6,7 @@ import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
 import { MAX_CHUNK_AUDIO_SECONDS, STREAM_INACTIVITY_TIMEOUT_MS } from "../constants/ttsLimits";
 import type { ScriptTurn } from "../utils/scriptText";
-import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
+import { DEFAULT_PCM_FORMAT, durationSeconds, type WavFormat } from "../utils/wav";
 
 // Gemini 3.8 Flash TTS on the Gemini Enterprise Agent Platform (Google's
 // current name for Vertex AI) — replaced the old @google-cloud/text-to-speech
@@ -155,6 +155,43 @@ export async function deleteVoice(voiceId: string): Promise<void> {
   } catch (err) {
     console.error(`Failed to delete temporary voice ${voiceId} (leaving it for its natural TTL):`, err);
   }
+}
+
+/** Voice ids Voice Design hands out (`voice_` + uuid), as opposed to prebuilt catalog names. */
+export function isDesignedVoiceId(id: string): boolean {
+  return /^voice_[A-Za-z0-9-]{1,64}$/.test(id);
+}
+
+/** Reads rate/channels from a mime type like `audio/l16; rate=24000; channels=1`. */
+export function parsePcmMimeType(mimeType: string | undefined): WavFormat {
+  const rate = Number(/rate=(\d+)/i.exec(mimeType ?? "")?.[1]);
+  const channels = Number(/channels=(\d+)/i.exec(mimeType ?? "")?.[1]);
+  return {
+    ...DEFAULT_PCM_FORMAT,
+    ...(rate > 0 ? { sampleRate: rate } : {}),
+    ...(channels > 0 ? { numChannels: channels } : {}),
+  };
+}
+
+/**
+ * The sample Voice Design generated along with a stored voice (confirmed
+ * live: `voices.get` returns it as inline base64 `sample_audio`, raw 16-bit
+ * PCM, ~20s). Null when the voice doesn't exist (or has no sample).
+ */
+export async function fetchVoiceSample(
+  voiceId: string,
+): Promise<{ pcm: Buffer; format: WavFormat } | null> {
+  const client = await getClient();
+  let voice;
+  try {
+    voice = await client.voices.get(voiceId);
+  } catch (err) {
+    if ((err as { status?: number }).status === 404) return null;
+    throw err;
+  }
+  const sample = voice.sample_audio;
+  if (!sample?.data) return null;
+  return { pcm: Buffer.from(sample.data, "base64"), format: parsePcmMimeType(sample.mime_type) };
 }
 
 // ---------------------------------------------------------------------------
