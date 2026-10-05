@@ -22,7 +22,7 @@ import {
   runEpisodeGenerationSequence,
 } from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
-import { withVoicePrompt } from "../services/personEnglish.service";
+import { withVoicePrompt, withVoicePromptIfPossible } from "../services/personEnglish.service";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
@@ -36,7 +36,7 @@ async function withGuestVoicePrompts(result: EpisodeWizardSuggestionsResponse) {
         episodes: await Promise.all(
           suggestion.episodes.map(async (episode) => ({
             ...episode,
-            guests: await Promise.all(episode.guests.map(withVoicePrompt)),
+            guests: await Promise.all(episode.guests.map(withVoicePromptIfPossible)),
           })),
         ),
       })),

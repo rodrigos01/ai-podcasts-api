@@ -82,6 +82,23 @@ export async function withVoicePrompt<T extends PersonInput>(person: T): Promise
 }
 
 /**
+ * `withVoicePrompt` for the wizard responses, where the prompt is a bonus
+ * field: if anything goes wrong the person comes back without one, and the
+ * wizard call itself never fails over it (so existing clients, which don't
+ * use the field, are unaffected).
+ */
+export async function withVoicePromptIfPossible<T extends PersonInput>(
+  person: T,
+): Promise<T | (T & { voicePrompt: string })> {
+  try {
+    return await withVoicePrompt(person);
+  } catch (err) {
+    console.error("Could not build a voice prompt for a wizard suggestion; omitting it:", err);
+    return person;
+  }
+}
+
+/**
  * Prepares a podcast update's hosts for saving: keeps/drops each existing
  * host's stored English fields per reconcileEnglishFields, and writes fresh
  * ones for a new host or one whose persona, voice hint or accent changed.

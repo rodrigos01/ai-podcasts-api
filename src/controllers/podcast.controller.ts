@@ -8,7 +8,7 @@ import {
   podcastWizardOptionsRequestSchema,
   podcastWizardReviseRequestSchema,
 } from "../schemas/wizard.schema";
-import { prepareHostsForUpdate, withVoicePrompt } from "../services/personEnglish.service";
+import { prepareHostsForUpdate, withVoicePrompt, withVoicePromptIfPossible } from "../services/personEnglish.service";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import * as podcastWizardService from "../services/podcastWizard.service";
 import { HttpError } from "../utils/HttpError";
@@ -18,7 +18,7 @@ import { requireParam } from "../utils/params";
 // server adds it so the client can hand it to POST /voices/design.
 function withHostVoicePrompts(options: PodcastOption[]) {
   return Promise.all(
-    options.map(async (option) => ({ ...option, hosts: await Promise.all(option.hosts.map(withVoicePrompt)) })),
+    options.map(async (option) => ({ ...option, hosts: await Promise.all(option.hosts.map(withVoicePromptIfPossible)) })),
   );
 }
 

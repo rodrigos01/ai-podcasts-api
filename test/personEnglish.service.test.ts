@@ -9,6 +9,7 @@ import {
   prepareHostsForUpdate,
   withEnglishFields,
   withVoicePrompt,
+  withVoicePromptIfPossible,
 } from "../src/services/personEnglish.service";
 
 const base = { name: "Oliver Higgins", voice: "Homem britânico, sotaque britânico ao falar português", persona: "Londrino de 35 anos." };
@@ -50,6 +51,20 @@ describe("personEnglish.service", () => {
       vi.mocked(generateText).mockRejectedValueOnce(new Error("boom"));
       const result = await withVoicePrompt({ ...base, accent: "sotaque" });
       expect(result.voicePrompt).toBe(`Name: Oliver Higgins\n\n${base.persona}\n\nAccent: sotaque`);
+    });
+  });
+
+  describe("withVoicePromptIfPossible", () => {
+    it("returns the person unchanged, rather than throwing, if the prompt can't be built", async () => {
+      // A person whose fields blow up the builder stands in for any failure.
+      const broken = new Proxy(base, {
+        get: (target, key) => {
+          if (key === "voicePrompt") return undefined;
+          if (key === "name") throw new Error("boom");
+          return (target as Record<string | symbol, unknown>)[key];
+        },
+      });
+      await expect(withVoicePromptIfPossible(broken)).resolves.toBe(broken);
     });
   });
 
