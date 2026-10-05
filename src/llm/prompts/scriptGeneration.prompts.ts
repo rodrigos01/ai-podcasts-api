@@ -23,22 +23,14 @@ function sourceBlock(sources: Source[]): string {
   return sources.map((s) => `### ${s.title}\n${s.contents}`).join("\n\n");
 }
 
-function speakerBlock(speaker: Speaker, ctx: ScriptGenerationContext): string {
-  const roleLine = speaker.isHost
-    ? `${speaker.name} — a host of the podcast "${ctx.podcast.title}".`
-    : `${speaker.name} — a guest on this episode of the podcast "${ctx.podcast.title}".`;
-  return `${roleLine}\nPersona: ${speaker.persona}`;
-}
+// Rough conversational speech rate, used only to tell the writer what episode
+// duration its word target corresponds to.
+const WORDS_PER_MINUTE = 155;
 
 /**
  * A single system instruction that writes BOTH speakers' lines itself —
- * replaces the old per-speaker `buildAgentSystemInstruction` (hostPersona.prompts.ts),
- * which gave each of two independent LLM calls its own private instruction.
- * This is a deliberate architectural tradeoff (see AGENTS.md's migration
- * note): a single writer can no longer structurally guarantee each speaker
- * only knows their own material the way per-agent isolation + per-speaker
- * source partitioning did — the instruction below asks for that behavior,
- * it doesn't enforce it.
+ * see AGENTS.md's migration note: a single writer can't structurally keep
+ * each speaker's knowledge separate; the prompt only asks for it.
  */
 export function buildScriptSystemInstruction(
   cast: Cast,
@@ -49,93 +41,53 @@ export function buildScriptSystemInstruction(
   const labelB = speakerLabel(b.name, a.name);
   const history = buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
   const historySection = history ? `\n\n${history}` : "";
+  const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
 
-  return `You are a scriptwriter for the podcast "${ctx.podcast.title}".
+  return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
+"${ctx.podcast.description}"
+And episodes follow this structure:
+${ctx.podcast.structure}
 
-Podcast description: ${ctx.podcast.description}
+The show host(s) are:
+${hosts}${historySection}
 
-Podcast structure (how episodes of this show are built):
-${ctx.podcast.structure}${historySection}
+The scripts will be used with a TTS engine, and follow this format:
 
-The Scripts you write should strictly follow this formatting:
-${labelA}: "line 1"
-Style: (Optional) additional instructions for the TTS engine
+${labelA}: line
+(Optional) Style: delivery directions for that turn
 
-${labelB}: "line 1"
-Style: (Optional)
+${labelB}: line
+...
 
-Keep turns short, like in normal conversation, avoiding long monologues or explanatory \
-deliveries, unless the topics or personas ask for that. Also avoid ending every turn with \
-a question, unless it's a rhetorical question or it naturally fits the conversation, or \
-if the podcast is structured as an interview with the hosts asking questions. 
+Speaker labels must be exactly "${labelA}" and "${labelB}", character for character — they are matched \
+literally to assign voices. Every turn must contain spoken words, and a Style line, when used, goes on its \
+own line after the spoken words.
 
-The scripts will be read by a text-to-speech engine which infers tone and intonation \
-out of the box, based on each speaker's persona.
+Keep turns short, like in real conversation. One or two sentences to keep them from becoming monologues. \
+Very short reaction turns work best as backchanneling (see below).
 
-Use these tools to add realism to the speaker's turns:
+You can use the following tags to make the conversation more realistic:
 
-* Non-speech sounds and vocal bursts: You can use tags in angle brackets mid-sentence to direct the TTS engine to produce non-vocal sounds like <laughs>, <sighs>, <chuckles>, <pauses for thought>, <clears throat>, etc.
-* Pacing and pauses: use punctuation like commas, dashes (--), and ellipses (...) for natural conversational hesitation.
-* Turn-level style direction: You can add a style line directly after the speaker line to direct how the entire turn should be delivered. Those are optional and often not necessary. Most lines work best without it. Prefer to use it when there is a significant tone or delivery shift that isn't captured by the persona alone.
-* Emphasis: Capitalize specific words in the transcript, combined with punctuation and inline vocal tags, to place natural vocal stress on key words
-* Mid-turn interjections: The engine supports introducing short interjections from the other speaker 
-within the current speaker's turn. Use this to make the conversation sound more natural 
-and engaging.
-
-Examples:
-
-* Style lines: The following example instructs TTS to deliver this line as a sarcastic deadpan:
-  * ${labelA}: "I Am the most important person in this room."
-  Style: deadpan, sarcastic.
-
-* Backchanneling: The following example instructs TTS to deliver "I have no Idea" with ${labelB}'s voice in the middle of ${labelA}'s line:
-  * ${labelA}: "Do you know what they did? |I have no idea| They shut down the entire project!"
-  
-
-You should also folow these rules, failing to adhere to those will break the TTS engine delivery:
-1. Every turn must have spoken words. There should be no empty turns or turns with just \
-non-vocal tags or backchanneling.
-2. Style lines, when present, should always come after the spoken words on a new line.
-3. Formatting tags like asterisks for emphasis should never be used, as they will \
-be read out loud by the TTS engine. Quotation should only be used when the speaker is \
-quoting something, like a piece of the source matrial. Do not wrap the entire line in \
-quotation marks.
-4. Turns should never start with backchanneling tags. It's meant as a \
-reaction to what the speaker is saying, so it needs the active speaker to have said something first. 
-`
+- Non vocal bursts: use instructions in angle brackets such as <laughs> or <gasps> to introduce these non spoken sounds in the speaker's turn.
+- Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for intelligibility.
+`;
 }
 
 export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationContext, wordTarget: WordTarget): string {
-  const [a, b] = cast.speakers;
-  const speakerBlocks = cast.speakers.map((s) => speakerBlock(s, ctx)).join("\n\n");
-  const kickoff = cast.speakers.find((s) => s.id === cast.kickoffSpeakerId) ?? a;
-  const other = cast.speakers.find((s) => s.id !== kickoff.id) ?? b;
-  const kickoffLabel = speakerLabel(kickoff.name, other.name);
+  const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
+  const guest = cast.speakers.find((s) => !s.isHost);
+  const guestBlock = guest
+    ? `\n\nThe guest for this episode is ${guest.name} and here's their bio: ${guest.persona}`
+    : "";
+  const draft = `Title: ${ctx.episode.title}\nTopics: ${ctx.episode.topics}${
+    ctx.episode.productionNotes ? `\nProduction notes: ${ctx.episode.productionNotes}` : ""
+  }`;
 
-  return `
- Write the script for a new episode of the podcast. You should write the lines \
-for both podcasts speakers as a natural, engaging, and interesting conversation, following \
-the podcast structure and this episode's production notes. Format this script strictly with the \
-Name: Line\nStyle: ... format described above.
+  return `Write the script for an episode based on the sources below, following this draft:
+${draft}${guestBlock}
 
-This episode's topics: ${ctx.episode.topics}
+The script *must* have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
 
-Production notes for this episode: ${ctx.episode.productionNotes}
-
-The two speakers in this episode are:
-${speakerBlocks}
-Keep their lines consistent with their personas and backgrounds. If their personalities or \
-views clash, let them have a conversation about it, disagreeing and challenging each other.
-
-Pre-production source material for this episode:
-${sourceBlock(ctx.sources)}
-
-  ${kickoffLabel} opens the episode, following the podcast's structure and this episode's \
-production notes — there is no prior conversation before this.
-
-The whole episode should land between ${wordTarget.min} and ${wordTarget.max} spoken words in total. Pace \
-and structure the conversation so it naturally lands in this range: don't pad it out if the material runs \
-short, and don't let it sprawl past the maximum if the material runs long — bring the conversation to a \
-natural close once the topics have been covered well, even if you're tempted to keep going.`;
+Sources:
+${sourceBlock(ctx.sources)}`;
 }
-

@@ -26,7 +26,7 @@ export const episodeCreateSchema = z
     sourceIds: z.array(z.string().min(1)),
     participantHostIds: z.array(z.string().min(1)).max(2),
     guests: z.array(personInputSchema).max(1),
-    productionNotes: z.string().min(1),
+    productionNotes: z.string().min(1).optional(),
   })
   .check(twoVoiceCast);
 
@@ -70,7 +70,7 @@ export const episodeSchema = z.object({
   sourceIds: z.array(z.string().min(1)),
   participantHostIds: z.array(z.string().min(1)),
   guests: z.array(personSchema),
-  productionNotes: z.string().min(1),
+  productionNotes: z.string().min(1).optional(),
   // "streamable" is no longer set by generation itself (the script is written,
   // chunked, and marked "ready" in one step now that there's no condensation
   // pass after it) but stays in the enum: clients treat both "streamable" and

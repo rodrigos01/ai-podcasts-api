@@ -38,7 +38,9 @@ export type PodcastWizardReviseRequest = z.infer<typeof podcastWizardReviseReque
 export const episodeDraftSchema = z.object({
   title: z.string().min(1),
   topics: z.string().min(1),
-  productionNotes: z.string().min(1),
+  // Only set when there is something specific for the hosts to focus on that
+  // the topics and sources don't already imply (e.g. the user supplied notes).
+  productionNotes: z.string().min(1).optional(),
   guests: z.array(personInputSchema).max(1),
   predictedChanges: z.array(z.string().min(1)).length(3),
 });
