@@ -1,12 +1,13 @@
 import { generateText } from "../llm/geminiClient";
 import {
   buildEnglishVoiceInputPrompt,
+  buildVoiceDesignInput,
   ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION,
   englishVoiceInputSchema,
 } from "../llm/prompts/voiceResolution.prompts";
 import type { Person, PersonInput } from "../schemas/person.schema";
 import type { PodcastUpdateInput } from "../schemas/podcast.schema";
-import { englishSourceChanged, reconcileEnglishFields } from "../utils/englishFields";
+import { englishSourceChanged, reconcileEnglishFields, reconcileVoicePrompt } from "../utils/englishFields";
 
 type HostUpdateInput = NonNullable<PodcastUpdateInput["hosts"]>[number];
 type Translatable = Pick<PersonInput, "persona" | "voice" | "accent">;
@@ -59,6 +60,28 @@ export async function withEnglishFields<T extends PersonInput>(person: T): Promi
 }
 
 /**
+ * Returns `person` with its Voice Design prompt set, building it when missing
+ * (writing the English persona/accent first if they're missing too). The
+ * prompt is a plain function of name + English persona + English accent, so
+ * everything that needs one — the wizard responses, saving a person, and
+ * voice design itself — goes through here and agrees on the same string. If
+ * the English fields can't be written, falls back to the original persona and
+ * accent rather than leaving the person without one.
+ */
+export async function withVoicePrompt<T extends PersonInput>(person: T): Promise<T & { voicePrompt: string }> {
+  if (person.voicePrompt) return person as T & { voicePrompt: string };
+  const english = await withEnglishFields(person);
+  return {
+    ...english,
+    voicePrompt: buildVoiceDesignInput(
+      english.name,
+      english.personaEn ?? english.persona,
+      english.accentEn ?? english.accent,
+    ),
+  };
+}
+
+/**
  * Prepares a podcast update's hosts for saving: keeps/drops each existing
  * host's stored English fields per reconcileEnglishFields, and writes fresh
  * ones for a new host or one whose persona, voice hint or accent changed.
@@ -74,9 +97,18 @@ export async function prepareHostsForUpdate(
   return Promise.all(
     incoming.map(async (host) => {
       const current = host.id ? byId.get(host.id) : undefined;
-      const { personaEn: _personaEn, accentEn: _accentEn, ...rest } = host;
-      const prepared: HostUpdateInput = { ...rest, ...reconcileEnglishFields(current ?? host, host) };
-      return !current || englishSourceChanged(current, host) ? withEnglishFields(prepared) : prepared;
+      const { personaEn: _personaEn, accentEn: _accentEn, voicePrompt: incomingPrompt, ...rest } = host;
+      const voicePrompt = current ? reconcileVoicePrompt(current, host) : incomingPrompt;
+      const prepared: HostUpdateInput = {
+        ...rest,
+        ...reconcileEnglishFields(current ?? host, host),
+        ...(voicePrompt ? { voicePrompt } : {}),
+      };
+      // An untouched legacy host (no English fields) is left as stored; anyone
+      // new, edited, or already carrying English fields gets a prompt.
+      const needsWork =
+        !current || englishSourceChanged(current, host) || (!prepared.voicePrompt && hasEnglishFields(prepared));
+      return needsWork ? withVoicePrompt(prepared) : prepared;
     }),
   );
 }

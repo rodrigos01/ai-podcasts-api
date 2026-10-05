@@ -106,6 +106,18 @@ export async function setHostResolvedVoice(
   });
 }
 
+/** Stores the Voice Design prompt a host's voice is about to be designed from — see voiceResolution.service.ts. */
+export async function setHostVoicePrompt(podcastId: string, hostId: string, voicePrompt: string): Promise<void> {
+  const ref = podcastsCollection.doc(podcastId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const podcast = snap.data() as Podcast;
+    const hosts = podcast.hosts.map((host) => (host.id === hostId ? { ...host, voicePrompt } : host));
+    tx.update(ref, { hosts, updatedAt: Date.now() });
+  });
+}
+
 export async function deletePodcast(podcastId: string): Promise<boolean> {
   const ref = podcastsCollection.doc(podcastId);
   const existing = await ref.get();

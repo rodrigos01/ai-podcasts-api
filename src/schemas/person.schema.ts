@@ -42,7 +42,20 @@ export const personInputSchema = z.object({
   accentEn: optionalText,
 });
 
-export const personSchema = personInputSchema.extend({
+// What clients send when saving a person (confirming a wizard, editing a
+// host): the wizard-facing shape plus the Voice Design prompt. Kept out of
+// personInputSchema on purpose — that one is also the wizards' LLM output
+// schema, and the prompt is built by the server, never written by the model.
+export const personSaveSchema = personInputSchema.extend({
+  // The exact Voice Design prompt (see llm/prompts/voiceResolution.prompts.ts's
+  // buildVoiceDesignInput) the person's voice is designed from. The wizard
+  // responses carry it, and it's stored on confirm; the server writes it
+  // itself (from personaEn/accentEn) whenever a person doesn't have one yet.
+  // Not part of voiceHash: editing it never invalidates a stored voice.
+  voicePrompt: optionalText,
+});
+
+export const personSchema = personSaveSchema.extend({
   id: z.string().min(1),
   // Server-managed voice-resolution state — never accepted from a client
   // (absent from personInputSchema), only ever set by
@@ -62,5 +75,5 @@ export const personSchema = personInputSchema.extend({
   resolvedVoiceHash: z.string().nullable(),
 });
 
-export type PersonInput = z.infer<typeof personInputSchema>;
+export type PersonInput = z.infer<typeof personSaveSchema>;
 export type Person = z.infer<typeof personSchema>;

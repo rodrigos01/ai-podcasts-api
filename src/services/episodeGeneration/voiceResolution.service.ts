@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import { deleteVoice, designVoice } from "../../llm/ttsClient";
-import { setHostResolvedVoice } from "../../data/podcast.repository";
-import { setGuestResolvedVoice } from "../../data/episode.repository";
+import { setHostResolvedVoice, setHostVoicePrompt } from "../../data/podcast.repository";
+import { setGuestResolvedVoice, setGuestVoicePrompt } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
-import { buildVoiceDesignInput } from "../../llm/prompts/voiceResolution.prompts";
-import { hasEnglishFields, translateForVoice } from "../personEnglish.service";
+import { withVoicePrompt } from "../personEnglish.service";
 
 export interface ResolvedVoice {
   voiceId: string;
@@ -55,20 +54,20 @@ export function hasCurrentVoice(person: Person): person is Person & { resolvedVo
 }
 
 /**
- * The English persona/accent to design from: the ones saved with the person
- * (written when they were created or last edited) when they're there,
- * otherwise translated on demand (people saved before that existed).
+ * Designs from the person's stored Voice Design prompt. A person without one
+ * (saved before prompts were stored) gets it written first — and persisted via
+ * `persist` before the design call, so a failed attempt doesn't lose it.
  */
-async function englishInputFor(person: Person): Promise<{ personaEn: string; accentEn?: string }> {
-  if (hasEnglishFields(person)) {
-    return { personaEn: person.personaEn, ...(person.accentEn ? { accentEn: person.accentEn } : {}) };
+async function designFor(
+  person: Person,
+  persist: (voicePrompt: string) => Promise<void>,
+): Promise<ResolvedVoice> {
+  let voicePrompt = person.voicePrompt;
+  if (!voicePrompt) {
+    voicePrompt = (await withVoicePrompt(person)).voicePrompt;
+    await persist(voicePrompt);
   }
-  return translateForVoice(person);
-}
-
-async function designFor(person: Person): Promise<ResolvedVoice> {
-  const { personaEn, accentEn } = await englishInputFor(person);
-  const voiceId = await designVoice({ voiceDescription: buildVoiceDesignInput(person.name, personaEn, accentEn) });
+  const voiceId = await designVoice({ voiceDescription: voicePrompt });
   return { voiceId };
 }
 
@@ -83,7 +82,7 @@ export async function resolveHostVoice(podcastId: string, host: Person): Promise
     return { voiceId: host.resolvedVoiceId };
   }
 
-  const resolved = await designFor(host);
+  const resolved = await designFor(host, (prompt) => setHostVoicePrompt(podcastId, host.id, prompt));
   await setHostResolvedVoice(podcastId, host.id, {
     resolvedVoiceId: resolved.voiceId,
     resolvedVoiceOrigin: "design",
@@ -120,7 +119,7 @@ export async function resolveGuestVoice(
   const staleVoiceId =
     guest.resolvedVoiceOrigin === "design" && guest.resolvedVoiceHash ? guest.resolvedVoiceId : null;
 
-  const r = await designFor(guest);
+  const r = await designFor(guest, (prompt) => setGuestVoicePrompt(podcastId, episodeId, guest.id, prompt));
   const resolved = { voiceId: r.voiceId, origin: "design" as const };
 
   await setGuestResolvedVoice(podcastId, episodeId, guest.id, {

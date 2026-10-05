@@ -13,16 +13,18 @@ vi.mock("../src/llm/ttsClient", () => ({
 
 vi.mock("../src/data/episode.repository", () => ({
   setGuestResolvedVoice: vi.fn(),
+  setGuestVoicePrompt: vi.fn(),
 }));
 
 vi.mock("../src/data/podcast.repository", () => ({
   setHostResolvedVoice: vi.fn(),
+  setHostVoicePrompt: vi.fn(),
 }));
 
 import { generateText } from "../src/llm/geminiClient";
 import { deleteVoice, designVoice } from "../src/llm/ttsClient";
-import { setGuestResolvedVoice } from "../src/data/episode.repository";
-import { setHostResolvedVoice } from "../src/data/podcast.repository";
+import { setGuestResolvedVoice, setGuestVoicePrompt } from "../src/data/episode.repository";
+import { setHostResolvedVoice, setHostVoicePrompt } from "../src/data/podcast.repository";
 import { cleanupGuestVoice, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "../src/services/episodeGeneration/voiceResolution.service";
 
 describe("voiceResolution.service", () => {
@@ -56,6 +58,41 @@ describe("voiceResolution.service", () => {
         resolvedVoiceHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       });
       expect(result).toEqual({ voiceId: "custom-voice-123", origin: "design" });
+    });
+
+    it("designs from the stored voicePrompt as-is, with no LLM call and nothing re-persisted", async () => {
+      vi.mocked(designVoice).mockResolvedValueOnce("v-stored");
+      await resolveGuestVoice("pod-1", "ep-1", {
+        id: "g",
+        name: "G",
+        persona: "x",
+        voice: "v",
+        voicePrompt: "Name: G\n\nSomething the client edited.",
+        resolvedVoiceId: null,
+        resolvedVoiceOrigin: null,
+        resolvedVoiceHash: null,
+      });
+      expect(generateText).not.toHaveBeenCalled();
+      expect(setGuestVoicePrompt).not.toHaveBeenCalled();
+      expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "Name: G\n\nSomething the client edited." });
+    });
+
+    it("writes the prompt to the guest before designing when it has none", async () => {
+      vi.mocked(designVoice).mockResolvedValueOnce("v-new");
+      await resolveGuestVoice("pod-1", "ep-1", {
+        id: "g",
+        name: "G",
+        persona: "Una anfitriona.",
+        personaEn: "A host.",
+        voice: "v",
+        resolvedVoiceId: null,
+        resolvedVoiceOrigin: null,
+        resolvedVoiceHash: null,
+      });
+      expect(setGuestVoicePrompt).toHaveBeenCalledWith("pod-1", "ep-1", "g", "Name: G\n\nA host.");
+      expect(vi.mocked(setGuestVoicePrompt).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(designVoice).mock.invocationCallOrder[0] as number,
+      );
     });
 
     it("sends the English persona and English accent, not the originals, for a non-English guest", async () => {

@@ -8,6 +8,7 @@ import {
   hasEnglishFields,
   prepareHostsForUpdate,
   withEnglishFields,
+  withVoicePrompt,
 } from "../src/services/personEnglish.service";
 
 const base = { name: "Oliver Higgins", voice: "Homem britânico, sotaque britânico ao falar português", persona: "Londrino de 35 anos." };
@@ -23,6 +24,32 @@ describe("personEnglish.service", () => {
       expect(hasEnglishFields({ personaEn: "x" })).toBe(true);
       expect(hasEnglishFields({ personaEn: "x", accent: "a" })).toBe(false);
       expect(hasEnglishFields({ personaEn: "x", accent: "a", accentEn: "b" })).toBe(true);
+    });
+  });
+
+  describe("withVoicePrompt", () => {
+    it("keeps an existing prompt untouched", async () => {
+      const person = { ...base, voicePrompt: "Name: X\n\nedited" };
+      expect(await withVoicePrompt(person)).toBe(person);
+      expect(generateText).not.toHaveBeenCalled();
+    });
+
+    it("builds it from name, English persona and English accent", async () => {
+      const result = await withVoicePrompt({ ...base, personaEn: "A Londoner.", accent: "x", accentEn: "British" });
+      expect(result.voicePrompt).toBe("Name: Oliver Higgins\n\nA Londoner.\n\nAccent: British");
+      expect(generateText).not.toHaveBeenCalled();
+    });
+
+    it("writes the English fields first when they're missing", async () => {
+      vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A Londoner." });
+      const result = await withVoicePrompt(base);
+      expect(result).toMatchObject({ personaEn: "A Londoner.", voicePrompt: "Name: Oliver Higgins\n\nA Londoner." });
+    });
+
+    it("falls back to the original persona and accent if translation fails", async () => {
+      vi.mocked(generateText).mockRejectedValueOnce(new Error("boom"));
+      const result = await withVoicePrompt({ ...base, accent: "sotaque" });
+      expect(result.voicePrompt).toBe(`Name: Oliver Higgins\n\n${base.persona}\n\nAccent: sotaque`);
     });
   });
 
@@ -91,6 +118,8 @@ describe("personEnglish.service", () => {
         ...base,
         personaEn: stored.personaEn,
         accentEn: stored.accentEn,
+        // Built from the stored English fields — no LLM call needed.
+        voicePrompt: expect.stringContaining("Name: Oliver Higgins"),
       });
     });
 
@@ -112,6 +141,39 @@ describe("personEnglish.service", () => {
       vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A new host." });
       const [host] = await prepareHostsForUpdate([stored], [{ name: "N", voice: "v", persona: "Nova." }]);
       expect(host).toMatchObject({ personaEn: "A new host." });
+    });
+
+    describe("voice prompt", () => {
+      const withPrompt: Person = { ...stored, voicePrompt: "Name: Oliver Higgins\n\nstored prompt" };
+
+      it("keeps the stored prompt when nothing it's built from changed", async () => {
+        const [host] = await prepareHostsForUpdate([withPrompt], [{ id: "h1", ...base }]);
+        expect(host?.voicePrompt).toBe("Name: Oliver Higgins\n\nstored prompt");
+      });
+
+      it("rebuilds it from the existing English fields, without an LLM call, when the name changed", async () => {
+        const [host] = await prepareHostsForUpdate([withPrompt], [{ id: "h1", ...base, name: "Ollie Higgins" }]);
+        expect(generateText).not.toHaveBeenCalled();
+        expect(host?.voicePrompt).toMatch(/^Name: Ollie Higgins/);
+      });
+
+      it("rebuilds it after fresh English fields when the persona changed", async () => {
+        vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A retired Londoner." });
+        const [host] = await prepareHostsForUpdate(
+          [withPrompt],
+          [{ id: "h1", ...base, persona: "Londrino aposentado." }],
+        );
+        expect(host?.voicePrompt).toBe("Name: Oliver Higgins\n\nA retired Londoner.");
+      });
+
+      it("takes a prompt the client deliberately changed, even if the persona changed too", async () => {
+        vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A retired Londoner." });
+        const [host] = await prepareHostsForUpdate(
+          [withPrompt],
+          [{ id: "h1", ...base, persona: "Londrino aposentado.", voicePrompt: "Name: Oliver Higgins\n\nmine" }],
+        );
+        expect(host?.voicePrompt).toBe("Name: Oliver Higgins\n\nmine");
+      });
     });
   });
 });

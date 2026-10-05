@@ -140,6 +140,23 @@ export async function setGuestResolvedVoice(
   });
 }
 
+/** Stores the Voice Design prompt a guest's voice is about to be designed from — see voiceResolution.service.ts. */
+export async function setGuestVoicePrompt(
+  podcastId: string,
+  episodeId: string,
+  guestId: string,
+  voicePrompt: string,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const episode = snap.data() as Episode;
+    const guests = episode.guests.map((guest) => (guest.id === guestId ? { ...guest, voicePrompt } : guest));
+    tx.update(ref, { guests, updatedAt: Date.now() });
+  });
+}
+
 export async function bumpGeneratedAudioSeconds(
   podcastId: string,
   episodeId: string,

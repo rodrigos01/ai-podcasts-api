@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { episodeLengthSchema } from "./common.schema";
-import { personInputSchema, personSchema } from "./person.schema";
+import { personSaveSchema, personSchema } from "./person.schema";
 
 // Per specs.md: an episode has exactly 2 active voices — 2 hosts, or 1 host
 // + 1 guest. There is no "solo host" mode and no more than 2 at once.
@@ -25,7 +25,7 @@ export const episodeCreateSchema = z
     length: episodeLengthSchema,
     sourceIds: z.array(z.string().min(1)),
     participantHostIds: z.array(z.string().min(1)).max(2),
-    guests: z.array(personInputSchema).max(1),
+    guests: z.array(personSaveSchema).max(1),
     productionNotes: z.string().min(1).optional(),
   })
   .check(twoVoiceCast);

@@ -1,17 +1,17 @@
 import { z } from "zod";
-import { personInputSchema, personSchema } from "./person.schema";
+import { personSaveSchema, personSchema } from "./person.schema";
 
 export const podcastCreateSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
   structure: z.string().min(1),
-  hosts: z.array(personInputSchema).min(1),
+  hosts: z.array(personSaveSchema).min(1),
 });
 
 // On update, an existing host keeps its id (passed back by the client) so
 // episodes' participantHostIds stay valid; a host with no id is treated as
 // newly added and gets a fresh one in the repository layer.
-const hostUpdateInputSchema = personInputSchema.extend({
+const hostUpdateInputSchema = personSaveSchema.extend({
   id: z.string().min(1).optional(),
 });
 

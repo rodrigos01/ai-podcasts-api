@@ -13,6 +13,7 @@ import { getSource } from "../data/source.repository";
 import { requireUserId } from "../middleware/requireAuth";
 import { episodeCreateRequestSchema, episodeUpdateSchema } from "../schemas/episode.schema";
 import {
+  type EpisodeWizardSuggestionsResponse,
   episodeWizardOptionsRequestSchema,
   episodeWizardReviseRequestSchema,
 } from "../schemas/wizard.schema";
@@ -21,10 +22,27 @@ import {
   runEpisodeGenerationSequence,
 } from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
-import { withEnglishFields } from "../services/personEnglish.service";
+import { withVoicePrompt } from "../services/personEnglish.service";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
+
+// The wizard's own output has no voicePrompt (the model never writes it); the
+// server adds it so the client can hand it to POST /voices/design.
+async function withGuestVoicePrompts(result: EpisodeWizardSuggestionsResponse) {
+  return {
+    suggestions: await Promise.all(
+      result.suggestions.map(async (suggestion) => ({
+        episodes: await Promise.all(
+          suggestion.episodes.map(async (episode) => ({
+            ...episode,
+            guests: await Promise.all(episode.guests.map(withVoicePrompt)),
+          })),
+        ),
+      })),
+    ),
+  };
+}
 
 export async function wizardOptions(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
@@ -44,7 +62,7 @@ export async function wizardOptions(req: Request, res: Response) {
     input.prompt,
   );
   // Voice-design session for this wizard run — see voiceDesign.service.ts.
-  res.json({ sessionId: randomUUID(), ...result });
+  res.json({ sessionId: randomUUID(), ...(await withGuestVoicePrompts(result)) });
 }
 
 export async function wizardRevise(req: Request, res: Response) {
@@ -61,7 +79,7 @@ export async function wizardRevise(req: Request, res: Response) {
     input.targetEpisodeIndex,
     input.instruction,
   );
-  res.json({ sessionId: input.sessionId ?? randomUUID(), ...result });
+  res.json({ sessionId: input.sessionId ?? randomUUID(), ...(await withGuestVoicePrompts(result)) });
 }
 
 export async function create(req: Request, res: Response) {
@@ -71,7 +89,7 @@ export async function create(req: Request, res: Response) {
 
   const episodes = [];
   for (const episodeInput of input.episodes) {
-    const guests = await Promise.all(episodeInput.guests.map(withEnglishFields));
+    const guests = await Promise.all(episodeInput.guests.map(withVoicePrompt));
     episodes.push(await createEpisode(podcastId, { ...episodeInput, guests }));
   }
 
