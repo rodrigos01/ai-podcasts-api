@@ -22,6 +22,9 @@ described in English, and leave it unset otherwise. When the show is already in 
 "accentEn" are simply copies of "persona" and "accent". They exist only to design the host's voice, so the \
 show's own language is used for everything else.
 
+The structure must not include time markers, durations, or minute/word allocations for segments (no "0:00-5:00", \
+"first 10 minutes", etc.) — episodes vary in length, so describe segments by order and purpose only.
+
 Personas should read as life-like, specific characters relevant to the show's subject matter, not generic \
 placeholders.`;
 

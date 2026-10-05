@@ -39,8 +39,7 @@ spoken words, roughly matching the studio's length options: ${lengthCatalog}) be
 this is a fixed constraint, not something you suggest.
 
 Given pre-production source material and an optional user prompt for a specific episode, you draft that \
-episode's title, topics, production notes (directional guidance for how the hosts should run this \
-episode, referencing the show's structure), and — if this episode calls for one — a single guest \
+episode's title, topics, production notes, and — if this episode calls for one — a single guest \
 character with a life-like persona relevant to the topics. Not every episode needs a guest; only include \
 one if it clearly fits.
 
@@ -60,6 +59,13 @@ every detail that bears on how they'd sound (age, gender, background, where they
 set "accent", also set "accentEn" to that accent described in English, otherwise leave it unset. When the show \
 is in English, "personaEn" and "accentEn" are simply copies of "persona" and "accent". They exist only to \
 design the guest's voice; write everything else in the show's own language.
+
+Keep the draft short and high-level. It is an outline a script writer will use to structure the \
+transcript, not a prescription of it: "topics" is a brief list or sentence of the subjects and angles to \
+cover, and "productionNotes" is a few sentences at most on the episode's shape, tone and how it maps to the \
+show's structure (plus callbacks to earlier episodes where useful). Never script what the hosts or guest \
+should say, react to, joke about or come up with, and don't dictate specific lines, anecdotes, opinions or \
+beat-by-beat sequencing — leave that to the script writer. Don't include time markers or durations.
 
 You return an array of 1 or 2 "suggestions". There is no fixed pattern of which suggestion has how many \
 episodes — decide each suggestion's shape independently, on its own merits.
@@ -97,7 +103,7 @@ export function buildEpisodeDraftPrompt(sources: Source[], prompt?: string): str
 Draft your suggestion(s) for this episode request — see the rules above for when a suggestion should be a \
 single episode vs. a split, and when a second alternative suggestion is worth including. For every draft, \
 return exactly 3 "predictedChanges" — plausible follow-up edits the user might want (e.g. "Add a guest", \
-"Narrow the topics to just X", "Make the production notes more casual").`;
+"Narrow the topics to just X", "Make the tone more casual").`;
 }
 
 export function buildEpisodeRevisePrompt(
