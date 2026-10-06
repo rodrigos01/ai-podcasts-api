@@ -156,6 +156,8 @@ export async function status(req: Request, res: Response) {
     // Undefined for an episode created before this field existed (no
     // backfill) — coalesce so polling clients always get a usable number.
     generatedAudioSeconds: episode.generatedAudioSeconds ?? 0,
+    audioComplete: episode.audioComplete ?? false,
+    audioDurationSeconds: episode.audioDurationSeconds ?? null,
   });
 }
 

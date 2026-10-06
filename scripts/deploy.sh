@@ -31,6 +31,12 @@ cd "$(dirname "$0")/.."
 # Manager here — but that service account does need the
 # `roles/aiplatform.user` role for Vertex AI (text generation) to work.
 
+# /audio/stream holds one request open for as long as a listener keeps playing
+# a still-generating episode (45-65 minutes of audio), so the default 300s
+# Cloud Run request timeout would cut every live stream after ~5 minutes —
+# the player then sees a clean end-of-stream. 3600s is Cloud Run's maximum;
+# a client reconnect (Range/?t=) picks up from there for anything longer.
+
 ENV_FILE=".env"
 SERVICE_NAME="${SERVICE_NAME:-ai-podcast-api}"
 # Firestore (both named databases) and the Storage bucket are provisioned
@@ -92,4 +98,5 @@ gcloud run deploy "$SERVICE_NAME" \
   --project "$PROJECT_ID" \
   --region "$REGION" \
   --allow-unauthenticated \
+  --timeout=3600 \
   --env-vars-file "$TMP_ENV_YAML"
