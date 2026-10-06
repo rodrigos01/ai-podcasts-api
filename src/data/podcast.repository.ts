@@ -79,8 +79,8 @@ export async function updatePodcast(
       // they've changed. A genuinely new host (no matching id) starts
       // unresolved, same as at podcast creation.
       const current = currentHosts.get(id);
-      // The hosts arrive with their English persona/accent already settled
-      // (personEnglish.service.ts's prepareHostsForUpdate, run by the
+      // The hosts arrive with their voice prompt already settled
+      // (utils/voicePrompt.ts's prepareHostsForUpdate, run by the
       // controller), so they're stored as given.
       const { resolvedVoiceId: _clientValue, ...person } = host;
       return {

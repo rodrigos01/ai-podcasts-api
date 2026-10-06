@@ -54,12 +54,6 @@ non-native) may you also set their "accent" field — a short, plain-English des
 Irish", "light French accent"), the same optional field a fixed host may have (see above). Leave it unset \
 for an ordinary/neutral voice — but if the guest's voice description mentions an accent, set it.
 
-A guest also needs a "personaEn": their persona, in English — the persona itself, not a summary, keeping \
-every detail that bears on how they'd sound (age, gender, background, where they're from, temperament). If you \
-set "accent", also set "accentEn" to that accent described in English, otherwise leave it unset. When the show \
-is in English, "personaEn" and "accentEn" are simply copies of "persona" and "accent". They exist only to \
-design the guest's voice; write everything else in the show's own language.
-
 Keep the draft short and high-level. It is an outline a script writer will use to structure the \
 transcript, not a prescription of it: "topics" is a brief list or sentence of the subjects and angles to \
 cover. Never script what the hosts or guest should say, react to, joke about or come up with, and don't \

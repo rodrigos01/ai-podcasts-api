@@ -7,7 +7,6 @@ const incoming = {
   name: "Maya Cruz",
   voice: "warm",
   persona: "A producer.",
-  personaEn: "A producer.",
   voicePrompt: "Name: Maya Cruz\n\nA producer.",
 };
 

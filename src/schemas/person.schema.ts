@@ -7,39 +7,24 @@ const optionalText = z.preprocess((v) => (v === "" ? undefined : v), z.string().
 
 export const personInputSchema = z.object({
   name: z.string().min(1),
-  // A free-text voice hint (e.g. "warm, gravelly older British male"), not a
-  // catalog pick — see common.schema.ts's voiceHintSchema. Fed into
-  // voiceResolution.service.ts at generation time, alongside persona/accent/
-  // name, to derive a Voice Design description (hosts, and guests who need
-  // an accent) or Voice Library search filters (other guests).
+  // A free-text description of how the person sounds (e.g. "warm, gravelly
+  // older British male"), not a catalog pick — see common.schema.ts's
+  // voiceHintSchema. Display only: the voice itself is designed from the name,
+  // persona and accent (see voicePrompt below).
   voice: voiceHintSchema,
   persona: z.string().min(1),
   // A short, plain-English description of a distinctive spoken accent (e.g.
-  // "Northern Irish", "light French accent") — optional, and only meant to
-  // be set when the persona specifically calls for one; an ordinary/neutral
-  // voice should leave this unset rather than have one invented for it. Fed
-  // into voiceResolution.service.ts's voice-design/library-search prompts —
-  // a guest with an accent set is routed to Voice Design instead of the
-  // Library, since the Library's accent taxonomy can't express "a native
-  // speaker of one language carrying an accent while speaking another" (see
-  // AGENTS.md). The wizard LLMs (podcastWizard/episodeWizard) populate this
-  // via Gemini's structured output, which — unlike a client's own request
-  // body — can't always be trusted to omit an optional key it doesn't want
-  // to set; the preprocess step treats an empty string as "no accent" the
-  // same as an absent key, rather than failing `.min(1)` re-validation.
+  // "Northern Irish", "light French accent") — optional, and only meant to be
+  // set when the persona specifically calls for one; an ordinary/neutral voice
+  // should leave this unset rather than have one invented for it. It's the
+  // accent line of the Voice Design prompt, stated explicitly because that is
+  // far more effective than leaving the model to infer it from the persona.
+  // The wizard LLMs populate this via Gemini's structured output, which —
+  // unlike a client's own request body — can't always be trusted to omit an
+  // optional key it doesn't want to set; the preprocess step treats an empty
+  // string as "no accent" the same as an absent key, rather than failing
+  // `.min(1)` re-validation.
   accent: optionalText,
-  // English counterparts of `persona` and `accent`, written by the same
-  // wizard LLM call that wrote the originals (identical to them when the
-  // show is already in English). `persona`/`accent` stay in the show's own
-  // language for display and for script generation; these two are what
-  // voiceResolution.service.ts sends to Voice Design, which gives better
-  // voices from English prompts and still speaks any language with the
-  // intended accent. Optional because people created before they existed
-  // (and clients that don't echo them) lack them — the voice service
-  // translates on demand in that case. Kept in sync with persona/accent on
-  // host edits by podcast.repository.ts's reconcileEnglishFields.
-  personaEn: optionalText,
-  accentEn: optionalText,
 });
 
 // What clients send when saving a person (confirming a wizard, editing a
@@ -48,9 +33,9 @@ export const personInputSchema = z.object({
 // schema, and the prompt is built by the server, never written by the model.
 export const personSaveSchema = personInputSchema.extend({
   // The exact Voice Design prompt (see llm/prompts/voiceResolution.prompts.ts's
-  // buildVoiceDesignInput) the person's voice is designed from. The wizard
-  // responses carry it, and it's stored on confirm; the server writes it
-  // itself (from personaEn/accentEn) whenever a person doesn't have one yet.
+  // buildVoiceDesignInput: name, persona, accent) the person's voice is designed
+  // from. The wizard responses carry it, and it's stored on confirm; the server
+  // writes it itself whenever a person doesn't have one yet.
   // Not part of voiceHash: editing it never invalidates a stored voice.
   voicePrompt: optionalText,
   // The voice a client picked for this person from POST /voices/design

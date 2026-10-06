@@ -15,13 +15,6 @@ non-native) may you also set that host's "accent" field — a short, plain-Engli
 "Northern Irish", "light French accent"). Leave it unset for an ordinary/neutral voice; don't invent one \
 for every host just because the field exists. Conversely, if a host's voice description mentions an accent, set the "accent" field too.
 
-Every host also needs a "personaEn": the same persona, in English. Write it as the persona itself \
-in English — not a summary — keeping every detail that bears on how the person would sound (age, gender, \
-background, where they're from, temperament). If you also set "accent", set "accentEn" to that accent \
-described in English, and leave it unset otherwise. When the show is already in English, "personaEn" and \
-"accentEn" are simply copies of "persona" and "accent". They exist only to design the host's voice, so the \
-show's own language is used for everything else.
-
 Each option also needs a "languageCode": the language the show is spoken in, as a BCP-47 tag with a region \
 (e.g. "en-US", "pt-BR", "es-MX", "fr-FR"). Voices are designed for it, so choose the variety that fits the \
 show and its hosts; when the user wrote in or asked for a language, use that language.

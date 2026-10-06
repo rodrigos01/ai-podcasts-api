@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Person } from "../schemas/person.schema";
 
-type HashedFields = Pick<Person, "name" | "persona" | "accent" | "voice" | "personaEn" | "accentEn">;
+type HashedFields = Pick<Person, "name" | "persona" | "accent" | "voice">;
 
 // Bumped whenever previously-stored `voice_...` ids stop being valid (e.g.
 // the 2026-10 move from the AI Studio Voices API to the Gemini Enterprise
@@ -13,24 +13,17 @@ export const VOICE_BACKEND_VERSION = "enterprise-1";
 
 /**
  * Detects a stale cached voice — an edit to name/persona/accent/voice hint
- * (or to their English counterparts) should trigger a fresh Voice Design
- * call, not silently keep reusing a voice designed for the old text. Same
- * pattern as the investigation spike's own `voiceCacheKey`.
- *
- * The English fields are appended only when present, so a person who has
- * none hashes exactly as before they existed — every voice already stored
- * stays valid instead of the whole catalogue being re-designed. (The voice
- * hint is no longer sent to Voice Design but stays in the hash for the same
- * reason; an edit to it costs one redundant, harmless re-design.)
+ * should trigger a fresh Voice Design call, not silently keep reusing a voice
+ * designed for the old text. (The voice hint isn't in the design prompt any
+ * more but stays in the hash so existing voices stay valid; an edit to it
+ * costs one redundant, harmless re-design. People saved while English
+ * persona/accent fields existed hashed with them appended; those fields are
+ * gone, so such a person's voice is re-designed once on its next use.)
  */
 export function voiceHash(person: HashedFields): string {
-  const english =
-    person.personaEn || person.accentEn
-      ? `\u0000${person.personaEn ?? ""}\u0000${person.accentEn ?? ""}`
-      : "";
   return createHash("sha256")
     .update(
-      `${VOICE_BACKEND_VERSION}\u0000${person.name}\u0000${person.persona}\u0000${person.accent ?? ""}\u0000${person.voice}${english}`,
+      `${VOICE_BACKEND_VERSION}\u0000${person.name}\u0000${person.persona}\u0000${person.accent ?? ""}\u0000${person.voice}`,
     )
     .digest("hex");
 }

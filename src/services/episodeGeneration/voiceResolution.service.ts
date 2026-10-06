@@ -3,7 +3,7 @@ import { setHostResolvedVoice, setHostVoicePrompt } from "../../data/podcast.rep
 import { setGuestResolvedVoice, setGuestVoicePrompt } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
 import { hasCurrentVoice, voiceHash } from "../../utils/voiceHash";
-import { withVoicePrompt } from "../personEnglish.service";
+import { withVoicePrompt } from "../../utils/voicePrompt";
 
 export { hasCurrentVoice };
 
@@ -23,7 +23,7 @@ async function designFor(
 ): Promise<ResolvedVoice> {
   let voicePrompt = person.voicePrompt;
   if (!voicePrompt) {
-    voicePrompt = (await withVoicePrompt(person)).voicePrompt;
+    voicePrompt = withVoicePrompt(person).voicePrompt;
     await persist(voicePrompt);
   }
   const voiceId = await designVoice({ voiceDescription: voicePrompt, ...(languageCode ? { languageCode } : {}) });
@@ -72,7 +72,7 @@ export async function designHostVoicesNow(podcastId: string, hosts: Person[], la
 /**
  * Guests always resolve fresh — a guest is scoped to one episode, never
  * reused across episodes, so there's no cache to check. Guests always get
- * a bespoke Voice Design voice designed from their English persona and accent.
+ * a bespoke Voice Design voice designed from their persona and accent.
  *
  * Called once per generation attempt (episode creation or `/regenerate`)
  * from orchestrator.ts, in parallel with script generation — not lazily at

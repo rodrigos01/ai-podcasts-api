@@ -22,7 +22,7 @@ import {
   runEpisodeGenerationSequence,
 } from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
-import { prepareHostsForUpdate, withVoicePrompt, withVoicePromptIfPossible } from "../services/personEnglish.service";
+import { prepareHostsForUpdate, withVoicePrompt } from "../utils/voicePrompt";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
@@ -32,18 +32,14 @@ import { createVoicePicker, deletePeopleVoices } from "../services/voiceSelectio
 
 // The wizard's own output has no voicePrompt (the model never writes it); the
 // server adds it so the client can hand it to POST /voices/design.
-async function withGuestVoicePrompts(result: EpisodeWizardSuggestionsResponse) {
+function withGuestVoicePrompts(result: EpisodeWizardSuggestionsResponse) {
   return {
-    suggestions: await Promise.all(
-      result.suggestions.map(async (suggestion) => ({
-        episodes: await Promise.all(
-          suggestion.episodes.map(async (episode) => ({
-            ...episode,
-            guests: await Promise.all(episode.guests.map(withVoicePromptIfPossible)),
-          })),
-        ),
+    suggestions: result.suggestions.map((suggestion) => ({
+      episodes: suggestion.episodes.map((episode) => ({
+        ...episode,
+        guests: episode.guests.map(withVoicePrompt),
       })),
-    ),
+    })),
   };
 }
 
@@ -68,7 +64,7 @@ export async function wizardOptions(req: Request, res: Response) {
   res.json({
     sessionId: randomUUID(),
     ...(podcast.languageCode ? { languageCode: podcast.languageCode } : {}),
-    ...(await withGuestVoicePrompts(result)),
+    ...withGuestVoicePrompts(result),
   });
 }
 
@@ -89,7 +85,7 @@ export async function wizardRevise(req: Request, res: Response) {
   res.json({
     sessionId: input.sessionId ?? randomUUID(),
     ...(podcast.languageCode ? { languageCode: podcast.languageCode } : {}),
-    ...(await withGuestVoicePrompts(result)),
+    ...withGuestVoicePrompts(result),
   });
 }
 
@@ -103,7 +99,7 @@ export async function create(req: Request, res: Response) {
   const episodes = [];
   const decisions = [];
   for (const episodeInput of input.episodes) {
-    const prepared = await Promise.all(episodeInput.guests.map(withVoicePrompt));
+    const prepared = episodeInput.guests.map(withVoicePrompt);
     // A picked voice (validated against this wizard session) starts the guest
     // with it; anything else is designed at generation as before.
     const guestDecisions = prepared.map((guest) => decideVoice(undefined, guest, picker.pick(guest.resolvedVoiceId)));
@@ -185,10 +181,8 @@ export async function update(req: Request, res: Response) {
 
   // Voice picks in an edit come from the episode's own design session (the
   // session id is the episode id). Cleanup only runs when guests are sent.
-  const [prepared, picker] = await Promise.all([
-    prepareHostsForUpdate(existing.guests, input.guests),
-    createVoicePicker(ownerId, episodeId),
-  ]);
+  const prepared = prepareHostsForUpdate(existing.guests, input.guests);
+  const picker = await createVoicePicker(ownerId, episodeId);
   const currentById = new Map(existing.guests.map((guest) => [guest.id, guest]));
   const decisions = prepared.map((guest) =>
     decideVoice(guest.id ? currentById.get(guest.id) : undefined, guest, picker.pick(guest.resolvedVoiceId)),

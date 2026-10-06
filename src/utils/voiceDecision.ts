@@ -24,7 +24,7 @@ export interface VoiceDecision {
 
 /**
  * What a save does with a person's voice, given the stored person (if any),
- * the incoming one (already prepared: English fields and prompt settled) and
+ * the incoming one (already prepared: prompt settled) and
  * the user's pick — which the caller has already validated against the
  * caller's own design session, so an unknown/stale id arrives here as `null`,
  * the same as no pick at all:
@@ -41,7 +41,7 @@ export interface VoiceDecision {
  */
 export function decideVoice(
   current: Person | undefined,
-  incoming: Pick<PersonInput, "name" | "persona" | "accent" | "voice" | "personaEn" | "accentEn" | "voicePrompt">,
+  incoming: Pick<PersonInput, "name" | "persona" | "accent" | "voice" | "voicePrompt">,
   pick: PickedVoice | null,
 ): VoiceDecision {
   const replaced = ownedVoiceId(current);

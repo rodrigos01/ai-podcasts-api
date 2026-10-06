@@ -9,7 +9,7 @@ import {
   podcastWizardOptionsRequestSchema,
   podcastWizardReviseRequestSchema,
 } from "../schemas/wizard.schema";
-import { prepareHostsForUpdate, withVoicePrompt, withVoicePromptIfPossible } from "../services/personEnglish.service";
+import { prepareHostsForUpdate, withVoicePrompt } from "../utils/voicePrompt";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import * as podcastWizardService from "../services/podcastWizard.service";
 import { HttpError } from "../utils/HttpError";
@@ -22,18 +22,14 @@ import { createVoicePicker, deletePeopleVoices } from "../services/voiceSelectio
 // The wizard's own output has no voicePrompt (the model never writes it); the
 // server adds it so the client can hand it to POST /voices/design.
 function withHostVoicePrompts(options: PodcastOption[]) {
-  return Promise.all(
-    options.map(async (option) => ({ ...option, hosts: await Promise.all(option.hosts.map(withVoicePromptIfPossible)) })),
-  );
+  return options.map((option) => ({ ...option, hosts: option.hosts.map(withVoicePrompt) }));
 }
 
 export async function create(req: Request, res: Response) {
   const { sessionId, ...input } = podcastCreateRequestSchema.parse(req.body);
   const ownerId = requireUserId(req);
-  const [prepared, picker] = await Promise.all([
-    Promise.all(input.hosts.map(withVoicePrompt)),
-    createVoicePicker(ownerId, sessionId),
-  ]);
+  const prepared = input.hosts.map(withVoicePrompt);
+  const picker = await createVoicePicker(ownerId, sessionId);
 
   // A picked voice (validated against this wizard session) starts the host
   // with it; anything else, including an unknown id, is designed lazily at the
@@ -74,10 +70,8 @@ export async function update(req: Request, res: Response) {
 
   // Voice picks in an edit come from the podcast's own design session (the
   // session id is the podcast id). Cleanup only runs when hosts are sent.
-  const [prepared, picker] = await Promise.all([
-    prepareHostsForUpdate(existing.hosts, input.hosts),
-    createVoicePicker(ownerId, podcastId),
-  ]);
+  const prepared = prepareHostsForUpdate(existing.hosts, input.hosts);
+  const picker = await createVoicePicker(ownerId, podcastId);
   const currentById = new Map(existing.hosts.map((host) => [host.id, host]));
   const decisions = prepared.map((host) =>
     decideVoice(host.id ? currentById.get(host.id) : undefined, host, picker.pick(host.resolvedVoiceId)),
@@ -116,7 +110,7 @@ export async function wizardOptions(req: Request, res: Response) {
   const input = podcastWizardOptionsRequestSchema.parse(req.body);
   const options = await podcastWizardService.generateOptions(input.prompt, input.sourceMaterial);
   // Voice-design session for this wizard run — see voiceDesign.service.ts.
-  res.json({ sessionId: randomUUID(), options: await withHostVoicePrompts(options) });
+  res.json({ sessionId: randomUUID(), options: withHostVoicePrompts(options) });
 }
 
 export async function wizardRevise(req: Request, res: Response) {
@@ -126,5 +120,5 @@ export async function wizardRevise(req: Request, res: Response) {
     input.instruction,
     input.targetIndex,
   );
-  res.json({ sessionId: input.sessionId ?? randomUUID(), options: await withHostVoicePrompts(options) });
+  res.json({ sessionId: input.sessionId ?? randomUUID(), options: withHostVoicePrompts(options) });
 }
