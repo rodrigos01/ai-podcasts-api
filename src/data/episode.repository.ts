@@ -41,6 +41,7 @@ export async function createEpisode(
     transcript: null,
     ttsChunks: null,
     generatedAudioSeconds: 0,
+    audioComplete: false,
     error: null,
     createdAt: now,
     updatedAt: now,
@@ -191,6 +192,29 @@ export async function setGuestVoicePrompt(
     const episode = snap.data() as Episode;
     const guests = episode.guests.map((guest) => (guest.id === guestId ? { ...guest, voicePrompt } : guest));
     tx.update(ref, { guests, updatedAt: Date.now() });
+  });
+}
+
+/**
+ * Marks an episode's audio as fully generated and records its exact total
+ * duration — see the `audioComplete` field on the episode schema.
+ */
+export async function markAudioComplete(
+  podcastId: string,
+  episodeId: string,
+  durationSeconds: number,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const current = (snap.data()?.generatedAudioSeconds as number | undefined) ?? 0;
+    tx.update(ref, {
+      audioComplete: true,
+      audioDurationSeconds: durationSeconds,
+      generatedAudioSeconds: Math.max(current, durationSeconds),
+      updatedAt: Date.now(),
+    });
   });
 }
 

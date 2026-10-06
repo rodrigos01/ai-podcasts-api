@@ -18,6 +18,7 @@ vi.mock("../src/data/audioLock.repository", () => ({
 
 vi.mock("../src/data/episode.repository", () => ({
   bumpGeneratedAudioSeconds: vi.fn(),
+  markAudioComplete: vi.fn(),
 }));
 
 vi.mock("../src/services/episodeGeneration/audioFinalize.service", () => ({
@@ -66,6 +67,7 @@ vi.mock("../src/utils/aac", () => ({
 
 import * as audioCache from "../src/storage/audioCache.repository";
 import * as audioLock from "../src/data/audioLock.repository";
+import * as episodeRepo from "../src/data/episode.repository";
 import * as ttsClient from "../src/llm/ttsClient";
 import * as voiceResolution from "../src/services/episodeGeneration/voiceResolution.service";
 import { streamEpisodeAudio } from "../src/services/audio.service";
@@ -432,5 +434,113 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
     expect(res.written[0]).toEqual(chunk0Aac);
     expect(res.written[1]).toEqual(chunk1Aac);
     expect(res.writableEnded).toBe(true);
+  });
+  it("applies Range on top of ?t= on cached audio (offsets are relative to the ?t= stream)", async () => {
+    const chunk0Aac = Buffer.alloc(8000, 1); // 1.0 second
+    const chunk1Aac = Buffer.alloc(8000, 2); // 1.0 second
+    vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? 8000 : 8000));
+    vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac : chunk1Aac));
+
+    const res = createMockResponse();
+    // ?t=0.5 -> stream is 4000 bytes of chunk 0 + 8000 of chunk 1 = 12000.
+    // Range bytes=5000- is 5000 bytes into THAT stream: 1000 bytes into chunk 1.
+    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+      rangeStart: 5000,
+      startTimeSeconds: 0.5,
+    });
+
+    expect(res.statusCode).toBe(206);
+    expect(res.headers["content-range"]).toBe("bytes 5000-11999/12000");
+    expect(res.headers["content-length"]).toBe(String(7000));
+    expect(Buffer.concat(res.written)).toEqual(chunk1Aac.subarray(1000));
+  });
+
+  it("rejects a Range past the end of the ?t= stream with 416 and the stream length", async () => {
+    const chunk = Buffer.alloc(8000, 1);
+    vi.mocked(audioCache.getCachedChunkSize).mockResolvedValue(chunk.length);
+    vi.mocked(audioCache.getCachedChunk).mockResolvedValue(chunk);
+
+    const res = createMockResponse();
+    await expect(
+      streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+        rangeStart: 12000,
+        startTimeSeconds: 0.5,
+      }),
+    ).rejects.toMatchObject({ status: 416 });
+    expect(res.headers["content-range"]).toBe("bytes */12000");
+  });
+
+  it("honors Range on the live path: 206, no Content-Length, first N bytes dropped", async () => {
+    const chunk0Aac = Buffer.alloc(8000, 1); // cached
+    vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac.length : null));
+    vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac : null));
+    vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+    vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+      onDelta(Buffer.alloc(24000, 2)); // -> 4000 AAC bytes (mock encoder)
+      onDelta(Buffer.alloc(24000, 3)); // -> 4000 AAC bytes
+    });
+
+    const res = createMockResponse();
+    // Skip all of cached chunk 0 plus 1000 bytes of the live chunk.
+    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+      rangeStart: 9000,
+      startTimeSeconds: null,
+    });
+
+    expect(res.statusCode).toBe(206);
+    expect(res.headers["content-length"]).toBeUndefined();
+    expect(Buffer.concat(res.written).length).toBe(8000 - 1000);
+  });
+
+  it("records audioComplete and the exact duration once the last chunk is generated", async () => {
+    const chunk0Aac = Buffer.alloc(8000, 1); // 1.0s, cached
+    const cached = new Map<number, Buffer>([[0, chunk0Aac]]);
+    vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => cached.get(i)?.length ?? null);
+    vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => cached.get(i) ?? null);
+    vi.mocked(audioCache.putCachedChunk).mockImplementation(async (_, __, i, data) => {
+      cached.set(i, data);
+    });
+    vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+    vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+      onDelta(Buffer.alloc(24000, 2)); // 4000 AAC bytes -> 0.5s
+    });
+
+    const res = createMockResponse();
+    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+      rangeStart: null,
+      startTimeSeconds: null,
+    });
+    await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledTimes(1));
+    expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 1.5);
+  });
+
+  it("does not record completion while chunks are still missing", async () => {
+    vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? 8000 : null));
+    vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? Buffer.alloc(8000, 1) : null));
+    vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+    vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+      onDelta(Buffer.alloc(24000, 2));
+    });
+    // Chunk 1 is generated but never lands in the (mocked) cache.
+    const res = createMockResponse();
+    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+      rangeStart: null,
+      startTimeSeconds: null,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(episodeRepo.markAudioComplete).not.toHaveBeenCalled();
+  });
+
+  it("backfills completion for a fully cached episode that predates the flag", async () => {
+    const chunk = Buffer.alloc(8000, 1);
+    vi.mocked(audioCache.getCachedChunkSize).mockResolvedValue(chunk.length);
+    vi.mocked(audioCache.getCachedChunk).mockResolvedValue(chunk);
+
+    const res = createMockResponse();
+    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+      rangeStart: null,
+      startTimeSeconds: null,
+    });
+    await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 2));
   });
 });
