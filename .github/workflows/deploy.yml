@@ -81,6 +81,8 @@ jobs:
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
+      # --timeout 3600: /audio/stream holds one request open while a listener plays a
+      # still-generating episode; Cloud Run's 300s default would cut it after ~5 minutes.
       - name: Deploy
         run: |
           gcloud run deploy "${{ steps.meta.outputs.service }}" \
@@ -89,6 +91,7 @@ jobs:
             --region "$REGION" \
             --platform managed \
             --allow-unauthenticated \
+            --timeout 3600 \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
             --update-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET},FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE_ID}" \
             --remove-secrets "GEMINI_API_KEY"
