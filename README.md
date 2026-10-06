@@ -130,6 +130,7 @@ All request/response bodies are JSON unless noted.
   "options": [
     {
       "title": "...", "description": "...", "structure": "... (markdown)",
+      "languageCode": "pt-BR",   // the language the show is spoken in (BCP-47) — voices are designed for it
       "hosts": [{
         "name": "...", "voice": "warm, gravelly older British male", "persona": "...",
         "voicePrompt": "Name: ...\n\n<English bio>\n\nAccent: ..."   // optional — the prompt a voice would be designed from
@@ -148,11 +149,11 @@ All request/response bodies are JSON unless noted.
 // response: same shape as /wizard/options (sessionId is echoed back; omit it in the request and you get a new one)
 ```
 
-**`POST /podcasts`** — body is `{ title, description, structure, hosts: [{name, voice, persona, ...}], sessionId? }` (drop `predictedChanges` from a chosen option). `voice` is a free-text description (e.g. "warm, gravelly older British male"), not a pick from `GET /voices`'s legacy catalog. The real synthesizable voice is a designed one: either the one the user picked via [Voice design](#voice-design) (send it as the host's `resolvedVoiceId`, along with the wizard's `sessionId`), or, if none is picked, one the server designs itself the first time the podcast's audio is generated, from the host's `voicePrompt` (see below). Returns `201` with the created podcast, including a generated `id` and per-host `id`s.
+**`POST /podcasts`** — body is `{ title, description, structure, languageCode?, hosts: [{name, voice, persona, ...}], sessionId? }` (drop `predictedChanges` from a chosen option; keep its `languageCode`). `voice` is a free-text description (e.g. "warm, gravelly older British male"), not a pick from `GET /voices`'s legacy catalog. The real synthesizable voice is a designed one: either the one the user picked via [Voice design](#voice-design) (send it as the host's `resolvedVoiceId`, along with the wizard's `sessionId`), or, if none is picked, one the server designs itself the first time the podcast's audio is generated, from the host's `voicePrompt` (see below). Returns `201` with the created podcast, including a generated `id` and per-host `id`s.
 
 `voicePrompt` on a host is the exact text a voice is designed from. The wizards return it; send it back as-is, or edit it. If a host is saved without one, the server builds it (from the persona and accent, translated to English when they aren't — `personaEn`/`accentEn`, which the server also fills in if the request doesn't carry them) and stores it.
 
-**`PATCH /podcasts/:podcastId`** — any subset of `{title, description, structure, hosts}`. When editing `hosts`, include each existing host's `id` to keep it stable (episodes reference hosts by id); omit `id` on a new host. Voice rules when `hosts` is sent:
+**`PATCH /podcasts/:podcastId`** — any subset of `{title, description, structure, languageCode, hosts}`. When editing `hosts`, include each existing host's `id` to keep it stable (episodes reference hosts by id); omit `id` on a new host. Voice rules when `hosts` is sent:
 - `resolvedVoiceId` set to a candidate picked in this podcast's design session (the session id is the **podcast id**) → that voice is stored (and `voicePrompt` becomes the prompt it was designed from).
 - Otherwise, if the host's `voicePrompt` changed (or the persona/accent/name it's built from did) → the stored voice is dropped and a new one is designed in the background from the new prompt, so it's usually ready by the next generation.
 - Otherwise the host keeps its voice. Sending back the `resolvedVoiceId` you got from a GET is a no-op.
@@ -170,7 +171,11 @@ Hosts and guests are voiced by designed voices. Clients can let the user try out
 **`POST /voices/design`** (auth required)
 ```json
 // request
-{ "sessionId": "…", "prompt": "Name: Maya Cruz\n\nA warm, curious former radio producer…\n\nAccent: light Irish" }
+{
+  "sessionId": "…",
+  "prompt": "Name: Maya Cruz\n\nA warm, curious former radio producer…\n\nAccent: light Irish",
+  "languageCode": "pt-BR"   // optional — the podcast's language: the wizard's languageCode, or the podcast's own when editing
+}
 
 // response
 {
@@ -182,6 +187,8 @@ Hosts and guests are voiced by designed voices. Clients can let the user try out
 }
 ```
 `sessionId` is any string up to 128 characters: use the one a wizard returned, or the podcast/episode id when editing. Candidates are private to the user who designed them, so another user's session ids never overlap with yours. `previewUrl` is absolute.
+
+**Language.** Voices are designed for the podcast's language. The podcast wizard returns a `languageCode` on every option (a BCP-47 tag such as `en-US` or `pt-BR`; `en_US` is accepted and normalised to the hyphenated form), the episode wizard returns the podcast's `languageCode` at the top level of its responses, and an existing podcast carries its own — pass whichever applies as `languageCode` on `POST /voices/design`. Send it back as `languageCode` on `POST /podcasts` so voices the server designs itself (at generation, or in the background after a host edit) use it too. It's optional everywhere: a podcast without one is designed without a language, as before, and an unrecognisable value is ignored rather than rejected.
 
 **`GET /voices/:voiceId/preview`** — no auth. Returns the candidate's sample as `audio/wav` (24 kHz, mono, 16-bit) with a `Content-Length`, so it plays in an `<audio>` tag or ExoPlayer. The sample can run to 30 seconds or more. `400` if the id isn't a designed voice id, `404` if it doesn't exist (e.g. it was already cleaned up).
 
@@ -238,7 +245,8 @@ Three ways to add a source, on the same endpoint:
       ]
     }
   ],
-  "sessionId": "…"   // the voice-design session for this wizard run — see Voice design
+  "sessionId": "…",          // the voice-design session for this wizard run — see Voice design
+  "languageCode": "pt-BR"    // the podcast's language, for voice design (omitted if the podcast has none)
 }
 
 // ...but when a split is the right call, a suggestion's own "episodes" array has 2 entries
@@ -329,7 +337,7 @@ This is a single audio resource for the whole episode (not per-chunk), designed 
 
 ## Data model
 
-- **Podcast**: `title`, `description`, `structure` (markdown), `hosts[]` (each a *person*: `id`, `name`, `voice`, `persona`, `accent?`, `personaEn?`, `accentEn?`, `voicePrompt?`, `resolvedVoiceId`, plus server-managed voice fields; responses also add the computed `voicePreviewUrl?`).
+- **Podcast**: `title`, `description`, `structure` (markdown), `languageCode?`, `hosts[]` (each a *person*: `id`, `name`, `voice`, `persona`, `accent?`, `personaEn?`, `accentEn?`, `voicePrompt?`, `resolvedVoiceId`, plus server-managed voice fields; responses also add the computed `voicePreviewUrl?`).
 - **Source**: `title`, `contents` (extracted plain text), `sourceType`.
 - **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]` (people, same shape as hosts), `productionNotes`, `status`, `progress`, `transcript`, `generatedAudioSeconds` (total audio duration generated so far), `error`.
 

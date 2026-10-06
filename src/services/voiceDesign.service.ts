@@ -18,9 +18,13 @@ export async function designCandidates(input: {
   ownerId: string;
   sessionId: string;
   prompt: string;
+  languageCode?: string;
 }): Promise<string[]> {
   const results = await Promise.allSettled(
-    Array.from({ length: CANDIDATES_PER_DESIGN }, () => designVoice({ voiceDescription: input.prompt })),
+    Array.from({ length: CANDIDATES_PER_DESIGN }, () => designVoice({
+        voiceDescription: input.prompt,
+        ...(input.languageCode ? { languageCode: input.languageCode } : {}),
+      })),
   );
 
   const voiceIds = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));

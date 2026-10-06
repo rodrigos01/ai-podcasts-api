@@ -19,13 +19,14 @@ export interface ResolvedVoice {
 async function designFor(
   person: Person,
   persist: (voicePrompt: string) => Promise<void>,
+  languageCode?: string,
 ): Promise<ResolvedVoice> {
   let voicePrompt = person.voicePrompt;
   if (!voicePrompt) {
     voicePrompt = (await withVoicePrompt(person)).voicePrompt;
     await persist(voicePrompt);
   }
-  const voiceId = await designVoice({ voiceDescription: voicePrompt });
+  const voiceId = await designVoice({ voiceDescription: voicePrompt, ...(languageCode ? { languageCode } : {}) });
   return { voiceId };
 }
 
@@ -35,12 +36,16 @@ async function designFor(
  * LLM + Voice Design call, so this only happens once per host (until their
  * persona/accent/voice hint actually changes) rather than per episode.
  */
-export async function resolveHostVoice(podcastId: string, host: Person): Promise<ResolvedVoice> {
+export async function resolveHostVoice(
+  podcastId: string,
+  host: Person,
+  languageCode?: string,
+): Promise<ResolvedVoice> {
   if (hasCurrentVoice(host)) {
     return { voiceId: host.resolvedVoiceId };
   }
 
-  const resolved = await designFor(host, (prompt) => setHostVoicePrompt(podcastId, host.id, prompt));
+  const resolved = await designFor(host, (prompt) => setHostVoicePrompt(podcastId, host.id, prompt), languageCode);
   await setHostResolvedVoice(podcastId, host.id, {
     resolvedVoiceId: resolved.voiceId,
     resolvedVoiceOrigin: "design",
@@ -55,8 +60,8 @@ export async function resolveHostVoice(podcastId: string, host: Person): Promise
  * them ready. Best-effort: a failure is logged and the host's voice is simply
  * designed at the next generation, as before.
  */
-export async function designHostVoicesNow(podcastId: string, hosts: Person[]): Promise<void> {
-  const results = await Promise.allSettled(hosts.map((host) => resolveHostVoice(podcastId, host)));
+export async function designHostVoicesNow(podcastId: string, hosts: Person[], languageCode?: string): Promise<void> {
+  const results = await Promise.allSettled(hosts.map((host) => resolveHostVoice(podcastId, host, languageCode)));
   results.forEach((result, i) => {
     if (result.status === "rejected") {
       console.error(`Could not design a voice for host ${hosts[i]?.id} after a save (will retry at generation):`, result.reason);
@@ -84,6 +89,7 @@ export async function resolveGuestVoice(
   podcastId: string,
   episodeId: string,
   guest: Person,
+  languageCode?: string,
 ): Promise<ResolvedVoice & { origin: "design" }> {
   // A voice the user picked is kept for every generation, never re-designed.
   if (guest.resolvedVoicePinned && guest.resolvedVoiceId) {
@@ -97,7 +103,7 @@ export async function resolveGuestVoice(
   const staleVoiceId =
     guest.resolvedVoiceOrigin === "design" && guest.resolvedVoiceHash ? guest.resolvedVoiceId : null;
 
-  const r = await designFor(guest, (prompt) => setGuestVoicePrompt(podcastId, episodeId, guest.id, prompt));
+  const r = await designFor(guest, (prompt) => setGuestVoicePrompt(podcastId, episodeId, guest.id, prompt), languageCode);
   const resolved = { voiceId: r.voiceId, origin: "design" as const };
 
   await setGuestResolvedVoice(podcastId, episodeId, guest.id, {

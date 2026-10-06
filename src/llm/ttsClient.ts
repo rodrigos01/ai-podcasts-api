@@ -109,6 +109,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 export interface DesignVoiceInput {
   /** The whole Voice Design prompt: an English bio plus, if any, an accent line. */
   voiceDescription: string;
+  /** BCP-47 tag (e.g. "pt-BR") the voice is designed for; omitted when the podcast has none. */
+  languageCode?: string;
 }
 
 // Voice creation generates a real audio sample, so it's slow (several
@@ -129,6 +131,7 @@ export async function designVoice(input: DesignVoiceInput): Promise<string> {
           store: true,
           voice: {
             type: "VOICE_TYPE_PROMPTED",
+            ...(input.languageCode ? { language_code: input.languageCode } : {}),
             prompted: { input: input.voiceDescription },
           },
         },

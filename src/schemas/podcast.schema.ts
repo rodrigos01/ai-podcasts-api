@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { languageCodeSchema } from "./common.schema";
 import { personSaveSchema, personSchema } from "./person.schema";
 
 export const podcastCreateSchema = z.object({
@@ -6,6 +7,10 @@ export const podcastCreateSchema = z.object({
   description: z.string().min(1),
   structure: z.string().min(1),
   hosts: z.array(personSaveSchema).min(1),
+  // What the wizard returned with the option (see wizard.schema.ts). Used for
+  // every voice design for this podcast's hosts and guests; absent on
+  // podcasts created before it existed, whose voices are designed without one.
+  languageCode: languageCodeSchema,
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -27,6 +32,7 @@ export const podcastUpdateSchema = z.object({
   description: z.string().min(1).optional(),
   structure: z.string().min(1).optional(),
   hosts: z.array(hostUpdateInputSchema).min(1).optional(),
+  languageCode: languageCodeSchema,
 });
 
 export const podcastSchema = podcastCreateSchema.extend({

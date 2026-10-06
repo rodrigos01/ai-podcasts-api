@@ -22,6 +22,10 @@ described in English, and leave it unset otherwise. When the show is already in 
 "accentEn" are simply copies of "persona" and "accent". They exist only to design the host's voice, so the \
 show's own language is used for everything else.
 
+Each option also needs a "languageCode": the language the show is spoken in, as a BCP-47 tag with a region \
+(e.g. "en-US", "pt-BR", "es-MX", "fr-FR"). Voices are designed for it, so choose the variety that fits the \
+show and its hosts; when the user wrote in or asked for a language, use that language.
+
 The structure must not include time markers, durations, or minute/word allocations for segments (no "0:00-5:00", \
 "first 10 minutes", etc.) — episodes vary in length, so describe segments by order and purpose only.
 

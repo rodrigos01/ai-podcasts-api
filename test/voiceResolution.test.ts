@@ -77,6 +77,24 @@ describe("voiceResolution.service", () => {
       expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "Name: G\n\nSomething the client edited." });
     });
 
+    it("designs for the podcast's language when it has one, and without one otherwise", async () => {
+      const guest: Person = {
+        id: "g",
+        name: "G",
+        persona: "x",
+        voice: "v",
+        voicePrompt: "Name: G\n\nbio",
+        resolvedVoiceId: null,
+        resolvedVoiceOrigin: null,
+        resolvedVoiceHash: null,
+      };
+      vi.mocked(designVoice).mockResolvedValue("v-lang");
+      await resolveGuestVoice("pod-1", "ep-1", guest, "pt-BR");
+      expect(designVoice).toHaveBeenLastCalledWith({ voiceDescription: "Name: G\n\nbio", languageCode: "pt-BR" });
+      await resolveGuestVoice("pod-1", "ep-1", guest);
+      expect(vi.mocked(designVoice).mock.lastCall?.[0]).not.toHaveProperty("languageCode");
+    });
+
     it("writes the prompt to the guest before designing when it has none", async () => {
       vi.mocked(designVoice).mockResolvedValueOnce("v-new");
       await resolveGuestVoice("pod-1", "ep-1", {

@@ -99,7 +99,7 @@ export async function update(req: Request, res: Response) {
     const hostId = prepared[i]?.id;
     return !!decision && needsVoiceNow(hostId ? currentById.get(hostId) : undefined, decision, saved);
   });
-  if (needVoice.length > 0) void designHostVoicesNow(podcastId, needVoice);
+  if (needVoice.length > 0) void designHostVoicesNow(podcastId, needVoice, podcast.languageCode);
 }
 
 export async function remove(req: Request, res: Response) {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { episodeLengthSchema } from "./common.schema";
+import { episodeLengthSchema, languageCodeSchema } from "./common.schema";
 import { personInputSchema } from "./person.schema";
 
 export const podcastOptionSchema = z.object({
@@ -7,6 +7,10 @@ export const podcastOptionSchema = z.object({
   description: z.string().min(1),
   structure: z.string().min(1),
   hosts: z.array(personInputSchema).min(1).max(4),
+  // The language the show is spoken in (BCP-47, e.g. "pt-BR"); voices are
+  // designed for it. Optional so a revise request from a client that predates
+  // it still validates.
+  languageCode: languageCodeSchema,
   predictedChanges: z.array(z.string().min(1)).length(3),
 });
 

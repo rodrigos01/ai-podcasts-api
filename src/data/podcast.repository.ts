@@ -24,6 +24,7 @@ export async function createPodcast(
     title: input.title,
     description: input.description,
     structure: input.structure,
+    ...(input.languageCode ? { languageCode: input.languageCode } : {}),
     hosts: input.hosts.map((host, index) => {
       const { resolvedVoiceId: _clientValue, ...person } = host;
       return { ...person, id: randomUUID(), ...(hostVoices[index] ?? NO_VOICE) };
@@ -64,6 +65,9 @@ export async function updatePodcast(
   if (!existing.exists) return null;
 
   const patch: Record<string, unknown> = { ...input, updatedAt: Date.now() };
+  // An unrecognisable language code parses to an explicit undefined, which
+  // Firestore rejects: leave the stored one alone instead.
+  if (patch.languageCode === undefined) delete patch.languageCode;
   if (input.hosts) {
     const currentHosts = new Map((existing.data() as Podcast).hosts.map((host) => [host.id, host]));
     patch.hosts = input.hosts.map((host, index) => {

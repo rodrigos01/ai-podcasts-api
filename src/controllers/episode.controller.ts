@@ -65,7 +65,11 @@ export async function wizardOptions(req: Request, res: Response) {
     input.prompt,
   );
   // Voice-design session for this wizard run — see voiceDesign.service.ts.
-  res.json({ sessionId: randomUUID(), ...(await withGuestVoicePrompts(result)) });
+  res.json({
+    sessionId: randomUUID(),
+    ...(podcast.languageCode ? { languageCode: podcast.languageCode } : {}),
+    ...(await withGuestVoicePrompts(result)),
+  });
 }
 
 export async function wizardRevise(req: Request, res: Response) {
@@ -82,7 +86,11 @@ export async function wizardRevise(req: Request, res: Response) {
     input.targetEpisodeIndex,
     input.instruction,
   );
-  res.json({ sessionId: input.sessionId ?? randomUUID(), ...(await withGuestVoicePrompts(result)) });
+  res.json({
+    sessionId: input.sessionId ?? randomUUID(),
+    ...(podcast.languageCode ? { languageCode: podcast.languageCode } : {}),
+    ...(await withGuestVoicePrompts(result)),
+  });
 }
 
 export async function create(req: Request, res: Response) {
