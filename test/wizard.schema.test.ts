@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { episodeWizardOptionsResponseSchema } from "../src/schemas/wizard.schema";
+import {
+  episodeWizardOptionsResponseSchema,
+  episodeWizardReviseRequestSchema,
+  podcastWizardReviseRequestSchema,
+} from "../src/schemas/wizard.schema";
 
 const draft = {
   title: "Ep 1",
@@ -79,5 +83,48 @@ describe("episodeWizardOptionsResponseSchema suggestions shape", () => {
       suggestions: [{ episodes: [draft] }, { episodes: [draft, draft] }, { episodes: [draft] }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("wizard revise requests", () => {
+  it("accept an optional voice-design sessionId", () => {
+    const option = {
+      title: "t",
+      description: "d",
+      structure: "s",
+      hosts: [{ name: "A", voice: "warm", persona: "p" }],
+      predictedChanges: ["a", "b", "c"],
+    };
+    const base = { options: [option, option, option], instruction: "x" };
+    expect(podcastWizardReviseRequestSchema.safeParse(base).success).toBe(true);
+    expect(podcastWizardReviseRequestSchema.safeParse({ ...base, sessionId: "abc" }).success).toBe(true);
+    expect(podcastWizardReviseRequestSchema.safeParse({ ...base, sessionId: "" }).success).toBe(false);
+  });
+
+  it("tolerate clients echoing a wizard-added voicePrompt back, or not sending one", () => {
+    const person = { name: "A", voice: "warm", persona: "p" };
+    const option = {
+      title: "t",
+      description: "d",
+      structure: "s",
+      predictedChanges: ["a", "b", "c"],
+    };
+    const withPrompt = { ...option, hosts: [{ ...person, voicePrompt: "Name: A\n\np" }] };
+    const parsed = podcastWizardReviseRequestSchema.parse({
+      options: [withPrompt, withPrompt, withPrompt],
+      instruction: "x",
+    });
+    // Not part of the wizard (LLM-facing) shape: dropped, never fed to the model.
+    expect(parsed.options[0]?.hosts[0]).not.toHaveProperty("voicePrompt");
+
+    const draft = { title: "t", topics: "t", predictedChanges: ["a", "b", "c"], guests: [{ ...person, voicePrompt: "x" }] };
+    expect(
+      episodeWizardReviseRequestSchema.safeParse({
+        suggestions: [{ episodes: [draft] }],
+        length: "short",
+        targetSuggestionIndex: 0,
+        instruction: "x",
+      }).success,
+    ).toBe(true);
   });
 });

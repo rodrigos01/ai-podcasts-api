@@ -11,16 +11,14 @@ must say enough about the person to imply how they sound. If a show has more tha
 clearly distinguishable — no two hosts should read as the same voice.
 
 Only when a host's persona specifically calls for a distinctive spoken accent (regional, national, or \
-non-native) may you also set that host's "accent" field — a short, plain-English description (e.g. \
-"Northern Irish", "light French accent"). Leave it unset for an ordinary/neutral voice; don't invent one \
+non-native) may you also set that host's "accent" field — a short description of the accent, \
+written in the same language as the persona and the rest of the show (e.g. "Northern Irish" or "light French \
+accent" for an English show, "sotaque nordestino" for a Portuguese one). Leave it unset for an ordinary/neutral voice; don't invent one \
 for every host just because the field exists. Conversely, if a host's voice description mentions an accent, set the "accent" field too.
 
-Every host also needs a "personaEn": the same persona, in English. Write it as the persona itself \
-in English — not a summary — keeping every detail that bears on how the person would sound (age, gender, \
-background, where they're from, temperament). If you also set "accent", set "accentEn" to that accent \
-described in English, and leave it unset otherwise. When the show is already in English, "personaEn" and \
-"accentEn" are simply copies of "persona" and "accent". They exist only to design the host's voice, so the \
-show's own language is used for everything else.
+Each option also needs a "languageCode": the language the show is spoken in, as a BCP-47 tag with a region \
+(e.g. "en-US", "pt-BR", "es-MX", "fr-FR"). Voices are designed for it, so choose the variety that fits the \
+show and its hosts; when the user wrote in or asked for a language, use that language.
 
 The structure must not include time markers, durations, or minute/word allocations for segments (no "0:00-5:00", \
 "first 10 minutes", etc.) — episodes vary in length, so describe segments by order and purpose only.

@@ -13,16 +13,18 @@ vi.mock("../src/llm/ttsClient", () => ({
 
 vi.mock("../src/data/episode.repository", () => ({
   setGuestResolvedVoice: vi.fn(),
+  setGuestVoicePrompt: vi.fn(),
 }));
 
 vi.mock("../src/data/podcast.repository", () => ({
   setHostResolvedVoice: vi.fn(),
+  setHostVoicePrompt: vi.fn(),
 }));
 
 import { generateText } from "../src/llm/geminiClient";
 import { deleteVoice, designVoice } from "../src/llm/ttsClient";
-import { setGuestResolvedVoice } from "../src/data/episode.repository";
-import { setHostResolvedVoice } from "../src/data/podcast.repository";
+import { setGuestResolvedVoice, setGuestVoicePrompt } from "../src/data/episode.repository";
+import { setHostResolvedVoice, setHostVoicePrompt } from "../src/data/podcast.repository";
 import { cleanupGuestVoice, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "../src/services/episodeGeneration/voiceResolution.service";
 
 describe("voiceResolution.service", () => {
@@ -31,12 +33,11 @@ describe("voiceResolution.service", () => {
   });
 
   describe("resolveGuestVoice", () => {
-    it("designs from the stored English persona alone, with no LLM call and no accent line", async () => {
+    it("builds the prompt from the name and persona as written when it has none, with no accent line", async () => {
       const guest: Person = {
         id: "guest-1",
         name: "Dr. Evelyn Reed",
         persona: "A marine biologist passionate about deep-sea exploration.",
-        personaEn: "A marine biologist passionate about deep-sea exploration.",
         voice: "authoritative yet enthusiastic",
         resolvedVoiceId: null,
         resolvedVoiceOrigin: null,
@@ -58,94 +59,79 @@ describe("voiceResolution.service", () => {
       expect(result).toEqual({ voiceId: "custom-voice-123", origin: "design" });
     });
 
-    it("sends the English persona and English accent, not the originals, for a non-English guest", async () => {
+    it("designs from the stored voicePrompt as-is, with no LLM call and nothing re-persisted", async () => {
+      vi.mocked(designVoice).mockResolvedValueOnce("v-stored");
+      await resolveGuestVoice("pod-1", "ep-1", {
+        id: "g",
+        name: "G",
+        persona: "x",
+        voice: "v",
+        voicePrompt: "Name: G\n\nSomething the client edited.",
+        resolvedVoiceId: null,
+        resolvedVoiceOrigin: null,
+        resolvedVoiceHash: null,
+      });
+      expect(generateText).not.toHaveBeenCalled();
+      expect(setGuestVoicePrompt).not.toHaveBeenCalled();
+      expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "Name: G\n\nSomething the client edited." });
+    });
+
+    it("designs for the podcast's language when it has one, and without one otherwise", async () => {
+      const guest: Person = {
+        id: "g",
+        name: "G",
+        persona: "x",
+        voice: "v",
+        voicePrompt: "Name: G\n\nbio",
+        resolvedVoiceId: null,
+        resolvedVoiceOrigin: null,
+        resolvedVoiceHash: null,
+      };
+      vi.mocked(designVoice).mockResolvedValue("v-lang");
+      await resolveGuestVoice("pod-1", "ep-1", guest, "pt-BR");
+      expect(designVoice).toHaveBeenLastCalledWith({ voiceDescription: "Name: G\n\nbio", languageCode: "pt-BR" });
+      await resolveGuestVoice("pod-1", "ep-1", guest);
+      expect(vi.mocked(designVoice).mock.lastCall?.[0]).not.toHaveProperty("languageCode");
+    });
+
+    it("writes the prompt to the guest before designing when it has none", async () => {
+      vi.mocked(designVoice).mockResolvedValueOnce("v-new");
+      await resolveGuestVoice("pod-1", "ep-1", {
+        id: "g",
+        name: "G",
+        persona: "Una anfitriona.",
+        voice: "v",
+        resolvedVoiceId: null,
+        resolvedVoiceOrigin: null,
+        resolvedVoiceHash: null,
+      });
+      expect(setGuestVoicePrompt).toHaveBeenCalledWith("pod-1", "ep-1", "g", "Name: G\n\nUna anfitriona.");
+      expect(vi.mocked(setGuestVoicePrompt).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(designVoice).mock.invocationCallOrder[0] as number,
+      );
+    });
+
+    it("sends the persona and accent in the show's own language, untranslated, with the podcast's language code", async () => {
       const guest: Person = {
         id: "guest-2",
         name: "Jessica Miller",
         persona: "Jessica Miller, 35, uma americana de Boston que mora no Brasil há cinco anos.",
-        personaEn: "Jessica Miller, 35, an American from Boston who has lived in Brazil for five years.",
         voice: "simpática, pausada",
         accent: "sotaque americano marcado ao falar português",
-        accentEn: "strong American accent when speaking Portuguese",
         resolvedVoiceId: null,
         resolvedVoiceOrigin: null,
         resolvedVoiceHash: null,
       };
       vi.mocked(designVoice).mockResolvedValueOnce("custom-voice-456");
 
-      await resolveGuestVoice("pod-1", "ep-1", guest);
+      await resolveGuestVoice("pod-1", "ep-1", guest, "pt-BR");
 
       expect(generateText).not.toHaveBeenCalled();
       expect(designVoice).toHaveBeenCalledWith({
         voiceDescription:
-          "Name: Jessica Miller\n\nJessica Miller, 35, an American from Boston who has lived in Brazil for five years.\n\n" +
-          "Accent: strong American accent when speaking Portuguese",
-      });
-    });
-
-    it("translates on demand for a person with no English fields (created before they existed)", async () => {
-      const guest: Person = {
-        id: "guest-5",
-        name: "Lúcia Barbosa",
-        persona: "Lúcia, 56, cozinheira de Recife.",
-        voice: "calorosa",
-        accent: "sotaque nordestino",
-        resolvedVoiceId: null,
-        resolvedVoiceOrigin: null,
-        resolvedVoiceHash: null,
-      };
-      vi.mocked(generateText).mockResolvedValueOnce({
-        personaEn: "Lúcia, 56, a cook from Recife.",
-        accentEn: "Northeastern Brazilian accent",
-      });
-      vi.mocked(designVoice).mockResolvedValueOnce("custom-voice-789");
-
-      await resolveGuestVoice("pod-1", "ep-1", guest);
-
-      expect(generateText).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: expect.stringContaining("Voice hint: calorosa"),
-        }),
-      );
-      expect(designVoice).toHaveBeenCalledWith({
-        voiceDescription: "Name: Lúcia Barbosa\n\nLúcia, 56, a cook from Recife.\n\nAccent: Northeastern Brazilian accent",
-      });
-    });
-
-    it("translates when the accent is set but has no English counterpart", async () => {
-      vi.mocked(generateText).mockResolvedValueOnce({ personaEn: "A host.", accentEn: "Carioca accent" });
-      vi.mocked(designVoice).mockResolvedValueOnce("v1");
-      await resolveGuestVoice("pod-1", "ep-1", {
-        id: "g",
-        name: "G",
-        persona: "Uma anfitriã.",
-        personaEn: "A host.",
-        voice: "v",
-        accent: "carioca",
-        resolvedVoiceId: null,
-        resolvedVoiceOrigin: null,
-        resolvedVoiceHash: null,
-      });
-      expect(generateText).toHaveBeenCalledTimes(1);
-      expect(designVoice).toHaveBeenCalledWith({ voiceDescription: "Name: G\n\nA host.\n\nAccent: Carioca accent" });
-    });
-
-    it("uses a saved accentEn even when the accent field is empty (accent that came from the voice hint)", async () => {
-      vi.mocked(designVoice).mockResolvedValueOnce("v2");
-      await resolveGuestVoice("pod-1", "ep-1", {
-        id: "g",
-        name: "G",
-        persona: "Londrino.",
-        personaEn: "A Londoner.",
-        accentEn: "British accent when speaking Portuguese",
-        voice: "sotaque britânico",
-        resolvedVoiceId: null,
-        resolvedVoiceOrigin: null,
-        resolvedVoiceHash: null,
-      });
-      expect(generateText).not.toHaveBeenCalled();
-      expect(designVoice).toHaveBeenCalledWith({
-        voiceDescription: "Name: G\n\nA Londoner.\n\nAccent: British accent when speaking Portuguese",
+          "Name: Jessica Miller\n\nJessica Miller, 35, uma americana de Boston que mora no Brasil há cinco anos.\n\n" +
+          "Accent: sotaque americano marcado ao falar português",
+        languageCode: "pt-BR",
       });
     });
 
@@ -154,7 +140,6 @@ describe("voiceResolution.service", () => {
         id: "guest-3",
         name: "Sarah Chen",
         persona: "AI researcher.",
-        personaEn: "AI researcher.",
         voice: "calm, analytical",
         resolvedVoiceId: "old-voice-789",
         resolvedVoiceOrigin: "design",
@@ -172,7 +157,6 @@ describe("voiceResolution.service", () => {
         id: "guest-4",
         name: "Omar Haddad",
         persona: "A historian.",
-        personaEn: "A historian.",
         voice: "measured",
         resolvedVoiceId: "voice_designed_on_ai_studio",
         resolvedVoiceOrigin: "design",
@@ -193,7 +177,6 @@ describe("voiceResolution.service", () => {
       id: "p-1",
       name: "Omar Haddad",
       persona: "A historian.",
-      personaEn: "A historian.",
       voice: "measured",
       resolvedVoiceId: null,
       resolvedVoiceOrigin: null,
@@ -223,19 +206,17 @@ describe("voiceResolution.service", () => {
 
       expect(hasCurrentVoice(withVoice)).toBe(true);
       expect(hasCurrentVoice({ ...withVoice, persona: "A different persona." })).toBe(false);
-      // The English persona/accent are what the voice was designed from.
-      expect(hasCurrentVoice({ ...withVoice, personaEn: "A different historian." })).toBe(false);
-      expect(hasCurrentVoice({ ...withVoice, accent: "French", accentEn: "French" })).toBe(false);
+      expect(hasCurrentVoice({ ...withVoice, accent: "French" })).toBe(false);
     });
 
-    it("keeps a voice stored before the English fields existed valid for a person who still has none", () => {
-      // Same formula as before personaEn/accentEn existed (current backend
-      // version, no English suffix) — the stored voice must not be thrown away.
+    it("keeps a voice valid under the current hash formula", () => {
+      // The formula is part of every stored voice's identity — changing it
+      // re-designs everyone's voice, so it's pinned here.
       const hash = createHash("sha256")
         .update("enterprise-1\u0000Omar Haddad\u0000A historian.\u0000\u0000measured")
         .digest("hex");
-      const legacy: Person = { ...person, personaEn: undefined, resolvedVoiceId: "voice_x", resolvedVoiceHash: hash };
-      expect(hasCurrentVoice(legacy)).toBe(true);
+      const stored: Person = { ...person, resolvedVoiceId: "voice_x", resolvedVoiceHash: hash };
+      expect(hasCurrentVoice(stored)).toBe(true);
     });
   });
 
@@ -251,7 +232,6 @@ describe("voiceResolution.service", () => {
         id: "host-1",
         name: "Maya Cruz",
         persona: "A curious host.",
-        personaEn: "A curious host.",
         voice: "warm and quick",
         resolvedVoiceId: "voice_designed_on_ai_studio",
         resolvedVoiceOrigin: "design",

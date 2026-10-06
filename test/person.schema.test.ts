@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { personInputSchema, personSchema } from "../src/schemas/person.schema";
+import { personInputSchema, personSaveSchema, personSchema } from "../src/schemas/person.schema";
 
 describe("personInputSchema voice field", () => {
   it("accepts a free-text voice description, not just a fixed catalog ID", () => {
@@ -39,22 +39,10 @@ describe("personInputSchema voice field", () => {
 describe("personInputSchema English fields", () => {
   const base = { name: "Maya Cruz", voice: "warm voice", persona: "Uma anfitriã curiosa." };
 
-  it("accepts a person with or without personaEn/accentEn", () => {
-    expect(personInputSchema.safeParse(base).success).toBe(true);
-    const full = personInputSchema.parse({
-      ...base,
-      accent: "sotaque carioca",
-      personaEn: "A curious host.",
-      accentEn: "Rio de Janeiro accent",
-    });
-    expect(full.personaEn).toBe("A curious host.");
-    expect(full.accentEn).toBe("Rio de Janeiro accent");
-  });
-
-  it("treats empty-string English fields from a wizard LLM as unset", () => {
-    const parsed = personInputSchema.parse({ ...base, personaEn: "", accentEn: "" });
-    expect(parsed.personaEn).toBeUndefined();
-    expect(parsed.accentEn).toBeUndefined();
+  it("no longer carries English persona/accent fields: they're stripped, not stored", () => {
+    const parsed = personInputSchema.parse({ ...base, personaEn: "A curious host.", accentEn: "Rio accent" });
+    expect(parsed).not.toHaveProperty("personaEn");
+    expect(parsed).not.toHaveProperty("accentEn");
   });
 });
 
@@ -96,5 +84,17 @@ describe("personSchema (persisted shape)", () => {
       resolvedVoiceHash: "somehash",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("personSaveSchema resolvedVoiceId", () => {
+  it("is an optional input, so a client can echo a GET back or omit it", () => {
+    const base = { name: "A", voice: "v", persona: "p" };
+    expect(personSaveSchema.safeParse(base).success).toBe(true);
+    expect(personSaveSchema.parse({ ...base, resolvedVoiceId: "voice_x" }).resolvedVoiceId).toBe("voice_x");
+    // The other server-managed fields are never accepted.
+    expect(personSaveSchema.parse({ ...base, resolvedVoiceHash: "x", resolvedVoicePinned: true })).not.toHaveProperty(
+      "resolvedVoicePinned",
+    );
   });
 });

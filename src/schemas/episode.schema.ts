@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { clearableText, episodeLengthSchema, optionalText } from "./common.schema";
-import { personInputSchema, personSchema } from "./person.schema";
+import { personSaveSchema, personSchema } from "./person.schema";
 
 // Per specs.md: an episode has exactly 2 active voices — 2 hosts, or 1 host
 // + 1 guest. There is no "solo host" mode and no more than 2 at once.
@@ -25,7 +25,7 @@ export const episodeCreateSchema = z
     length: episodeLengthSchema,
     sourceIds: z.array(z.string().min(1)),
     participantHostIds: z.array(z.string().min(1)).max(2),
-    guests: z.array(personInputSchema).max(1),
+    guests: z.array(personSaveSchema).max(1),
     productionNotes: optionalText,
   })
   .check(twoVoiceCast);
@@ -39,12 +39,21 @@ export const episodeCreateSchema = z
 // episode in one response and polls each one's own status as usual.
 export const episodeCreateRequestSchema = z.object({
   episodes: z.array(episodeCreateSchema).min(1).max(2),
+  // The voice-design session the wizard handed out (see voices.controller.ts's
+  // design): lets the guests' picked voices be validated and the session's
+  // unused candidates deleted. Optional — without it nothing is picked or cleaned.
+  sessionId: z.string().min(1).max(128).optional(),
 });
 
 export const episodeUpdateSchema = z.object({
   title: z.string().min(1).optional(),
   topics: z.string().min(1).optional(),
   productionNotes: clearableText,
+  // Edit the episode's guest(s). The cast size can't change (the 2-voice
+  // rule), so this must have as many entries as the episode has guests; an
+  // entry with no id is a new person replacing one. The session for voice
+  // picks is the episode id.
+  guests: z.array(personSaveSchema.extend({ id: z.string().min(1).optional() })).max(1).optional(),
 });
 
 export const episodeProgressSchema = z.object({
