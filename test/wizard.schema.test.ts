@@ -18,6 +18,14 @@ describe("episodeWizardOptionsResponseSchema suggestions shape", () => {
     expect(result.data?.suggestions[0]?.episodes[0]?.productionNotes).toBeUndefined();
   });
 
+  it("treats a null productionNotes as not sent", () => {
+    const result = episodeWizardOptionsResponseSchema.safeParse({
+      suggestions: [{ episodes: [{ ...draft, productionNotes: null }] }],
+    });
+    expect(result.success).toBe(true);
+    expect(result.data?.suggestions[0]?.episodes[0]?.productionNotes).toBeUndefined();
+  });
+
   it("accepts a draft without production notes", () => {
     const { productionNotes: _omitted, ...withoutNotes } = draft;
     const result = episodeWizardOptionsResponseSchema.safeParse({

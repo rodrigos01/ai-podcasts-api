@@ -182,10 +182,24 @@ describe("empty production notes are treated as not sent", () => {
     expect(result.data?.productionNotes).toBeUndefined();
   });
 
-  it("accepts an empty string on update, as a no-op", () => {
-    const result = episodeUpdateSchema.safeParse({ title: "New", productionNotes: "" });
+  it("accepts null on create as not sent", () => {
+    const result = episodeCreateSchema.safeParse({
+      ...base,
+      productionNotes: null,
+      participantHostIds: ["h1", "h2"],
+      guests: [],
+    });
     expect(result.success).toBe(true);
     expect(result.data?.productionNotes).toBeUndefined();
+  });
+
+  it("normalizes empty string and null on update to null (clear)", () => {
+    expect(episodeUpdateSchema.parse({ productionNotes: "" }).productionNotes).toBeNull();
+    expect(episodeUpdateSchema.parse({ productionNotes: null }).productionNotes).toBeNull();
+  });
+
+  it("leaves notes untouched on update when the field is absent", () => {
+    expect(episodeUpdateSchema.parse({ title: "New" }).productionNotes).toBeUndefined();
   });
 
   it("still passes real notes through", () => {
