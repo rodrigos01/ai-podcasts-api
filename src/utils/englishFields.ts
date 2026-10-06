@@ -1,6 +1,7 @@
 import type { PersonInput } from "../schemas/person.schema";
 
 type EnglishSource = Pick<PersonInput, "persona" | "voice" | "accent" | "personaEn" | "accentEn">;
+type PromptSource = EnglishSource & Pick<PersonInput, "name" | "voicePrompt">;
 
 /**
  * True when something the English fields are derived from changed. Both
@@ -37,6 +38,17 @@ export function reconcileEnglishFields(
   const personaEn = reconcile(current.personaEn, incoming.personaEn, changed);
   const accentEn = reconcile(current.accentEn, incoming.accentEn, changed);
   return { ...(personaEn ? { personaEn } : {}), ...(accentEn ? { accentEn } : {}) };
+}
+
+/**
+ * The same decision as reconcileEnglishFields, for the stored Voice Design
+ * prompt: a deliberate new value from the client wins; otherwise the stored
+ * one is kept unless something it's built from changed — the name too, since
+ * the prompt opens with it — in which case it's dropped and rebuilt.
+ */
+export function reconcileVoicePrompt(current: PromptSource, incoming: PromptSource): string | undefined {
+  const stale = englishSourceChanged(current, incoming) || current.name !== incoming.name;
+  return reconcile(current.voicePrompt, incoming.voicePrompt, stale);
 }
 
 function reconcile(

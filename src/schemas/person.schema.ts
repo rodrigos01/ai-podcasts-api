@@ -42,7 +42,27 @@ export const personInputSchema = z.object({
   accentEn: optionalText,
 });
 
-export const personSchema = personInputSchema.extend({
+// What clients send when saving a person (confirming a wizard, editing a
+// host): the wizard-facing shape plus the Voice Design prompt. Kept out of
+// personInputSchema on purpose — that one is also the wizards' LLM output
+// schema, and the prompt is built by the server, never written by the model.
+export const personSaveSchema = personInputSchema.extend({
+  // The exact Voice Design prompt (see llm/prompts/voiceResolution.prompts.ts's
+  // buildVoiceDesignInput) the person's voice is designed from. The wizard
+  // responses carry it, and it's stored on confirm; the server writes it
+  // itself (from personaEn/accentEn) whenever a person doesn't have one yet.
+  // Not part of voiceHash: editing it never invalidates a stored voice.
+  voicePrompt: optionalText,
+  // The voice a client picked for this person from POST /voices/design
+  // candidates (the id it got back). Echoing a GET response back sends the
+  // current value, which is a no-op. Only ever used after the server has
+  // checked it against the caller's own design session — anything else is
+  // ignored as if it hadn't been sent (see voiceSelection.service.ts). The
+  // stored field below is the same name; origin/hash stay server-managed.
+  resolvedVoiceId: z.string().min(1).optional(),
+});
+
+export const personSchema = personSaveSchema.extend({
   id: z.string().min(1),
   // Server-managed voice-resolution state — never accepted from a client
   // (absent from personInputSchema), only ever set by
@@ -60,7 +80,16 @@ export const personSchema = personInputSchema.extend({
   resolvedVoiceId: z.string().nullable(),
   resolvedVoiceOrigin: z.enum(["design", "library"]).nullable(),
   resolvedVoiceHash: z.string().nullable(),
+  // True when the voice is one the user picked (not one the server designed
+  // on its own): it's kept until they pick another or the prompt it was
+  // designed from changes, instead of being re-designed on a hash mismatch,
+  // and a guest's isn't deleted after audio finalizes. Absent on older docs.
+  resolvedVoicePinned: z.boolean().optional(),
 });
 
-export type PersonInput = z.infer<typeof personInputSchema>;
+export type ResolvedVoiceFields = Pick<
+  Person,
+  "resolvedVoiceId" | "resolvedVoiceOrigin" | "resolvedVoiceHash" | "resolvedVoicePinned"
+>;
+export type PersonInput = z.infer<typeof personSaveSchema>;
 export type Person = z.infer<typeof personSchema>;

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildSpeechParts, looksLikeModerationRejection, soloSpeakerLabel } from "../src/llm/ttsClient";
+import {
+  buildSpeechParts,
+  isDesignedVoiceId,
+  looksLikeModerationRejection,
+  parsePcmMimeType,
+  soloSpeakerLabel,
+} from "../src/llm/ttsClient";
 import type { ScriptTurn } from "../src/utils/scriptText";
 
 describe("soloSpeakerLabel", () => {
@@ -88,3 +94,26 @@ describe("looksLikeModerationRejection", () => {
   });
 });
 
+
+describe("isDesignedVoiceId", () => {
+  it("accepts Voice Design ids and rejects everything else", () => {
+    expect(isDesignedVoiceId("voice_608aa278-a182-473d-bc46-65cb62ac08a3")).toBe(true);
+    expect(isDesignedVoiceId("Puck")).toBe(false);
+    expect(isDesignedVoiceId("voice_../etc")).toBe(false);
+    expect(isDesignedVoiceId("voice_")).toBe(false);
+  });
+});
+
+describe("parsePcmMimeType", () => {
+  it("reads rate and channels from the mime type", () => {
+    expect(parsePcmMimeType("audio/l16; rate=16000; channels=2")).toEqual({
+      numChannels: 2,
+      sampleRate: 16000,
+      bitsPerSample: 16,
+    });
+  });
+
+  it("falls back to 24kHz mono when absent", () => {
+    expect(parsePcmMimeType(undefined)).toEqual({ numChannels: 1, sampleRate: 24000, bitsPerSample: 16 });
+  });
+});

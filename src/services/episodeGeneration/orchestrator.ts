@@ -95,8 +95,8 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // audio.service.ts still falls back to resolving lazily (and
     // persisting) if a cast member's resolvedVoiceId ends up missing.
     const voiceResolutionPromise = Promise.all([
-      ...hosts.map((host) => resolveHostVoice(podcastId, host)),
-      ...guests.map((guest) => resolveGuestVoice(podcastId, episodeId, guest)),
+      ...hosts.map((host) => resolveHostVoice(podcastId, host, podcast.languageCode)),
+      ...guests.map((guest) => resolveGuestVoice(podcastId, episodeId, guest, podcast.languageCode)),
     ]).catch((err) => {
       console.error(
         `Voice resolution failed for episode ${podcastId}/${episodeId} (will resolve lazily at stream time instead):`,

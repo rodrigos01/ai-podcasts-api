@@ -3,6 +3,8 @@ import { FieldValue } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
+import type { ResolvedVoiceFields } from "../schemas/person.schema";
+import { NO_VOICE } from "../utils/voiceDecision";
 import {
   compareBySeriesOrder,
   selectPriorEpisodes,
@@ -17,6 +19,8 @@ function episodesCollection(podcastId: string) {
 export async function createEpisode(
   podcastId: string,
   input: EpisodeCreateInput,
+  // Lines up with `input.guests` by index — see podcast.repository.ts's createPodcast.
+  guestVoices: (ResolvedVoiceFields | null)[] = [],
 ): Promise<Episode> {
   const id = randomUUID();
   const now = Date.now();
@@ -27,13 +31,10 @@ export async function createEpisode(
     length: input.length,
     sourceIds: input.sourceIds,
     participantHostIds: input.participantHostIds,
-    guests: input.guests.map((guest) => ({
-      ...guest,
-      id: randomUUID(),
-      resolvedVoiceId: null,
-      resolvedVoiceOrigin: null,
-      resolvedVoiceHash: null,
-    })),
+    guests: input.guests.map((guest, index) => {
+      const { resolvedVoiceId: _clientValue, ...person } = guest;
+      return { ...person, id: randomUUID(), ...(guestVoices[index] ?? NO_VOICE) };
+    }),
     ...(input.productionNotes ? { productionNotes: input.productionNotes } : {}),
     status: "generating",
     progress: null,
@@ -62,6 +63,8 @@ export async function updateEpisode(
   podcastId: string,
   episodeId: string,
   input: EpisodeUpdateInput,
+  // Lines up with `input.guests` by index — see podcast.repository.ts's updatePodcast.
+  guestVoices: (ResolvedVoiceFields | null)[] = [],
 ): Promise<Episode | null> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   const existing = await ref.get();
@@ -70,12 +73,37 @@ export async function updateEpisode(
   // Parsed optional fields can be present-but-undefined, which Firestore
   // rejects — drop them so they mean "leave unchanged". An explicit null
   // (blank production notes, see clearableText) removes the stored field.
-  const changes = Object.fromEntries(
+  const patch: Record<string, unknown> = Object.fromEntries(
     Object.entries(input)
       .filter(([, value]) => value !== undefined)
       .map(([key, value]) => [key, value === null ? FieldValue.delete() : value]),
   );
-  await ref.update({ ...changes, updatedAt: Date.now() });
+  patch.updatedAt = Date.now();
+  if (input.guests) {
+    const currentGuests = new Map((existing.data() as Episode).guests.map((guest) => [guest.id, guest]));
+    patch.guests = input.guests.map((guest, index) => {
+      const id = guest.id && currentGuests.has(guest.id) ? guest.id : randomUUID();
+      const current = currentGuests.get(id);
+      const { resolvedVoiceId: _clientValue, ...person } = guest;
+      return {
+        ...person,
+        id,
+        ...(guestVoices[index] ??
+          (current
+            ? {
+                resolvedVoiceId: current.resolvedVoiceId,
+                resolvedVoiceOrigin: current.resolvedVoiceOrigin,
+                resolvedVoiceHash: current.resolvedVoiceHash,
+                ...(current.resolvedVoicePinned !== undefined
+                  ? { resolvedVoicePinned: current.resolvedVoicePinned }
+                  : {}),
+              }
+            : NO_VOICE)),
+      };
+    });
+  }
+
+  await ref.update(patch);
   const updated = await ref.get();
   return updated.data() as Episode;
 }
@@ -145,6 +173,23 @@ export async function setGuestResolvedVoice(
     if (!snap.exists) return;
     const episode = snap.data() as Episode;
     const guests = episode.guests.map((guest) => (guest.id === guestId ? { ...guest, ...resolved } : guest));
+    tx.update(ref, { guests, updatedAt: Date.now() });
+  });
+}
+
+/** Stores the Voice Design prompt a guest's voice is about to be designed from — see voiceResolution.service.ts. */
+export async function setGuestVoicePrompt(
+  podcastId: string,
+  episodeId: string,
+  guestId: string,
+  voicePrompt: string,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const episode = snap.data() as Episode;
+    const guests = episode.guests.map((guest) => (guest.id === guestId ? { ...guest, voicePrompt } : guest));
     tx.update(ref, { guests, updatedAt: Date.now() });
   });
 }

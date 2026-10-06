@@ -62,10 +62,10 @@ async function resolveCastVoices(
     [p2, p1],
   ] as const) {
     const resolved = hostIds.has(person.id)
-      ? await resolveHostVoice(podcastId, person)
+      ? await resolveHostVoice(podcastId, person, podcast.languageCode)
       : hasCurrentVoice(person)
         ? { voiceId: person.resolvedVoiceId }
-        : await resolveGuestVoice(podcastId, episodeId, person);
+        : await resolveGuestVoice(podcastId, episodeId, person, podcast.languageCode);
     assignments.push({
       label: speakerLabel(person.name, other.name),
       voiceId: resolved.voiceId,

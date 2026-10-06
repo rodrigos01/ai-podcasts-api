@@ -1,74 +1,32 @@
-import { createHash } from "node:crypto";
 import { deleteVoice, designVoice } from "../../llm/ttsClient";
-import { setHostResolvedVoice } from "../../data/podcast.repository";
-import { setGuestResolvedVoice } from "../../data/episode.repository";
+import { setHostResolvedVoice, setHostVoicePrompt } from "../../data/podcast.repository";
+import { setGuestResolvedVoice, setGuestVoicePrompt } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
-import { buildVoiceDesignInput } from "../../llm/prompts/voiceResolution.prompts";
-import { hasEnglishFields, translateForVoice } from "../personEnglish.service";
+import { hasCurrentVoice, voiceHash } from "../../utils/voiceHash";
+import { withVoicePrompt } from "../personEnglish.service";
+
+export { hasCurrentVoice };
 
 export interface ResolvedVoice {
   voiceId: string;
 }
 
-// Bumped whenever previously-stored `voice_...` ids stop being valid (e.g.
-// the 2026-10 move from the AI Studio Voices API to the Gemini Enterprise
-// Agent Platform's — a voice designed on one doesn't exist on the other).
-// Mixed into voiceHash so every host's cached voice is treated as stale and
-// re-designed once on its next use, instead of reusing an id the current
-// backend has never heard of.
-const VOICE_BACKEND_VERSION = "enterprise-1";
-
 /**
- * Detects a stale cached voice — an edit to name/persona/accent/voice hint
- * (or to their English counterparts) should trigger a fresh Voice Design
- * call, not silently keep reusing a voice designed for the old text. Same
- * pattern as the investigation spike's own `voiceCacheKey`.
- *
- * The English fields are appended only when present, so a person who has
- * none hashes exactly as before they existed — every voice already stored
- * stays valid instead of the whole catalogue being re-designed. (The voice
- * hint is no longer sent to Voice Design but stays in the hash for the same
- * reason; an edit to it costs one redundant, harmless re-design.)
+ * Designs from the person's stored Voice Design prompt. A person without one
+ * (saved before prompts were stored) gets it written first — and persisted via
+ * `persist` before the design call, so a failed attempt doesn't lose it.
  */
-function voiceHash(person: Person): string {
-  const english =
-    person.personaEn || person.accentEn
-      ? `\u0000${person.personaEn ?? ""}\u0000${person.accentEn ?? ""}`
-      : "";
-  return createHash("sha256")
-    .update(
-      `${VOICE_BACKEND_VERSION}\u0000${person.name}\u0000${person.persona}\u0000${person.accent ?? ""}\u0000${person.voice}${english}`,
-    )
-    .digest("hex");
-}
-
-/**
- * True when `person` already has a stored voice that's still valid: an id,
- * recorded under the same hash `voiceHash` computes today (same backend
- * version, same name/persona/accent/hint). Anything else — no id, no hash
- * (a voice stored before hashes were recorded, or on another platform) or a
- * different one — means the stored id can't be trusted and a fresh voice
- * must be designed. Applies to hosts and guests alike.
- */
-export function hasCurrentVoice(person: Person): person is Person & { resolvedVoiceId: string } {
-  return !!person.resolvedVoiceId && person.resolvedVoiceHash === voiceHash(person);
-}
-
-/**
- * The English persona/accent to design from: the ones saved with the person
- * (written when they were created or last edited) when they're there,
- * otherwise translated on demand (people saved before that existed).
- */
-async function englishInputFor(person: Person): Promise<{ personaEn: string; accentEn?: string }> {
-  if (hasEnglishFields(person)) {
-    return { personaEn: person.personaEn, ...(person.accentEn ? { accentEn: person.accentEn } : {}) };
+async function designFor(
+  person: Person,
+  persist: (voicePrompt: string) => Promise<void>,
+  languageCode?: string,
+): Promise<ResolvedVoice> {
+  let voicePrompt = person.voicePrompt;
+  if (!voicePrompt) {
+    voicePrompt = (await withVoicePrompt(person)).voicePrompt;
+    await persist(voicePrompt);
   }
-  return translateForVoice(person);
-}
-
-async function designFor(person: Person): Promise<ResolvedVoice> {
-  const { personaEn, accentEn } = await englishInputFor(person);
-  const voiceId = await designVoice({ voiceDescription: buildVoiceDesignInput(person.name, personaEn, accentEn) });
+  const voiceId = await designVoice({ voiceDescription: voicePrompt, ...(languageCode ? { languageCode } : {}) });
   return { voiceId };
 }
 
@@ -78,18 +36,37 @@ async function designFor(person: Person): Promise<ResolvedVoice> {
  * LLM + Voice Design call, so this only happens once per host (until their
  * persona/accent/voice hint actually changes) rather than per episode.
  */
-export async function resolveHostVoice(podcastId: string, host: Person): Promise<ResolvedVoice> {
+export async function resolveHostVoice(
+  podcastId: string,
+  host: Person,
+  languageCode?: string,
+): Promise<ResolvedVoice> {
   if (hasCurrentVoice(host)) {
     return { voiceId: host.resolvedVoiceId };
   }
 
-  const resolved = await designFor(host);
+  const resolved = await designFor(host, (prompt) => setHostVoicePrompt(podcastId, host.id, prompt), languageCode);
   await setHostResolvedVoice(podcastId, host.id, {
     resolvedVoiceId: resolved.voiceId,
     resolvedVoiceOrigin: "design",
     resolvedVoiceHash: voiceHash(host),
   });
   return resolved;
+}
+
+/**
+ * Designs voices for hosts a save left without one (see voiceDecision.ts's
+ * needsVoiceNow), in the background of that save so the next generation finds
+ * them ready. Best-effort: a failure is logged and the host's voice is simply
+ * designed at the next generation, as before.
+ */
+export async function designHostVoicesNow(podcastId: string, hosts: Person[], languageCode?: string): Promise<void> {
+  const results = await Promise.allSettled(hosts.map((host) => resolveHostVoice(podcastId, host, languageCode)));
+  results.forEach((result, i) => {
+    if (result.status === "rejected") {
+      console.error(`Could not design a voice for host ${hosts[i]?.id} after a save (will retry at generation):`, result.reason);
+    }
+  });
 }
 
 /**
@@ -112,7 +89,13 @@ export async function resolveGuestVoice(
   podcastId: string,
   episodeId: string,
   guest: Person,
+  languageCode?: string,
 ): Promise<ResolvedVoice & { origin: "design" }> {
+  // A voice the user picked is kept for every generation, never re-designed.
+  if (guest.resolvedVoicePinned && guest.resolvedVoiceId) {
+    return { voiceId: guest.resolvedVoiceId, origin: "design" };
+  }
+
   // A voice with no recorded hash predates hash tracking for guests — i.e. it
   // was designed on the previous (AI Studio) platform, where it isn't ours to
   // delete here and the delete would just fail. Only a voice recorded under
@@ -120,7 +103,7 @@ export async function resolveGuestVoice(
   const staleVoiceId =
     guest.resolvedVoiceOrigin === "design" && guest.resolvedVoiceHash ? guest.resolvedVoiceId : null;
 
-  const r = await designFor(guest);
+  const r = await designFor(guest, (prompt) => setGuestVoicePrompt(podcastId, episodeId, guest.id, prompt), languageCode);
   const resolved = { voiceId: r.voiceId, origin: "design" as const };
 
   await setGuestResolvedVoice(podcastId, episodeId, guest.id, {
@@ -140,6 +123,8 @@ export async function resolveGuestVoice(
  * audio.service.ts / audioFinalize.service.ts, the callers.
  */
 export async function cleanupGuestVoice(guest: Person): Promise<void> {
+  // A picked voice lives as long as its episode (deleted with it).
+  if (guest.resolvedVoicePinned) return;
   if (guest.resolvedVoiceOrigin === "design" && guest.resolvedVoiceId) {
     await deleteVoice(guest.resolvedVoiceId);
   }

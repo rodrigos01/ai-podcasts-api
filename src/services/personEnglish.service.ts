@@ -1,14 +1,18 @@
 import { generateText } from "../llm/geminiClient";
 import {
   buildEnglishVoiceInputPrompt,
+  buildVoiceDesignInput,
   ENGLISH_VOICE_INPUT_SYSTEM_INSTRUCTION,
   englishVoiceInputSchema,
 } from "../llm/prompts/voiceResolution.prompts";
 import type { Person, PersonInput } from "../schemas/person.schema";
 import type { PodcastUpdateInput } from "../schemas/podcast.schema";
-import { englishSourceChanged, reconcileEnglishFields } from "../utils/englishFields";
+import { englishSourceChanged, reconcileEnglishFields, reconcileVoicePrompt } from "../utils/englishFields";
 
 type HostUpdateInput = NonNullable<PodcastUpdateInput["hosts"]>[number];
+// The text fields everything here reads and writes — deliberately not the whole
+// person, so stored people (with their server-managed voice fields) fit too.
+type PersonText = Pick<PersonInput, "name" | "voice" | "persona" | "accent" | "personaEn" | "accentEn" | "voicePrompt">;
 type Translatable = Pick<PersonInput, "persona" | "voice" | "accent">;
 
 /**
@@ -44,7 +48,7 @@ export async function translateForVoice(
  * person is saved as-is and voiceResolution.service.ts translates on demand
  * when their voice is designed.
  */
-export async function withEnglishFields<T extends PersonInput>(person: T): Promise<T> {
+export async function withEnglishFields<T extends PersonText>(person: T): Promise<T> {
   if (hasEnglishFields(person)) return person;
   try {
     const english = await translateForVoice(person);
@@ -54,6 +58,45 @@ export async function withEnglishFields<T extends PersonInput>(person: T): Promi
     return { ...rest, ...english } as T;
   } catch (err) {
     console.error("Could not write English persona/accent for a person; saving without them:", err);
+    return person;
+  }
+}
+
+/**
+ * Returns `person` with its Voice Design prompt set, building it when missing
+ * (writing the English persona/accent first if they're missing too). The
+ * prompt is a plain function of name + English persona + English accent, so
+ * everything that needs one — the wizard responses, saving a person, and
+ * voice design itself — goes through here and agrees on the same string. If
+ * the English fields can't be written, falls back to the original persona and
+ * accent rather than leaving the person without one.
+ */
+export async function withVoicePrompt<T extends PersonText>(person: T): Promise<T & { voicePrompt: string }> {
+  if (person.voicePrompt) return person as T & { voicePrompt: string };
+  const english = await withEnglishFields(person);
+  return {
+    ...english,
+    voicePrompt: buildVoiceDesignInput(
+      english.name,
+      english.personaEn ?? english.persona,
+      english.accentEn ?? english.accent,
+    ),
+  };
+}
+
+/**
+ * `withVoicePrompt` for the wizard responses, where the prompt is a bonus
+ * field: if anything goes wrong the person comes back without one, and the
+ * wizard call itself never fails over it (so existing clients, which don't
+ * use the field, are unaffected).
+ */
+export async function withVoicePromptIfPossible<T extends PersonText>(
+  person: T,
+): Promise<T | (T & { voicePrompt: string })> {
+  try {
+    return await withVoicePrompt(person);
+  } catch (err) {
+    console.error("Could not build a voice prompt for a wizard suggestion; omitting it:", err);
     return person;
   }
 }
@@ -74,9 +117,18 @@ export async function prepareHostsForUpdate(
   return Promise.all(
     incoming.map(async (host) => {
       const current = host.id ? byId.get(host.id) : undefined;
-      const { personaEn: _personaEn, accentEn: _accentEn, ...rest } = host;
-      const prepared: HostUpdateInput = { ...rest, ...reconcileEnglishFields(current ?? host, host) };
-      return !current || englishSourceChanged(current, host) ? withEnglishFields(prepared) : prepared;
+      const { personaEn: _personaEn, accentEn: _accentEn, voicePrompt: incomingPrompt, ...rest } = host;
+      const voicePrompt = current ? reconcileVoicePrompt(current, host) : incomingPrompt;
+      const prepared: HostUpdateInput = {
+        ...rest,
+        ...reconcileEnglishFields(current ?? host, host),
+        ...(voicePrompt ? { voicePrompt } : {}),
+      };
+      // An untouched legacy host (no English fields) is left as stored; anyone
+      // new, edited, or already carrying English fields gets a prompt.
+      const needsWork =
+        !current || englishSourceChanged(current, host) || (!prepared.voicePrompt && hasEnglishFields(prepared));
+      return needsWork ? withVoicePrompt(prepared) : prepared;
     }),
   );
 }
