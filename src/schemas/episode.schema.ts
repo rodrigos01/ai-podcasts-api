@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { episodeLengthSchema } from "./common.schema";
+import { clearableText, episodeLengthSchema, optionalText } from "./common.schema";
 import { personSaveSchema, personSchema } from "./person.schema";
 
 // Per specs.md: an episode has exactly 2 active voices — 2 hosts, or 1 host
@@ -26,7 +26,7 @@ export const episodeCreateSchema = z
     sourceIds: z.array(z.string().min(1)),
     participantHostIds: z.array(z.string().min(1)).max(2),
     guests: z.array(personSaveSchema).max(1),
-    productionNotes: z.string().min(1).optional(),
+    productionNotes: optionalText,
   })
   .check(twoVoiceCast);
 
@@ -48,7 +48,7 @@ export const episodeCreateRequestSchema = z.object({
 export const episodeUpdateSchema = z.object({
   title: z.string().min(1).optional(),
   topics: z.string().min(1).optional(),
-  productionNotes: z.string().min(1).optional(),
+  productionNotes: clearableText,
   // Edit the episode's guest(s). The cast size can't change (the 2-voice
   // rule), so this must have as many entries as the episode has guests; an
   // entry with no id is a new person replacing one. The session for voice
