@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { episodeLengthSchema } from "./common.schema";
+import { episodeLengthSchema, optionalText } from "./common.schema";
 import { personInputSchema } from "./person.schema";
 
 export const podcastOptionSchema = z.object({
@@ -40,7 +40,7 @@ export const episodeDraftSchema = z.object({
   topics: z.string().min(1),
   // Only set when there is something specific for the hosts to focus on that
   // the topics and sources don't already imply (e.g. the user supplied notes).
-  productionNotes: z.string().min(1).optional(),
+  productionNotes: optionalText,
   guests: z.array(personInputSchema).max(1),
   predictedChanges: z.array(z.string().min(1)).length(3),
 });

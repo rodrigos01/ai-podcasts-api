@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { episodeLengthSchema } from "./common.schema";
+import { clearableText, episodeLengthSchema, optionalText } from "./common.schema";
 import { personInputSchema, personSchema } from "./person.schema";
 
 // Per specs.md: an episode has exactly 2 active voices — 2 hosts, or 1 host
@@ -26,7 +26,7 @@ export const episodeCreateSchema = z
     sourceIds: z.array(z.string().min(1)),
     participantHostIds: z.array(z.string().min(1)).max(2),
     guests: z.array(personInputSchema).max(1),
-    productionNotes: z.string().min(1).optional(),
+    productionNotes: optionalText,
   })
   .check(twoVoiceCast);
 
@@ -44,7 +44,7 @@ export const episodeCreateRequestSchema = z.object({
 export const episodeUpdateSchema = z.object({
   title: z.string().min(1).optional(),
   topics: z.string().min(1).optional(),
-  productionNotes: z.string().min(1).optional(),
+  productionNotes: clearableText,
 });
 
 export const episodeProgressSchema = z.object({

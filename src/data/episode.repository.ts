@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { FieldValue } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
@@ -66,7 +67,15 @@ export async function updateEpisode(
   const existing = await ref.get();
   if (!existing.exists) return null;
 
-  await ref.update({ ...input, updatedAt: Date.now() });
+  // Parsed optional fields can be present-but-undefined, which Firestore
+  // rejects — drop them so they mean "leave unchanged". An explicit null
+  // (blank production notes, see clearableText) removes the stored field.
+  const changes = Object.fromEntries(
+    Object.entries(input)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, value === null ? FieldValue.delete() : value]),
+  );
+  await ref.update({ ...changes, updatedAt: Date.now() });
   const updated = await ref.get();
   return updated.data() as Episode;
 }
