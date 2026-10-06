@@ -66,7 +66,10 @@ export async function updateEpisode(
   const existing = await ref.get();
   if (!existing.exists) return null;
 
-  await ref.update({ ...input, updatedAt: Date.now() });
+  // Parsed optional fields can be present-but-undefined (see optionalText),
+  // which Firestore rejects — drop them so they mean "leave unchanged".
+  const changes = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+  await ref.update({ ...changes, updatedAt: Date.now() });
   const updated = await ref.get();
   return updated.data() as Episode;
 }

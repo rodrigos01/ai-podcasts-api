@@ -10,4 +10,13 @@ import { z } from "zod";
 // input to that resolution, not a validated identifier.
 export const voiceHintSchema = z.string().min(1).max(300);
 
+// Optional free text that clients echo back as "" when the user left it blank.
+// An empty (or whitespace-only) string is treated exactly as if the field
+// weren't sent. NOTE: the parsed object still carries the key, with an
+// `undefined` value — never pass it to Firestore as-is (it rejects undefined).
+export const optionalText = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 export const episodeLengthSchema = z.enum(["short", "medium", "long"]);

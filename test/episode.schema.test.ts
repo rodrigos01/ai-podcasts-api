@@ -3,6 +3,7 @@ import {
   episodeCreateRequestSchema,
   episodeCreateSchema,
   episodeSchema,
+  episodeUpdateSchema,
   ttsChunkSchema,
 } from "../src/schemas/episode.schema";
 
@@ -166,5 +167,28 @@ describe("ttsChunkSchema and episodeSchema", () => {
     };
     const result = episodeSchema.safeParse(episode);
     expect(result.success).toBe(true);
+  });
+});
+
+describe("empty production notes are treated as not sent", () => {
+  it("accepts an empty string on create, with no notes in the result", () => {
+    const result = episodeCreateSchema.safeParse({
+      ...base,
+      productionNotes: "  ",
+      participantHostIds: ["h1", "h2"],
+      guests: [],
+    });
+    expect(result.success).toBe(true);
+    expect(result.data?.productionNotes).toBeUndefined();
+  });
+
+  it("accepts an empty string on update, as a no-op", () => {
+    const result = episodeUpdateSchema.safeParse({ title: "New", productionNotes: "" });
+    expect(result.success).toBe(true);
+    expect(result.data?.productionNotes).toBeUndefined();
+  });
+
+  it("still passes real notes through", () => {
+    expect(episodeUpdateSchema.parse({ productionNotes: "Focus on X" }).productionNotes).toBe("Focus on X");
   });
 });
