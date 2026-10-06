@@ -5,6 +5,7 @@ import { isDesignedVoiceId } from "../llm/ttsClient";
 import { designCandidates } from "../services/voiceDesign.service";
 import { getVoicePreviewWav } from "../services/voicePreview.service";
 import { HttpError } from "../utils/HttpError";
+import { publicOrigin, voicePreviewUrl } from "../utils/voicePreview";
 import { requireParam } from "../utils/params";
 
 // Public on purpose (like the rest of /voices): a plain <audio src> or
@@ -40,11 +41,9 @@ export async function design(req: Request, res: Response) {
     prompt: input.prompt,
   });
 
-  // Absolute, so a client can hand it straight to an <audio> tag or ExoPlayer.
-  // Behind Cloud Run's proxy this relies on `trust proxy` (see app.ts).
-  const origin = `${req.protocol}://${req.get("host")}`;
+  const origin = publicOrigin(req);
   res.json({
     sessionId: input.sessionId,
-    voices: voiceIds.map((voiceId) => ({ voiceId, previewUrl: `${origin}/voices/${voiceId}/preview` })),
+    voices: voiceIds.map((voiceId) => ({ voiceId, previewUrl: voicePreviewUrl(origin, voiceId) })),
   });
 }

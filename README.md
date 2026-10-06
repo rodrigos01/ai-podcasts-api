@@ -189,6 +189,7 @@ Hosts and guests are voiced by designed voices. Clients can let the user try out
 - Unknown or stale ids are ignored, not rejected: a `resolvedVoiceId` that isn't one of your unused candidates in that session (including one left over from an earlier save, or from a session that was already saved) is handled as if you hadn't sent it — the server designs a voice from the stored prompt, as it always did.
 - A picked voice is kept as the person's voice until you pick another one or its prompt changes. A guest's picked voice also survives `/regenerate`, unlike an unpicked guest's, which is designed per generation. Deleting an episode or podcast deletes its voices.
 - Changing a person's voice doesn't touch audio that's already been generated for an episode: an episode that was partly streamed keeps the old voice for that part, and `/regenerate` is how to get a consistent episode.
+- **Previewing a person's current voice:** hosts and guests in responses carry a computed, absolute **`voicePreviewUrl`** (ready for an `<audio>` tag or ExoPlayer) when they have a voice that can be played. It's present for a host with a usable voice, and for a guest whose voice was picked via design; it's absent otherwise. A guest the server designed a voice for by itself has a temporary voice that's deleted once the episode's audio has been generated, so it has no preview URL. The field is response-only: you don't need to (and can't) send it back.
 - Every field here is optional for existing clients: ignore `sessionId`, `voicePrompt` and `resolvedVoiceId` and everything works as before, with the server designing voices itself.
 
 ### Sources
@@ -328,7 +329,7 @@ This is a single audio resource for the whole episode (not per-chunk), designed 
 
 ## Data model
 
-- **Podcast**: `title`, `description`, `structure` (markdown), `hosts[]` (each a *person*: `id`, `name`, `voice`, `persona`, `accent?`, `personaEn?`, `accentEn?`, `voicePrompt?`, `resolvedVoiceId`, plus server-managed voice fields).
+- **Podcast**: `title`, `description`, `structure` (markdown), `hosts[]` (each a *person*: `id`, `name`, `voice`, `persona`, `accent?`, `personaEn?`, `accentEn?`, `voicePrompt?`, `resolvedVoiceId`, plus server-managed voice fields; responses also add the computed `voicePreviewUrl?`).
 - **Source**: `title`, `contents` (extracted plain text), `sourceType`.
 - **Episode**: `title`, `topics`, `length`, `sourceIds[]`, `participantHostIds[]`, `guests[]` (people, same shape as hosts), `productionNotes`, `status`, `progress`, `transcript`, `generatedAudioSeconds` (total audio duration generated so far), `error`.
 

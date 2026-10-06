@@ -14,6 +14,7 @@ import { requireOwnedPodcast } from "../services/podcastAccess";
 import * as podcastWizardService from "../services/podcastWizard.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
+import { presentPodcast, publicOrigin } from "../utils/voicePreview";
 import { decideVoice, needsVoiceNow } from "../utils/voiceDecision";
 import { designHostVoicesNow } from "../services/episodeGeneration/voiceResolution.service";
 import { createVoicePicker, deletePeopleVoices } from "../services/voiceSelection.service";
@@ -44,17 +45,18 @@ export async function create(req: Request, res: Response) {
   }));
 
   const podcast = await createPodcast({ ...input, hosts }, ownerId, decisions.map((d) => d.fields));
-  res.status(201).json(podcast);
+  res.status(201).json(presentPodcast(publicOrigin(req), podcast));
   void picker.finish(decisions);
 }
 
 export async function list(req: Request, res: Response) {
-  res.json(await listPodcasts(requireUserId(req)));
+  const origin = publicOrigin(req);
+  res.json((await listPodcasts(requireUserId(req))).map((podcast) => presentPodcast(origin, podcast)));
 }
 
 export async function get(req: Request, res: Response) {
   const podcast = await requireOwnedPodcast(requireParam(req.params, "podcastId"), requireUserId(req));
-  res.json(podcast);
+  res.json(presentPodcast(publicOrigin(req), podcast));
 }
 
 export async function update(req: Request, res: Response) {
@@ -66,7 +68,7 @@ export async function update(req: Request, res: Response) {
   if (!input.hosts) {
     const podcast = await updatePodcast(podcastId, input);
     if (!podcast) throw HttpError.notFound("Podcast not found");
-    res.json(podcast);
+    res.json(presentPodcast(publicOrigin(req), podcast));
     return;
   }
 
@@ -87,7 +89,7 @@ export async function update(req: Request, res: Response) {
 
   const podcast = await updatePodcast(podcastId, { ...input, hosts }, decisions.map((d) => d.fields));
   if (!podcast) throw HttpError.notFound("Podcast not found");
-  res.json(podcast);
+  res.json(presentPodcast(publicOrigin(req), podcast));
   void picker.finish(decisions);
 
   // Hosts this save left without a voice get one designed now, not at the

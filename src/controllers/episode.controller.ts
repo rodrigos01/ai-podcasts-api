@@ -26,6 +26,7 @@ import { prepareHostsForUpdate, withVoicePrompt, withVoicePromptIfPossible } fro
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
+import { presentEpisode, publicOrigin } from "../utils/voicePreview";
 import { decideVoice } from "../utils/voiceDecision";
 import { createVoicePicker, deletePeopleVoices } from "../services/voiceSelection.service";
 
@@ -120,14 +121,15 @@ export async function create(req: Request, res: Response) {
     console.error(`Episode generation sequence failed for ${podcastId}:`, err);
   });
 
-  res.status(202).json({ episodes });
+  res.status(202).json({ episodes: episodes.map((episode) => presentEpisode(publicOrigin(req), episode)) });
   void picker.finish(decisions);
 }
 
 export async function list(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   await requireOwnedPodcast(podcastId, requireUserId(req));
-  res.json(await listEpisodes(podcastId));
+  const origin = publicOrigin(req);
+  res.json((await listEpisodes(podcastId)).map((episode) => presentEpisode(origin, episode)));
 }
 
 export async function get(req: Request, res: Response) {
@@ -135,7 +137,7 @@ export async function get(req: Request, res: Response) {
   await requireOwnedPodcast(podcastId, requireUserId(req));
   const episode = await getEpisode(podcastId, requireParam(req.params, "episodeId"));
   if (!episode) throw HttpError.notFound("Episode not found");
-  res.json(episode);
+  res.json(presentEpisode(publicOrigin(req), episode));
 }
 
 export async function status(req: Request, res: Response) {
@@ -163,7 +165,7 @@ export async function update(req: Request, res: Response) {
   if (!input.guests) {
     const episode = await updateEpisode(podcastId, episodeId, input);
     if (!episode) throw HttpError.notFound("Episode not found");
-    res.json(episode);
+    res.json(presentEpisode(publicOrigin(req), episode));
     return;
   }
 
@@ -190,7 +192,7 @@ export async function update(req: Request, res: Response) {
 
   const episode = await updateEpisode(podcastId, episodeId, { ...input, guests }, decisions.map((d) => d.fields));
   if (!episode) throw HttpError.notFound("Episode not found");
-  res.json(episode);
+  res.json(presentEpisode(publicOrigin(req), episode));
   void picker.finish(decisions);
 }
 
