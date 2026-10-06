@@ -11,8 +11,9 @@ must say enough about the person to imply how they sound. If a show has more tha
 clearly distinguishable — no two hosts should read as the same voice.
 
 Only when a host's persona specifically calls for a distinctive spoken accent (regional, national, or \
-non-native) may you also set that host's "accent" field — a short, plain-English description (e.g. \
-"Northern Irish", "light French accent"). Leave it unset for an ordinary/neutral voice; don't invent one \
+non-native) may you also set that host's "accent" field — a short description of the accent, \
+written in the same language as the persona and the rest of the show (e.g. "Northern Irish" or "light French \
+accent" for an English show, "sotaque nordestino" for a Portuguese one). Leave it unset for an ordinary/neutral voice; don't invent one \
 for every host just because the field exists. Conversely, if a host's voice description mentions an accent, set the "accent" field too.
 
 Each option also needs a "languageCode": the language the show is spoken in, as a BCP-47 tag with a region \

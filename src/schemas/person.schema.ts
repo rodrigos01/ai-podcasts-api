@@ -13,8 +13,8 @@ export const personInputSchema = z.object({
   // persona and accent (see voicePrompt below).
   voice: voiceHintSchema,
   persona: z.string().min(1),
-  // A short, plain-English description of a distinctive spoken accent (e.g.
-  // "Northern Irish", "light French accent") — optional, and only meant to be
+  // A short description of a distinctive spoken accent, in the same language
+  // as the persona (e.g. "Northern Irish", "sotaque nordestino") — optional, and only meant to be
   // set when the persona specifically calls for one; an ordinary/neutral voice
   // should leave this unset rather than have one invented for it. It's the
   // accent line of the Voice Design prompt, stated explicitly because that is
