@@ -198,6 +198,21 @@ export function chunkTranscript(
 }
 
 /**
+ * Every chunk except the last from a `chunkTranscript` pass over a
+ * transcript that may still be growing (script generation still in
+ * progress) — used to progressively seal TTS chunks as the script streams
+ * in, before the whole thing is done. `chunkTranscript`'s own left-to-right
+ * greedy pass never revisits a chunk once it's flushed, so every chunk but
+ * the last is final regardless of what text comes after it in the
+ * transcript; only the last chunk might still grow (more turns could still
+ * land inside its word/turn budget) or even get merged differently once
+ * more transcript exists, so it's always withheld here.
+ */
+export function sealedChunksSoFar(transcript: string): TtsChunk[] {
+  return chunkTranscript(transcript).slice(0, -1);
+}
+
+/**
  * Returns the parsed script turns for a specific chunk from the transcript.
  * Most chunks start at a turn boundary and parse normally. A chunk that's a
  * continuation piece of an oversized turn (see splitOversizedSpan) starts

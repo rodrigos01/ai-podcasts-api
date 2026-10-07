@@ -192,3 +192,63 @@ export async function generatePlainText(options: GeneratePlainTextOptions): Prom
 
   return readOutputText(interaction);
 }
+
+function streamErrorMessage(err: unknown): string {
+  if (!err) return "unknown error";
+  if (typeof err === "object" && "message" in err) return String((err as { message: unknown }).message);
+  return JSON.stringify(err);
+}
+
+/**
+ * Streaming counterpart to `generatePlainText`, for callers that want to
+ * act on partial output as it's written rather than waiting for the whole
+ * interaction to finish — see episodeGeneration/scriptGeneration.service.ts's
+ * `consumeScriptStream`, the only caller. `client.interactions.create({...,
+ * stream: true})` returns `Promise<Stream<InteractionSSEEvent>>`, confirmed
+ * live (not just from the SDK's `.d.ts`) to be a genuine `AsyncIterable`.
+ * Only the `step.delta` events carrying `delta.type === "text"` are the
+ * model's actual output text — a `gemini-3.8-flash` call also streams a
+ * leading "thought" step's own `step.delta` events first (confirmed live:
+ * these carry a `signature` field, not `type: "text"`), which must be
+ * skipped rather than treated as output. The final `interaction.completed`
+ * event's `interaction.status` gets the same "must be exactly 'completed'"
+ * check `readOutputText` does for the non-streaming path — e.g. an
+ * `"incomplete"` status (output cut off at the token limit) is an error,
+ * not a silently-truncated result.
+ *
+ * Only the initial `interactions.create(...)` call (obtaining the stream)
+ * is retried via `withRetry` — once iteration starts, a failure propagates
+ * straight to the caller rather than retrying here, since only the caller
+ * knows whether it's safe to retry (has anything already been exposed to a
+ * listener?). See scriptGeneration.service.ts for how that's handled.
+ */
+export async function* generatePlainTextStream(options: GeneratePlainTextOptions): AsyncGenerator<string> {
+  const client = await getClient();
+
+  const stream = await withRetry(() =>
+    client.interactions.create({
+      model: TEXT_MODEL,
+      input: options.prompt,
+      system_instruction: options.systemInstruction,
+      store: false,
+      stream: true,
+    }),
+  );
+
+  let finalStatus: string | undefined;
+  for await (const event of stream) {
+    if (event.event_type === "error") {
+      throw new Error(`Gemini interaction stream error: ${streamErrorMessage(event.error)}`);
+    }
+    if (event.event_type === "step.delta" && event.delta.type === "text") {
+      yield event.delta.text;
+    }
+    if (event.event_type === "interaction.completed") {
+      finalStatus = event.interaction.status;
+    }
+  }
+
+  if (finalStatus !== "completed") {
+    throw new Error(`Gemini interaction stream ended with status "${finalStatus}" instead of "completed"`);
+  }
+}

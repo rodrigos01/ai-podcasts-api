@@ -8,7 +8,7 @@ import type { Person } from "../../schemas/person.schema";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
-import { chunkTranscript } from "./chunker";
+import { chunkTranscript, sealedChunksSoFar } from "./chunker";
 
 export async function runEpisodeGeneration(podcastId: string, episodeId: string): Promise<void> {
   try {
@@ -78,15 +78,27 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     // A single LLM call writes the whole episode's script itself — see
     // AGENTS.md's migration note for why this replaced the old per-turn,
-    // two-independent-agent conversation loop. Unlike that loop, this
-    // doesn't persist progress incrementally: nothing is written until the
-    // whole script comes back, so a crash mid-call loses the whole
-    // not-yet-persisted episode (recoverable via /regenerate), not just an
-    // in-flight turn.
+    // two-independent-agent conversation loop. Streamed (generateEpisodeScript's
+    // onProgress) so the transcript is persisted, and TTS chunks sealed,
+    // progressively as turns are confirmed — `sealedChunksSoFar` always
+    // withholds the last (possibly still-growing) chunk, and sealing only
+    // starts once both cast members have spoken at least once (`canSeal`).
+    // Once any chunk has been sealed this way, `status` flips to
+    // "streamable" so a listener can start `/stream`-ing before the whole
+    // script finishes.
     const scriptPromise = generateEpisodeScript(
       cast,
       { podcast, episode, sources, previousEpisodes },
       wordTarget,
+      async ({ transcript, wordCount, canSeal }) => {
+        const sealed = canSeal ? sealedChunksSoFar(transcript) : [];
+        await patchEpisodeState(podcastId, episodeId, {
+          transcript,
+          ...(sealed.length > 0 ? { ttsChunks: sealed, status: "streamable" as const } : {}),
+          progress: { stage: "conversation", currentWordCount: wordCount, targetWordRange: wordTarget },
+        });
+        return sealed.length > 0;
+      },
     );
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
@@ -108,6 +120,9 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     const [script] = await Promise.all([scriptPromise, voiceResolutionPromise]);
 
+    // The true final chunk boundaries — supersedes whatever was sealed
+    // progressively above, since sealedChunksSoFar always withheld the
+    // true last chunk while generation was still in progress.
     const ttsChunks = chunkTranscript(script.transcript);
 
     await patchEpisodeState(podcastId, episodeId, {
@@ -115,7 +130,9 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       ttsChunks,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
-      error: null,
+      error: script.incomplete
+        ? "Episode is shorter than targeted — generation couldn't finish after an in-progress recovery"
+        : null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

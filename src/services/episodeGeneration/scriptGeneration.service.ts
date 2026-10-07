@@ -1,5 +1,6 @@
-import { generatePlainText } from "../../llm/geminiClient";
+import { generatePlainTextStream } from "../../llm/geminiClient";
 import {
+  buildScriptContinuationPrompt,
   buildScriptGenerationPrompt,
   buildScriptSystemInstruction,
   type ScriptGenerationContext,
@@ -15,6 +16,15 @@ const MAX_GENERATION_ATTEMPTS = 3;
 export interface EpisodeScript {
   transcript: string;
   wordCount: number;
+  /**
+   * Set when every generation attempt was exhausted but at least one TTS
+   * chunk had already been sealed and exposed to a listener — see
+   * `generateEpisodeScript`'s continuation-based recovery design. The
+   * returned transcript is a real, complete, playable episode; it's just
+   * shorter than the targeted word range because generation couldn't
+   * finish.
+   */
+  incomplete?: boolean;
 }
 
 /**
@@ -118,66 +128,206 @@ export function validateSpeakerTurns(turns: ScriptTurn[], labelA: string, labelB
   }
 }
 
-async function generateOnce(
-  cast: Cast,
-  ctx: ScriptGenerationContext,
-  wordTarget: WordTarget,
-): Promise<EpisodeScript> {
-  const [a, b] = cast.speakers;
-  const labelA = speakerLabel(a.name, b.name);
-  const labelB = speakerLabel(b.name, a.name);
+function turnToTranscriptTurn(turn: ScriptTurn) {
+  return { speakerName: turn.speaker, text: turn.text, style: turn.style };
+}
 
-  const scriptParams = {
-    systemInstruction: buildScriptSystemInstruction(cast, ctx),
-    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
+export interface ScriptStreamProgress {
+  transcript: string;
+  wordCount: number;
+  /** Both expected speaker labels have appeared among the turns confirmed so far. */
+  canSeal: boolean;
+}
+
+export interface ConsumeScriptStreamResult {
+  turns: ScriptTurn[];
+  seenA: boolean;
+  seenB: boolean;
+  /** `null` only on a fully clean completion (stream ended, both speakers seen). */
+  error: unknown;
+}
+
+/**
+ * Consumes a script-writing stream incrementally, validating and sanitizing
+ * each newly-confirmed turn as it arrives rather than waiting for the whole
+ * thing to finish — this is what lets `generateEpisodeScript` persist and
+ * seal TTS chunks progressively instead of only once the full script comes
+ * back. Takes a plain `AsyncGenerator<string>` of text deltas (not the
+ * Gemini client directly), so it's trivially testable with a hand-written
+ * fake generator.
+ *
+ * Seeded with `priorTurns`/`seenA`/`seenB` so a continuation attempt (see
+ * `generateEpisodeScript`) can resume exactly where a previous attempt's
+ * stream left off, carrying its validated progress forward rather than
+ * starting from an empty turn list.
+ *
+ * Never throws — any problem (an unexpected speaker label, a stream-level
+ * error, ending without both speakers ever appearing) is returned as
+ * `error` alongside whatever turns *did* validate before the problem, so
+ * the caller always has something to continue from instead of having to
+ * discard progress on every failure.
+ */
+export async function consumeScriptStream(
+  stream: AsyncGenerator<string>,
+  priorTurns: ScriptTurn[],
+  labelA: string,
+  labelB: string,
+  seenA: boolean,
+  seenB: boolean,
+  onProgress?: (progress: ScriptStreamProgress) => Promise<boolean>,
+): Promise<ConsumeScriptStreamResult> {
+  const turns = [...priorTurns];
+  let exposed = false;
+
+  async function emitProgress(): Promise<void> {
+    if (!onProgress) return;
+    const transcript = buildTranscript(turns.map(turnToTranscriptTurn));
+    const sealed = await onProgress({ transcript, wordCount: countWords(transcript), canSeal: seenA && seenB });
+    if (sealed) exposed = true;
   }
-  const raw = await generatePlainText(scriptParams);
 
-  const turns = parseScriptTurns(raw);
+  // Folds a newly-confirmed batch of raw turns into `turns`, validating
+  // and sanitizing them the same way the old one-shot generateOnce did for
+  // the whole script at once — see reattachOrphanedStyle/resolveEmptyTurnText's
+  // own doc comments. Only the *sanitized* (post-filter) turns count toward
+  // "did labelA/labelB ever appear", matching validateSpeakerTurns's
+  // original semantics exactly. Returns an error and stops as soon as one
+  // sanitized turn uses neither expected label; everything confirmed
+  // *before* it is kept. Operating on one batch at a time (rather than the
+  // whole buffer) means reattachOrphanedStyle's one-turn lookahead can't
+  // see across a batch boundary — an orphaned "Style:"-only turn that
+  // lands right at the end of a batch, whose merge partner only arrives in
+  // the next one, gets finalized standalone via resolveEmptyTurnText's
+  // inline-tag fallback instead of merged. Cosmetic, not a correctness
+  // issue: the resulting turn is still valid and correctly labeled.
+  function foldBatch(rawBatch: ScriptTurn[]): Error | null {
+    const sanitized = reattachOrphanedStyle(rawBatch)
+      .map(resolveEmptyTurnText)
+      .filter((turn) => turn.text.length > 0);
+    for (const turn of sanitized) {
+      if (turn.speaker !== labelA && turn.speaker !== labelB) {
+        return new Error(
+          `Script used an unexpected speaker label "${turn.speaker}" (expected only "${labelA}" or "${labelB}")`,
+        );
+      }
+      if (turn.speaker === labelA) seenA = true;
+      if (turn.speaker === labelB) seenB = true;
+      turns.push(turn);
+    }
+    return null;
+  }
+
+  let buffer = "";
+  let confirmedRawCount = 0;
+
+  try {
+    for await (const delta of stream) {
+      buffer += delta;
+      // The last parsed turn may still be growing — only fold turns before it.
+      const confirmedRaw = parseScriptTurns(buffer).slice(0, -1);
+      if (confirmedRaw.length > confirmedRawCount) {
+        const newRaw = confirmedRaw.slice(confirmedRawCount);
+        confirmedRawCount = confirmedRaw.length;
+        const err = foldBatch(newRaw);
+        if (err) return { turns, seenA, seenB, error: err };
+        await emitProgress();
+      }
+    }
+  } catch (err) {
+    return { turns, seenA, seenB, error: err };
+  }
+
+  // Stream ended cleanly — fold whatever's left, including the final turn
+  // (no longer "possibly still growing" now that the stream is done).
+  const remainingRaw = parseScriptTurns(buffer).slice(confirmedRawCount);
+  const err = foldBatch(remainingRaw);
+  if (err) return { turns, seenA, seenB, error: err };
+
   if (turns.length === 0) {
-    throw new Error("Gemini returned a script with no recognizable turns");
+    return { turns, seenA, seenB, error: new Error("Gemini returned a script with no turns containing spoken text") };
+  }
+  if (!seenA) {
+    return { turns, seenA, seenB, error: new Error(`Generated script never gives ${labelA} a line`) };
+  }
+  if (!seenB) {
+    return { turns, seenA, seenB, error: new Error(`Generated script never gives ${labelB} a line`) };
   }
 
-  const sanitizedTurns = reattachOrphanedStyle(turns)
-    .map(resolveEmptyTurnText)
-    .filter((turn) => turn.text.length > 0);
-  if (sanitizedTurns.length === 0) {
-    throw new Error("Gemini returned a script with no turns containing spoken text");
-  }
-  validateSpeakerTurns(sanitizedTurns, labelA, labelB);
-
-  const transcript = buildTranscript(
-    sanitizedTurns.map((turn) => ({
-      speakerName: turn.speaker,
-      text: turn.text,
-      style: turn.style,
-    })),
-  );
-
-  return { transcript, wordCount: countWords(transcript) };
+  await emitProgress();
+  return { turns, seenA, seenB, error: null };
 }
 
 /**
  * Replaces the old per-turn `runConversation` loop (conversationLoop.ts) with
  * a single call that writes the whole episode's script itself — see
- * AGENTS.md's migration note for why. Retries the whole generation on a
- * validation failure (an unexpected speaker label, or a script that drops
- * one of the two speakers entirely) rather than failing the episode
- * outright: a fresh generation is cheap relative to what it protects
- * against (wrong TTS voice attribution).
+ * AGENTS.md's migration note for why. Streams the call (`generatePlainTextStream`)
+ * so `onProgress` can be called as turns are confirmed, letting the caller
+ * (orchestrator.ts) persist the transcript and seal TTS chunks progressively
+ * instead of waiting for the whole script.
+ *
+ * On any failure (an unexpected speaker label, a stream-level error, or a
+ * script that drops one of the two speakers entirely), does NOT restart
+ * from scratch — a fresh attempt is seeded with whatever turns the failed
+ * attempt already validated (`buildScriptContinuationPrompt`) and asked to
+ * continue naturally from there. Restarting would regenerate different
+ * content for any TTS chunk a listener might already be partway through;
+ * continuing never discards exposed progress. `exposed` tracks whether
+ * `onProgress` ever reported sealing a chunk across the whole attempt
+ * sequence — once every attempt (fresh + continuations) is exhausted: if
+ * nothing was ever exposed, this throws exactly as the old non-streaming
+ * version did; if something *was* exposed, it instead returns the
+ * best-known-good transcript as a shorter-than-targeted but complete,
+ * playable episode (`incomplete: true`) rather than cutting a listener off.
  */
 export async function generateEpisodeScript(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
+  onProgress?: (progress: ScriptStreamProgress) => Promise<boolean>,
 ): Promise<EpisodeScript> {
+  const [a, b] = cast.speakers;
+  const labelA = speakerLabel(a.name, b.name);
+  const labelB = speakerLabel(b.name, a.name);
+
+  let turns: ScriptTurn[] = [];
+  let seenA = false;
+  let seenB = false;
+  let exposed = false;
   let lastError: unknown;
+
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
-    try {
-      return await generateOnce(cast, ctx, wordTarget);
-    } catch (err) {
-      lastError = err;
+    const transcriptSoFar = buildTranscript(turns.map(turnToTranscriptTurn));
+    const prompt =
+      turns.length === 0
+        ? buildScriptGenerationPrompt(cast, ctx, wordTarget)
+        : buildScriptContinuationPrompt(cast, ctx, wordTarget, transcriptSoFar, countWords(transcriptSoFar));
+
+    const stream = generatePlainTextStream({
+      systemInstruction: buildScriptSystemInstruction(cast, ctx),
+      prompt,
+    });
+
+    const result = await consumeScriptStream(stream, turns, labelA, labelB, seenA, seenB, async (progress) => {
+      if (!onProgress) return false;
+      const sealed = await onProgress(progress);
+      if (sealed) exposed = true;
+      return sealed;
+    });
+
+    turns = result.turns;
+    seenA = result.seenA;
+    seenB = result.seenB;
+
+    if (result.error === null) {
+      const transcript = buildTranscript(turns.map(turnToTranscriptTurn));
+      return { transcript, wordCount: countWords(transcript) };
     }
+    lastError = result.error;
+  }
+
+  if (exposed && turns.length > 0) {
+    const transcript = buildTranscript(turns.map(turnToTranscriptTurn));
+    return { transcript, wordCount: countWords(transcript), incomplete: true };
   }
   throw lastError;
 }

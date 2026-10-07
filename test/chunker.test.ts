@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { chunkTranscript, getChunkTurns, splitIntoTurnSpans } from "../src/services/episodeGeneration/chunker";
+import {
+  chunkTranscript,
+  getChunkTurns,
+  sealedChunksSoFar,
+  splitIntoTurnSpans,
+} from "../src/services/episodeGeneration/chunker";
 import { parseScriptTurns } from "../src/utils/scriptText";
 
 function createTurn(speaker: string, line: string): string {
@@ -236,5 +241,31 @@ describe("chunker", () => {
       { speaker: "Alice", text: "Opening line |yeah| right here.", style: "energetic" },
       { speaker: "Bob", text: "Great to be here <laughter>." },
     ]);
+  });
+});
+
+describe("sealedChunksSoFar", () => {
+  it("returns every chunk but the last for a multi-chunk transcript", () => {
+    const turns: string[] = [];
+    for (let i = 0; i < 25; i++) {
+      turns.push(createTurn(i % 2 === 0 ? "Alice" : "Bob", `Line number ${i + 1}`));
+    }
+    const transcript = turns.join("\n\n");
+
+    const all = chunkTranscript(transcript, 10);
+    const sealed = sealedChunksSoFar(transcript);
+
+    expect(all).toHaveLength(3);
+    expect(sealed).toEqual(all.slice(0, -1));
+    expect(sealed).toHaveLength(2);
+  });
+
+  it("returns an empty array when the whole transcript is still just one chunk", () => {
+    const transcript = [createTurn("Alice", "Hello"), createTurn("Bob", "Hi")].join("\n\n");
+    expect(sealedChunksSoFar(transcript)).toEqual([]);
+  });
+
+  it("returns an empty array for an empty transcript", () => {
+    expect(sealedChunksSoFar("")).toEqual([]);
   });
 });
