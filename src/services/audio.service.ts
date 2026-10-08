@@ -6,7 +6,7 @@ import {
   putCachedChunk,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
-import { bumpGeneratedAudioSeconds, markAudioComplete } from "../data/episode.repository";
+import { bumpGeneratedAudioSeconds, getAudioEpoch, markAudioComplete } from "../data/episode.repository";
 import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
@@ -18,6 +18,7 @@ import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
 import { createAacStreamEncoder, encodePcmToAac, getAdtsDurationSeconds, sliceAdtsByTime } from "../utils/aac";
 import { HttpError } from "../utils/HttpError";
+import { AudioCancelledError, isAudioCancelled, trackGeneration } from "../utils/audioCancellation";
 import { createByteSkipper } from "../utils/rangeSkip";
 
 function sleep(ms: number): Promise<void> {
@@ -107,6 +108,17 @@ function recordAudioCompletionInBackground(podcastId: string, episodeId: string,
   });
 }
 
+/** How often a running generation checks whether the episode's audio was cleared on another instance. */
+const EPOCH_POLL_INTERVAL_MS = 1_500;
+
+/**
+ * Throws [AudioCancelledError] if the episode's audio was cleared since the request that is
+ * generating started (its `audioEpoch` changed) — see utils/audioCancellation.ts.
+ */
+async function assertNotCleared(podcastId: string, episodeId: string, startEpoch: number): Promise<void> {
+  if ((await getAudioEpoch(podcastId, episodeId)) !== startEpoch) throw new AudioCancelledError();
+}
+
 /** In-flight generation promises on this process instance */
 const inFlightGenerations = new Map<string, Promise<Buffer>>();
 
@@ -128,19 +140,40 @@ async function generateOrJoinChunk(
   voices: TtsVoiceAssignment[],
   chunkStartSeconds: number,
   chunkCount: number,
+  startEpoch: number,
   onDelta: (delta: Buffer) => void,
 ): Promise<Buffer> {
   for (;;) {
+    // A listener whose audio was cleared must not start (or wait for) a fresh generation.
+    await assertNotCleared(podcastId, episodeId, startEpoch);
     const acquired = await tryAcquireChunkLock(podcastId, episodeId, index);
     if (acquired) {
       const encoder = createAacStreamEncoder(onDelta);
+      // Stoppable from this process (abort) and from other instances (the epoch poll).
+      const controller = new AbortController();
+      const untrack = trackGeneration(podcastId, episodeId, controller);
+      const epochWatcher = setInterval(() => {
+        assertNotCleared(podcastId, episodeId, startEpoch).catch((err) => {
+          if (isAudioCancelled(err)) controller.abort(err);
+        });
+      }, EPOCH_POLL_INTERVAL_MS);
       try {
         let totalPcmBytes = 0;
-        await streamEpisodeSynthesis(chunkTurns, voices, (pcmDelta) => {
-          totalPcmBytes += pcmDelta.length;
-          encoder.write(pcmDelta);
-        });
+        await streamEpisodeSynthesis(
+          chunkTurns,
+          voices,
+          (pcmDelta) => {
+            totalPcmBytes += pcmDelta.length;
+            encoder.write(pcmDelta);
+          },
+          undefined,
+          controller.signal,
+        );
         const fullAac = await encoder.end();
+        // Last look before caching: a clear that landed meanwhile has already (or is about to)
+        // delete the audio, and this chunk would come back as stale audio.
+        if (controller.signal.aborted) throw new AudioCancelledError();
+        await assertNotCleared(podcastId, episodeId, startEpoch);
         await putCachedChunk(podcastId, episodeId, index, fullAac);
         const chunkSec = durationSeconds(DEFAULT_PCM_FORMAT, totalPcmBytes);
         await bumpGeneratedAudioSeconds(
@@ -155,8 +188,10 @@ async function generateOrJoinChunk(
         return fullAac;
       } catch (err) {
         encoder.destroy(err instanceof Error ? err : undefined);
-        throw err;
+        throw controller.signal.aborted ? new AudioCancelledError() : err;
       } finally {
+        clearInterval(epochWatcher);
+        untrack();
         await releaseChunkLock(podcastId, episodeId, index);
       }
     }
@@ -179,6 +214,7 @@ function getOrStartChunkGeneration(
   voices: TtsVoiceAssignment[],
   chunkStartSeconds: number,
   chunkCount: number,
+  startEpoch: number,
   onDelta: (delta: Buffer) => void,
 ): { promise: Promise<Buffer>; isLeader: boolean } {
   const key = chunkKey(podcastId, episodeId, index);
@@ -195,11 +231,13 @@ function getOrStartChunkGeneration(
     voices,
     chunkStartSeconds,
     chunkCount,
+    startEpoch,
     onDelta,
   );
 
   inFlightGenerations.set(key, promise);
-  promise.finally(() => inFlightGenerations.delete(key));
+  // The derived promise would reject too (a cancelled generation does) with nobody to handle it.
+  promise.finally(() => inFlightGenerations.delete(key)).catch(() => undefined);
   return { promise, isLeader: true };
 }
 
@@ -220,6 +258,9 @@ export async function streamEpisodeAudio(
   seek: { rangeStart: number | null; startTimeSeconds: number | null },
 ): Promise<void> {
   assertAudioAvailable(episode);
+
+  // Audio cleared after this point cancels this request's generation (see utils/audioCancellation.ts).
+  const startEpoch = episode.audioEpoch ?? 0;
 
   const chunks =
     episode.ttsChunks && episode.ttsChunks.length > 0
@@ -391,6 +432,7 @@ export async function streamEpisodeAudio(
       voices,
       chunkStartSec,
       chunks.length,
+      startEpoch,
       (delta) => {
         if (stopped) return;
         if (liveSeekRemaining > 0) {
@@ -420,6 +462,17 @@ export async function streamEpisodeAudio(
       }
       runningAudioSeconds += getAdtsDurationSeconds(fullChunk);
     } catch (err) {
+      if (isAudioCancelled(err)) {
+        if ((await getAudioEpoch(podcastId, episodeId)) === startEpoch) {
+          // Cancelled for another request's sake (we had joined its generation): go again.
+          index -= 1;
+          continue;
+        }
+        // The audio was cleared under this listener: drop the connection so the player retries
+        // and picks up the freshly generated audio instead of a truncated stream.
+        res.destroy();
+        return;
+      }
       console.error(`Chunk ${index} generation failed for ${podcastId}/${episodeId}:`, err);
       throw err;
     }
