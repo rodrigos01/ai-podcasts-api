@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertAudioClearable } from "../src/services/audioClear.service";
+import { assertAudioClearable } from "../src/utils/audioClear";
 import { HttpError } from "../src/utils/HttpError";
 
 describe("assertAudioClearable", () => {
