@@ -4,6 +4,7 @@ import { firestore } from "../config/firebase";
 import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
 import type { Person, ResolvedVoiceFields } from "../schemas/person.schema";
+import { isStaleEpoch } from "../utils/audioCancellation";
 import { NO_VOICE } from "../utils/voiceDecision";
 import {
   compareBySeriesOrder,
@@ -226,11 +227,14 @@ export async function markAudioComplete(
   podcastId: string,
   episodeId: string,
   durationSeconds: number,
+  epoch?: number,
 ): Promise<void> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return;
+    // A generation that began before the audio was cleared must not mark it complete again.
+    if (isStaleEpoch(snap.data()?.audioEpoch, epoch)) return;
     const current = (snap.data()?.generatedAudioSeconds as number | undefined) ?? 0;
     tx.update(ref, {
       audioComplete: true,
@@ -256,11 +260,13 @@ export async function bumpGeneratedAudioSeconds(
   podcastId: string,
   episodeId: string,
   seconds: number,
+  epoch?: number,
 ): Promise<void> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return;
+    if (isStaleEpoch(snap.data()?.audioEpoch, epoch)) return;
     const current = (snap.data()?.generatedAudioSeconds as number | undefined) ?? 0;
     if (seconds > current) {
       tx.update(ref, { generatedAudioSeconds: seconds, updatedAt: Date.now() });

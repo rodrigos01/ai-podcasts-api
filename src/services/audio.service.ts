@@ -87,6 +87,7 @@ async function recordAudioCompletionIfDone(
   podcastId: string,
   episodeId: string,
   chunkCount: number,
+  startEpoch: number,
 ): Promise<void> {
   const sizes = await Promise.all(
     Array.from({ length: chunkCount }, (_, i) => getCachedChunkSize(podcastId, episodeId, i)),
@@ -99,7 +100,9 @@ async function recordAudioCompletionIfDone(
     if (!data) return;
     totalSeconds += getAdtsDurationSeconds(data);
   }
-  await markAudioComplete(podcastId, episodeId, totalSeconds);
+  // Guarded by the epoch: if the audio was cleared while the chunks were being read, the files
+  // are (being) deleted and the episode must not be marked complete.
+  await markAudioComplete(podcastId, episodeId, totalSeconds, startEpoch);
 }
 
 /** In-flight completion checks on this process instance, so concurrent callers share one. */
@@ -110,12 +113,18 @@ const completionInFlight = new Map<string, Promise<void>>();
  * (the generating instance and the /stream request that ends the response both ask). Never
  * rejects: a failure to record is logged, not fatal to playback.
  */
-function recordAudioCompletion(podcastId: string, episodeId: string, chunkCount: number): Promise<void> {
-  const key = `${podcastId}:${episodeId}`;
+function recordAudioCompletion(
+  podcastId: string,
+  episodeId: string,
+  chunkCount: number,
+  startEpoch: number,
+): Promise<void> {
+  // Per epoch: a check begun before a clear must not be reused by one begun after it.
+  const key = `${podcastId}:${episodeId}:${startEpoch}`;
   const existing = completionInFlight.get(key);
   if (existing) return existing;
 
-  const promise = recordAudioCompletionIfDone(podcastId, episodeId, chunkCount)
+  const promise = recordAudioCompletionIfDone(podcastId, episodeId, chunkCount, startEpoch)
     .catch((err) => {
       console.error(`Failed to record audio completion for ${podcastId}/${episodeId}:`, err);
     })
@@ -196,12 +205,13 @@ async function generateOrJoinChunk(
           podcastId,
           episodeId,
           chunkStartSeconds + chunkSec,
+          startEpoch,
         );
         // Done here, by the generating instance, as well as before a /stream
         // response ends: the listener may have disconnected before the last
         // chunk landed, and nobody else would record the completion. Not
         // awaited, so the listener hears the chunk's audio without waiting on it.
-        void recordAudioCompletion(podcastId, episodeId, chunkCount);
+        void recordAudioCompletion(podcastId, episodeId, chunkCount, startEpoch);
         return fullAac;
       } catch (err) {
         encoder.destroy(err instanceof Error ? err : undefined);
@@ -306,7 +316,7 @@ export async function streamEpisodeAudio(
     // finished before the flag existed (or whose generating instance died
     // before recording it) pay for this, once.
     if (!episode.audioComplete) {
-      await recordAudioCompletion(podcastId, episodeId, chunks.length);
+      await recordAudioCompletion(podcastId, episodeId, chunks.length, startEpoch);
     }
 
     let startChunkIndex = 0;
@@ -507,7 +517,7 @@ export async function streamEpisodeAudio(
   );
   const nowComplete = chunks.length > 0 && finalCachedSizes.every((s) => s !== null);
   if (nowComplete && !stopped) {
-    await recordAudioCompletion(podcastId, episodeId, chunks.length);
+    await recordAudioCompletion(podcastId, episodeId, chunks.length, startEpoch);
   }
 
   if (!res.destroyed && !res.writableEnded) {

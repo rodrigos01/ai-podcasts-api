@@ -17,6 +17,14 @@ export function isAudioCancelled(err: unknown): boolean {
   return err instanceof AudioCancelledError;
 }
 
+/**
+ * Whether a write made under audio epoch `epoch` is stale: the episode's audio was cleared since
+ * (its stored epoch differs). Writes that pass no epoch are never stale.
+ */
+export function isStaleEpoch(stored: unknown, epoch: number | undefined): boolean {
+  return epoch !== undefined && ((stored as number | undefined) ?? 0) !== epoch;
+}
+
 const running = new Map<string, Set<AbortController>>();
 
 function key(podcastId: string, episodeId: string): string {

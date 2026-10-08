@@ -44,6 +44,12 @@ export async function putCachedChunk(
   });
 }
 
+/** Names of the episode's cached audio files that currently exist. */
+export async function listEpisodeAudioFiles(podcastId: string, episodeId: string): Promise<string[]> {
+  const [files] = await storageBucket.getFiles({ prefix: `podcasts/${podcastId}/episodes/${episodeId}/audio/` });
+  return files.map((file) => file.name);
+}
+
 export async function deleteEpisodeAudio(podcastId: string, episodeId: string): Promise<void> {
   const prefix = `podcasts/${podcastId}/episodes/${episodeId}/audio/`;
   await storageBucket.deleteFiles({ prefix });
