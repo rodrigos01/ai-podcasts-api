@@ -510,8 +510,12 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       rangeStart: null,
       startTimeSeconds: null,
     });
-    await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledTimes(1));
+    // Recorded before the response ends, not in the background after it.
+    expect(episodeRepo.markAudioComplete).toHaveBeenCalledTimes(1);
     expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 1.5);
+    expect(vi.mocked(episodeRepo.markAudioComplete).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(res.end).mock.invocationCallOrder[0]!,
+    );
   });
 
   it("does not record completion while chunks are still missing", async () => {
@@ -541,6 +545,10 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       rangeStart: null,
       startTimeSeconds: null,
     });
-    await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 2));
+    // Backfill happens before any bytes go out.
+    expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 2);
+    expect(vi.mocked(episodeRepo.markAudioComplete).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(res.write).mock.invocationCallOrder[0]!,
+    );
   });
 });

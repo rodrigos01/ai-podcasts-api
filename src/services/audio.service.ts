@@ -101,10 +101,26 @@ async function recordAudioCompletionIfDone(
   await markAudioComplete(podcastId, episodeId, totalSeconds);
 }
 
-function recordAudioCompletionInBackground(podcastId: string, episodeId: string, chunkCount: number): void {
-  recordAudioCompletionIfDone(podcastId, episodeId, chunkCount).catch((err) => {
-    console.error(`Failed to record audio completion for ${podcastId}/${episodeId}:`, err);
-  });
+/** In-flight completion checks on this process instance, so concurrent callers share one. */
+const completionInFlight = new Map<string, Promise<void>>();
+
+/**
+ * Records completion if every chunk is cached, sharing a single in-flight check per episode
+ * (the generating instance and the /stream request that ends the response both ask). Never
+ * rejects: a failure to record is logged, not fatal to playback.
+ */
+function recordAudioCompletion(podcastId: string, episodeId: string, chunkCount: number): Promise<void> {
+  const key = `${podcastId}:${episodeId}`;
+  const existing = completionInFlight.get(key);
+  if (existing) return existing;
+
+  const promise = recordAudioCompletionIfDone(podcastId, episodeId, chunkCount)
+    .catch((err) => {
+      console.error(`Failed to record audio completion for ${podcastId}/${episodeId}:`, err);
+    })
+    .finally(() => completionInFlight.delete(key));
+  completionInFlight.set(key, promise);
+  return promise;
 }
 
 /** In-flight generation promises on this process instance */
@@ -148,10 +164,11 @@ async function generateOrJoinChunk(
           episodeId,
           chunkStartSeconds + chunkSec,
         );
-        // Done here, by the generating instance, rather than at the end of a
-        // /stream request: the listener may have disconnected before the last
-        // chunk landed, and nobody else would record the completion.
-        recordAudioCompletionInBackground(podcastId, episodeId, chunkCount);
+        // Done here, by the generating instance, as well as before a /stream
+        // response ends: the listener may have disconnected before the last
+        // chunk landed, and nobody else would record the completion. Not
+        // awaited, so the listener hears the chunk's audio without waiting on it.
+        void recordAudioCompletion(podcastId, episodeId, chunkCount);
         return fullAac;
       } catch (err) {
         encoder.destroy(err instanceof Error ? err : undefined);
@@ -243,6 +260,14 @@ export async function streamEpisodeAudio(
   // where N counts bytes into the response it was already reading, so N must
   // be resolved against the same start `t` gave the original response.
   if (allCached) {
+    // Flag completion before any bytes go out, so a client that sees this
+    // stream end can already tell it's a genuine end. Only episodes whose audio
+    // finished before the flag existed (or whose generating instance died
+    // before recording it) pay for this, once.
+    if (!episode.audioComplete) {
+      await recordAudioCompletion(podcastId, episodeId, chunks.length);
+    }
+
     let startChunkIndex = 0;
     let firstPart: Buffer = Buffer.alloc(0);
 
@@ -295,10 +320,6 @@ export async function streamEpisodeAudio(
     }
     res.end();
     void finalizeEpisodeAudio(podcastId, episodeId);
-    // Backfills episodes whose audio finished before `audioComplete` existed.
-    if (!episode.audioComplete) {
-      recordAudioCompletionInBackground(podcastId, episodeId, chunks.length);
-    }
     return;
   }
 
@@ -425,15 +446,23 @@ export async function streamEpisodeAudio(
     }
   }
 
+  // If that was the last chunk, flag completion *before* ending the response, so
+  // a client that sees this stream end can already tell it's the real end and
+  // not a close at the live generation edge. Skipped if the client already left.
+  const finalCachedSizes = await Promise.all(
+    chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
+  );
+  const nowComplete = chunks.length > 0 && finalCachedSizes.every((s) => s !== null);
+  if (nowComplete && !stopped) {
+    await recordAudioCompletion(podcastId, episodeId, chunks.length);
+  }
+
   if (!res.destroyed && !res.writableEnded) {
     res.end();
   }
 
   // Trigger voice cleanup if all chunks are now ready
-  const finalCachedSizes = await Promise.all(
-    chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
-  );
-  if (finalCachedSizes.every((s) => s !== null)) {
+  if (nowComplete) {
     void finalizeEpisodeAudio(podcastId, episodeId);
   }
 }
