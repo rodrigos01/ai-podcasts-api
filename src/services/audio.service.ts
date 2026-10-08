@@ -87,6 +87,7 @@ async function recordAudioCompletionIfDone(
   podcastId: string,
   episodeId: string,
   chunkCount: number,
+  startEpoch: number,
 ): Promise<void> {
   const sizes = await Promise.all(
     Array.from({ length: chunkCount }, (_, i) => getCachedChunkSize(podcastId, episodeId, i)),
@@ -99,11 +100,18 @@ async function recordAudioCompletionIfDone(
     if (!data) return;
     totalSeconds += getAdtsDurationSeconds(data);
   }
-  await markAudioComplete(podcastId, episodeId, totalSeconds);
+  // Guarded by the epoch: if the audio was cleared while the chunks were being read, the files
+  // are (being) deleted and the episode must not be marked complete.
+  await markAudioComplete(podcastId, episodeId, totalSeconds, startEpoch);
 }
 
-function recordAudioCompletionInBackground(podcastId: string, episodeId: string, chunkCount: number): void {
-  recordAudioCompletionIfDone(podcastId, episodeId, chunkCount).catch((err) => {
+function recordAudioCompletionInBackground(
+  podcastId: string,
+  episodeId: string,
+  chunkCount: number,
+  startEpoch: number,
+): void {
+  recordAudioCompletionIfDone(podcastId, episodeId, chunkCount, startEpoch).catch((err) => {
     console.error(`Failed to record audio completion for ${podcastId}/${episodeId}:`, err);
   });
 }
@@ -180,11 +188,12 @@ async function generateOrJoinChunk(
           podcastId,
           episodeId,
           chunkStartSeconds + chunkSec,
+          startEpoch,
         );
         // Done here, by the generating instance, rather than at the end of a
         // /stream request: the listener may have disconnected before the last
         // chunk landed, and nobody else would record the completion.
-        recordAudioCompletionInBackground(podcastId, episodeId, chunkCount);
+        recordAudioCompletionInBackground(podcastId, episodeId, chunkCount, startEpoch);
         return fullAac;
       } catch (err) {
         encoder.destroy(err instanceof Error ? err : undefined);
@@ -338,7 +347,7 @@ export async function streamEpisodeAudio(
     void finalizeEpisodeAudio(podcastId, episodeId);
     // Backfills episodes whose audio finished before `audioComplete` existed.
     if (!episode.audioComplete) {
-      recordAudioCompletionInBackground(podcastId, episodeId, chunks.length);
+      recordAudioCompletionInBackground(podcastId, episodeId, chunks.length, startEpoch);
     }
     return;
   }

@@ -1,7 +1,7 @@
 import { clearChunkLocks, hasActiveChunkLock } from "../data/audioLock.repository";
 import { bumpAudioEpoch, clearUnpinnedGuestVoices, patchEpisodeState } from "../data/episode.repository";
 import type { Episode } from "../schemas/episode.schema";
-import { deleteEpisodeAudio } from "../storage/audioCache.repository";
+import { deleteEpisodeAudio, listEpisodeAudioFiles } from "../storage/audioCache.repository";
 import { assertAudioClearable } from "../utils/audioClear";
 import { abortLocalGenerations, waitUntil } from "../utils/audioCancellation";
 import { HttpError } from "../utils/HttpError";
@@ -45,13 +45,24 @@ export async function clearEpisodeAudio(podcastId: string, episodeId: string, ep
   assertAudioClearable(episode.status);
 
   // Twice: a player that was cut off by the first stop reconnects right away, and what that
-  // request starts before the files are gone is stopped and deleted by the second pass.
+  // request starts before the files are gone is stopped and deleted by the second pass. Leftover
+  // locks go before the second stop, which waits for any new generation to let go of its own.
   await stopAudioGeneration(podcastId, episodeId);
   await deleteEpisodeAudio(podcastId, episodeId);
+  await clearChunkLocks(podcastId, episodeId);
   await stopAudioGeneration(podcastId, episodeId);
   await deleteEpisodeAudio(podcastId, episodeId);
 
-  await clearChunkLocks(podcastId, episodeId);
+  // Verify rather than assume: audio left behind would be served (and marked complete) as if the
+  // clear had never happened.
+  const remaining = await listEpisodeAudioFiles(podcastId, episodeId);
+  if (remaining.length > 0) {
+    console.error(`Audio of ${podcastId}/${episodeId} survived the clear:`, remaining);
+    throw HttpError.conflict("Some cached audio could not be removed; try again in a moment.");
+  }
+
+  // Everything that could write audio state under the old epoch is stopped, and a late write from
+  // one is ignored (the epoch guard), so this reset sticks.
   await patchEpisodeState(podcastId, episodeId, {
     ttsChunks: null,
     generatedAudioSeconds: 0,

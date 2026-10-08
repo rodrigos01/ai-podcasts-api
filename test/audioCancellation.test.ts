@@ -4,6 +4,7 @@ import {
   abortLocalGenerations,
   abortable,
   isAudioCancelled,
+  isStaleEpoch,
   trackGeneration,
   waitUntil,
 } from "../src/utils/audioCancellation";
@@ -64,5 +65,21 @@ describe("waitUntil", () => {
 
   it("gives up with false after the timeout", async () => {
     await expect(waitUntil(async () => false, 20, 5)).resolves.toBe(false);
+  });
+});
+
+describe("isStaleEpoch", () => {
+  it("treats a missing stored epoch as 0", () => {
+    expect(isStaleEpoch(undefined, 0)).toBe(false);
+    expect(isStaleEpoch(undefined, 1)).toBe(true);
+  });
+
+  it("rejects writes made under an older epoch", () => {
+    expect(isStaleEpoch(2, 1)).toBe(true);
+    expect(isStaleEpoch(2, 2)).toBe(false);
+  });
+
+  it("never blocks a write that carries no epoch", () => {
+    expect(isStaleEpoch(5, undefined)).toBe(false);
   });
 });

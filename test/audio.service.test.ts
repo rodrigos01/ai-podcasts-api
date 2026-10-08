@@ -517,7 +517,30 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       startTimeSeconds: null,
     });
     await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledTimes(1));
-    expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 1.5);
+    expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 1.5, 0);
+  });
+
+  it("tags its audio writes with the epoch it started under so a clear can invalidate them", async () => {
+    const cached = new Map<number, Buffer>([[0, Buffer.alloc(8000, 1)]]);
+    vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => cached.get(i)?.length ?? null);
+    vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => cached.get(i) ?? null);
+    vi.mocked(audioCache.putCachedChunk).mockImplementation(async (_, __, i, data) => {
+      cached.set(i, data);
+    });
+    vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+    vi.mocked(episodeRepo.getAudioEpoch).mockResolvedValue(3);
+    vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+      onDelta(Buffer.alloc(24000, 2));
+    });
+
+    const res = createMockResponse();
+    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, { ...mockEpisode, audioEpoch: 3 }, mockPodcast, res, {
+      rangeStart: null,
+      startTimeSeconds: null,
+    });
+    await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledTimes(1));
+    expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 1.5, 3);
+    expect(episodeRepo.bumpGeneratedAudioSeconds).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 1.5, 3);
   });
 
   it("does not record completion while chunks are still missing", async () => {
@@ -547,7 +570,7 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       rangeStart: null,
       startTimeSeconds: null,
     });
-    await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 2));
+    await vi.waitFor(() => expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 2, 0));
   });
 
   describe("when the episode's audio is cleared during generation", () => {
