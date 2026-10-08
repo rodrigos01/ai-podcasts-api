@@ -19,6 +19,7 @@ vi.mock("../src/data/audioLock.repository", () => ({
 vi.mock("../src/data/episode.repository", () => ({
   bumpGeneratedAudioSeconds: vi.fn(),
   markAudioComplete: vi.fn(),
+  getAudioEpoch: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../src/services/episodeGeneration/audioFinalize.service", () => ({
@@ -71,6 +72,7 @@ import * as episodeRepo from "../src/data/episode.repository";
 import * as ttsClient from "../src/llm/ttsClient";
 import * as voiceResolution from "../src/services/episodeGeneration/voiceResolution.service";
 import { streamEpisodeAudio } from "../src/services/audio.service";
+import { AudioCancelledError } from "../src/utils/audioCancellation";
 
 function createMockResponse(): Response & {
   headers: Record<string, string>;
@@ -97,6 +99,9 @@ function createMockResponse(): Response & {
   emitter.write = vi.fn((chunk: Buffer) => {
     emitter.written.push(chunk);
     return true;
+  });
+  emitter.destroy = vi.fn(() => {
+    emitter.destroyed = true;
   });
   emitter.end = vi.fn(() => {
     emitter.writableEnded = true;
@@ -176,6 +181,7 @@ const mockEpisode: Episode = {
 describe("streamEpisodeAudio with AAC chunking and seeking", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(episodeRepo.getAudioEpoch).mockResolvedValue(0);
   });
 
   it("serves all cached chunks with 200 OK and audio/aac for fresh request", async () => {
@@ -551,4 +557,48 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       vi.mocked(res.write).mock.invocationCallOrder[0]!,
     );
   });
+
+  describe("when the episode's audio is cleared during generation", () => {
+    function liveSetup() {
+      vi.mocked(audioCache.getCachedChunkSize).mockResolvedValue(null);
+      vi.mocked(audioCache.getCachedChunk).mockResolvedValue(null);
+      vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+    }
+
+    it("does not start synthesizing for a request that began under an older epoch", async () => {
+      liveSetup();
+      vi.mocked(episodeRepo.getAudioEpoch).mockResolvedValue(1); // cleared since the request began (epoch 0)
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      expect(ttsClient.streamEpisodeSynthesis).not.toHaveBeenCalled();
+      expect(audioCache.putCachedChunk).not.toHaveBeenCalled();
+      expect(res.destroy).toHaveBeenCalled();
+    });
+
+    it("drops the listener and caches nothing when synthesis is cancelled mid-chunk", async () => {
+      liveSetup();
+      // The epoch is unchanged while the chunk starts, then a clear lands during synthesis.
+      vi.mocked(episodeRepo.getAudioEpoch).mockResolvedValueOnce(0).mockResolvedValue(1);
+      vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+        onDelta(Buffer.alloc(24000, 2));
+        throw new AudioCancelledError();
+      });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      expect(audioCache.putCachedChunk).not.toHaveBeenCalled();
+      expect(audioLock.releaseChunkLock).toHaveBeenCalled();
+      expect(res.destroy).toHaveBeenCalled();
+    });
+  });
+
 });

@@ -241,6 +241,17 @@ export async function markAudioComplete(
   });
 }
 
+/** The episode's audio epoch (0 if never cleared) — see utils/audioCancellation.ts. */
+export async function getAudioEpoch(podcastId: string, episodeId: string): Promise<number> {
+  const snap = await episodesCollection(podcastId).doc(episodeId).get();
+  return (snap.data()?.audioEpoch as number | undefined) ?? 0;
+}
+
+/** Signals every audio generation of the episode, on any instance, to stop. */
+export async function bumpAudioEpoch(podcastId: string, episodeId: string): Promise<void> {
+  await episodesCollection(podcastId).doc(episodeId).update({ audioEpoch: FieldValue.increment(1) });
+}
+
 export async function bumpGeneratedAudioSeconds(
   podcastId: string,
   episodeId: string,
