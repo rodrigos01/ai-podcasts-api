@@ -50,8 +50,9 @@ say enough about the guest to imply how they sound. Make them clearly distinguis
 together in an episode needs to sound distinct so listeners can tell them apart.
 
 Only when the guest's persona specifically calls for a distinctive spoken accent (regional, national, or \
-non-native) may you also set their "accent" field — a short, plain-English description (e.g. "Northern \
-Irish", "light French accent"), the same optional field a fixed host may have (see above). Leave it unset \
+non-native) may you also set their "accent" field — a short description of the accent, written in \
+the same language as the persona and the rest of the show (e.g. "Northern Irish" or "light French accent" for \
+an English show, "sotaque nordestino" for a Portuguese one), the same optional field a fixed host may have (see above). Leave it unset \
 for an ordinary/neutral voice — but if the guest's voice description mentions an accent, set it.
 
 Keep the draft short and high-level. It is an outline a script writer will use to structure the \

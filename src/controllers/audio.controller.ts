@@ -3,6 +3,7 @@ import { getEpisode } from "../data/episode.repository";
 import { requireUserId } from "../middleware/requireAuth";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { streamEpisodeAudio } from "../services/audio.service";
+import { clearEpisodeAudio } from "../services/audioClear.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
 
@@ -66,4 +67,13 @@ export async function stream(req: Request, res: Response) {
     rangeStart,
     startTimeSeconds: startTime,
   });
+}
+
+export async function clear(req: Request, res: Response) {
+  const podcastId = requireParam(req.params, "podcastId");
+  const episodeId = requireParam(req.params, "episodeId");
+  const { episode } = await loadContext(podcastId, episodeId, requireUserId(req));
+
+  await clearEpisodeAudio(podcastId, episodeId, episode);
+  res.status(204).send();
 }
