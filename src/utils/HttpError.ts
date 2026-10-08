@@ -16,6 +16,10 @@ export class HttpError extends Error {
     return new HttpError(400, message, details);
   }
 
+  static conflict(message: string): HttpError {
+    return new HttpError(409, message);
+  }
+
   static badGateway(message: string): HttpError {
     return new HttpError(502, message);
   }

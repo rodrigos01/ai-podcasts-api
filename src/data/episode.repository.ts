@@ -3,7 +3,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
-import type { ResolvedVoiceFields } from "../schemas/person.schema";
+import type { Person, ResolvedVoiceFields } from "../schemas/person.schema";
 import { NO_VOICE } from "../utils/voiceDecision";
 import {
   compareBySeriesOrder,
@@ -107,6 +107,29 @@ export async function updateEpisode(
   await ref.update(patch);
   const updated = await ref.get();
   return updated.data() as Episode;
+}
+
+/**
+ * Forgets the stored voice of every guest whose voice the server designed (not one the user
+ * picked): it's a temporary voice that is deleted once the episode's audio is generated, so
+ * keeping its id would send the next synthesis to a voice that no longer exists. They are
+ * designed again, lazily, the next time audio is generated. Returns the guests as they were.
+ */
+export async function clearUnpinnedGuestVoices(podcastId: string, episodeId: string): Promise<Person[]> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  return firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return [];
+    const episode = snap.data() as Episode;
+    const cleared = episode.guests.filter((guest) => guest.resolvedVoiceId && !guest.resolvedVoicePinned);
+    if (cleared.length === 0) return [];
+    const ids = new Set(cleared.map((guest) => guest.id));
+    tx.update(ref, {
+      guests: episode.guests.map((guest) => (ids.has(guest.id) ? { ...guest, ...NO_VOICE, resolvedVoicePinned: false } : guest)),
+      updatedAt: Date.now(),
+    });
+    return cleared;
+  });
 }
 
 export async function deleteEpisode(podcastId: string, episodeId: string): Promise<boolean> {
