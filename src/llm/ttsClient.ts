@@ -5,6 +5,7 @@ import type {
 import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
 import { MAX_CHUNK_AUDIO_SECONDS, STREAM_INACTIVITY_TIMEOUT_MS } from "../constants/ttsLimits";
+import { AudioCancelledError, abortable, isAudioCancelled } from "../utils/audioCancellation";
 import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds, type WavFormat } from "../utils/wav";
 
@@ -267,16 +268,27 @@ async function consumeStream(
   stream: AsyncIterable<GenerateContentResponse>,
   onDelta: (pcm: Buffer) => void,
   maxAudioSeconds: number,
+  signal?: AbortSignal,
 ): Promise<ConsumeResult> {
   let totalBytes = 0;
   const otherEvents: string[] = [];
   const iterator = stream[Symbol.asyncIterator]();
   for (;;) {
-    const result = await withTimeout(
-      iterator.next(),
-      STREAM_INACTIVITY_TIMEOUT_MS,
-      `Gemini TTS stream stalled: no event for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s`,
-    );
+    let result;
+    try {
+      result = await abortable(
+        withTimeout(
+          iterator.next(),
+          STREAM_INACTIVITY_TIMEOUT_MS,
+          `Gemini TTS stream stalled: no event for ${STREAM_INACTIVITY_TIMEOUT_MS / 1000}s`,
+        ),
+        signal,
+      );
+    } catch (err) {
+      // Stop reading (and paying for) a stream nobody wants any more.
+      if (isAudioCancelled(err)) void iterator.return?.().catch(() => undefined);
+      throw err;
+    }
     if (result.done) break;
     const chunk = result.value;
     let sawAudio = false;
@@ -322,6 +334,7 @@ export async function streamEpisodeSynthesis(
   voices: TtsVoiceAssignment[],
   onDelta: (pcm: Buffer) => void,
   maxAudioSeconds: number = MAX_CHUNK_AUDIO_SECONDS,
+  signal?: AbortSignal,
 ): Promise<void> {
   const client = await getClient();
   const soloLabel = soloSpeakerLabel(turns);
@@ -354,6 +367,7 @@ export async function streamEpisodeSynthesis(
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
+      if (signal?.aborted) throw new AudioCancelledError();
       const stream = await client.models.generateContentStream(request);
       const { totalBytes, otherEvents } = await consumeStream(
         stream,
@@ -362,6 +376,7 @@ export async function streamEpisodeSynthesis(
           onDelta(pcm);
         },
         maxAudioSeconds,
+        signal,
       );
       if (totalBytes === 0) {
         console.error(
@@ -376,6 +391,8 @@ export async function streamEpisodeSynthesis(
       }
       return;
     } catch (err) {
+      // A cancelled generation is neither retried nor wrapped as a synthesis failure.
+      if (isAudioCancelled(err) || signal?.aborted) throw new AudioCancelledError();
       lastError = err;
       // A retry after any audio was already emitted would mean forwarding a
       // different, non-reproducible rendition of content a listener may

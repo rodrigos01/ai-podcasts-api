@@ -3,7 +3,8 @@ import { FieldValue } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
-import type { ResolvedVoiceFields } from "../schemas/person.schema";
+import type { Person, ResolvedVoiceFields } from "../schemas/person.schema";
+import { isStaleEpoch } from "../utils/audioCancellation";
 import { NO_VOICE } from "../utils/voiceDecision";
 import {
   compareBySeriesOrder,
@@ -109,6 +110,29 @@ export async function updateEpisode(
   return updated.data() as Episode;
 }
 
+/**
+ * Forgets the stored voice of every guest whose voice the server designed (not one the user
+ * picked): it's a temporary voice that is deleted once the episode's audio is generated, so
+ * keeping its id would send the next synthesis to a voice that no longer exists. They are
+ * designed again, lazily, the next time audio is generated. Returns the guests as they were.
+ */
+export async function clearUnpinnedGuestVoices(podcastId: string, episodeId: string): Promise<Person[]> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  return firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return [];
+    const episode = snap.data() as Episode;
+    const cleared = episode.guests.filter((guest) => guest.resolvedVoiceId && !guest.resolvedVoicePinned);
+    if (cleared.length === 0) return [];
+    const ids = new Set(cleared.map((guest) => guest.id));
+    tx.update(ref, {
+      guests: episode.guests.map((guest) => (ids.has(guest.id) ? { ...guest, ...NO_VOICE, resolvedVoicePinned: false } : guest)),
+      updatedAt: Date.now(),
+    });
+    return cleared;
+  });
+}
+
 export async function deleteEpisode(podcastId: string, episodeId: string): Promise<boolean> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   const existing = await ref.get();
@@ -203,11 +227,14 @@ export async function markAudioComplete(
   podcastId: string,
   episodeId: string,
   durationSeconds: number,
+  epoch?: number,
 ): Promise<void> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return;
+    // A generation that began before the audio was cleared must not mark it complete again.
+    if (isStaleEpoch(snap.data()?.audioEpoch, epoch)) return;
     const current = (snap.data()?.generatedAudioSeconds as number | undefined) ?? 0;
     tx.update(ref, {
       audioComplete: true,
@@ -218,15 +245,28 @@ export async function markAudioComplete(
   });
 }
 
+/** The episode's audio epoch (0 if never cleared) — see utils/audioCancellation.ts. */
+export async function getAudioEpoch(podcastId: string, episodeId: string): Promise<number> {
+  const snap = await episodesCollection(podcastId).doc(episodeId).get();
+  return (snap.data()?.audioEpoch as number | undefined) ?? 0;
+}
+
+/** Signals every audio generation of the episode, on any instance, to stop. */
+export async function bumpAudioEpoch(podcastId: string, episodeId: string): Promise<void> {
+  await episodesCollection(podcastId).doc(episodeId).update({ audioEpoch: FieldValue.increment(1) });
+}
+
 export async function bumpGeneratedAudioSeconds(
   podcastId: string,
   episodeId: string,
   seconds: number,
+  epoch?: number,
 ): Promise<void> {
   const ref = episodesCollection(podcastId).doc(episodeId);
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return;
+    if (isStaleEpoch(snap.data()?.audioEpoch, epoch)) return;
     const current = (snap.data()?.generatedAudioSeconds as number | undefined) ?? 0;
     if (seconds > current) {
       tx.update(ref, { generatedAudioSeconds: seconds, updatedAt: Date.now() });

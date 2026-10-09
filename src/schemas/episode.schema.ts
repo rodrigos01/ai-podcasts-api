@@ -102,6 +102,9 @@ export const episodeSchema = z.object({
   // length arrived. `audioDurationSeconds` is the exact total, set together
   // with it. Both are absent on episodes created before they existed until
   // their audio is next streamed in full (audio.service.ts backfills them).
+  // Bumped each time the episode's audio is cleared; a generation started under an
+  // older value stops (see utils/audioCancellation.ts). Absent means 0.
+  audioEpoch: z.number().int().nonnegative().optional(),
   audioComplete: z.boolean().optional(),
   audioDurationSeconds: z.number().nonnegative().nullable().optional(),
   error: z.string().nullable(),
