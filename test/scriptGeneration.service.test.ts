@@ -3,6 +3,7 @@ import {
   consumeScriptStream,
   reattachOrphanedStyle,
   resolveEmptyTurnText,
+  seedFromTranscript,
   validateSpeakerTurns,
 } from "../src/services/episodeGeneration/scriptGeneration.service";
 
@@ -231,5 +232,27 @@ describe("consumeScriptStream", () => {
       { speaker: "Maya", text: "Hey." },
       { speaker: "Camille", text: "Hi Maya." },
     ]);
+  });
+});
+
+describe("seedFromTranscript", () => {
+  it("parses a persisted transcript back into the turns it was built from", () => {
+    const seeded = seedFromTranscript("Maya: Hey there.\nStyle: warm\n\nCamille: Hi Maya.", "Maya", "Camille");
+    expect(seeded.turns).toEqual([
+      { speaker: "Maya", text: "Hey there.", style: "warm" },
+      { speaker: "Camille", text: "Hi Maya." },
+    ]);
+    expect(seeded.seenA).toBe(true);
+    expect(seeded.seenB).toBe(true);
+  });
+
+  it("reports which speakers haven't spoken yet", () => {
+    const seeded = seedFromTranscript("Maya: Hey there.\n\nMaya: Anyone?", "Maya", "Camille");
+    expect(seeded.seenA).toBe(true);
+    expect(seeded.seenB).toBe(false);
+  });
+
+  it("treats an empty transcript as nothing written yet", () => {
+    expect(seedFromTranscript("", "Maya", "Camille")).toEqual({ turns: [], seenA: false, seenB: false });
   });
 });

@@ -5,6 +5,7 @@ import { deleteEpisodeAudio } from "../storage/audioCache.repository";
 import type { Episode, EpisodeCreateInput, EpisodeUpdateInput } from "../schemas/episode.schema";
 import type { Person, ResolvedVoiceFields } from "../schemas/person.schema";
 import { isStaleEpoch } from "../utils/audioCancellation";
+import { GenerationSupersededError, isGenerationLeaseLive } from "../utils/generationLease";
 import { NO_VOICE } from "../utils/voiceDecision";
 import {
   compareBySeriesOrder,
@@ -22,6 +23,8 @@ export async function createEpisode(
   input: EpisodeCreateInput,
   // Lines up with `input.guests` by index — see podcast.repository.ts's createPodcast.
   guestVoices: (ResolvedVoiceFields | null)[] = [],
+  // The earlier part of the same multi-episode suggestion, if this is a later one.
+  startsAfterEpisodeId?: string,
 ): Promise<Episode> {
   const id = randomUUID();
   const now = Date.now();
@@ -43,6 +46,7 @@ export async function createEpisode(
     ttsChunks: null,
     generatedAudioSeconds: 0,
     audioComplete: false,
+    ...(startsAfterEpisodeId ? { startsAfterEpisodeId } : {}),
     error: null,
     createdAt: now,
     updatedAt: now,
@@ -165,6 +169,88 @@ export async function patchEpisodeState(
   patch: Partial<Episode>,
 ): Promise<void> {
   await episodesCollection(podcastId).doc(episodeId).update({ ...patch, updatedAt: Date.now() });
+}
+
+/**
+ * Takes the episode's generation lease for `owner`, unless another run holds a
+ * live one — the arbiter that keeps two runs (e.g. two status polls both
+ * noticing a stalled episode at once) from generating the same script. A
+ * stale lease is simply taken over. Returns whether `owner` now holds it.
+ */
+export async function acquireGenerationLease(
+  podcastId: string,
+  episodeId: string,
+  owner: string,
+): Promise<boolean> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  return firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return false;
+    const now = Date.now();
+    const lease = (snap.data() as Episode).generationLease;
+    if (isGenerationLeaseLive(lease, now) && lease?.owner !== owner) return false;
+    tx.update(ref, { generationLease: { owner, heartbeatAt: now } });
+    return true;
+  });
+}
+
+/** Refreshes `owner`'s lease. False if it no longer holds it (taken over, or the episode is gone). */
+export async function heartbeatGenerationLease(
+  podcastId: string,
+  episodeId: string,
+  owner: string,
+): Promise<boolean> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  return firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if ((snap.data() as Episode | undefined)?.generationLease?.owner !== owner) return false;
+    tx.update(ref, { generationLease: { owner, heartbeatAt: Date.now() } });
+    return true;
+  });
+}
+
+/**
+ * `patchEpisodeState` for the run that holds the episode's generation lease:
+ * applies the patch (and refreshes the lease) only while `owner` still holds
+ * it, and throws `GenerationSupersededError` otherwise. A run that stalled
+ * and was taken over must not write its older, shorter transcript over the
+ * new owner's progress when it wakes up.
+ */
+export async function patchEpisodeStateAsOwner(
+  podcastId: string,
+  episodeId: string,
+  owner: string,
+  patch: Partial<Episode>,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if ((snap.data() as Episode | undefined)?.generationLease?.owner !== owner) {
+      throw new GenerationSupersededError();
+    }
+    const now = Date.now();
+    tx.update(ref, { ...patch, generationLease: { owner, heartbeatAt: now }, updatedAt: now });
+  });
+}
+
+/** Lets go of the lease, if `owner` still holds it. */
+export async function releaseGenerationLease(
+  podcastId: string,
+  episodeId: string,
+  owner: string,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if ((snap.data() as Episode | undefined)?.generationLease?.owner !== owner) return;
+    tx.update(ref, { generationLease: null });
+  });
+}
+
+/** The episodes that start generating once `episodeId` is done (see `startsAfterEpisodeId`). */
+export async function listDependentEpisodes(podcastId: string, episodeId: string): Promise<Episode[]> {
+  const snap = await episodesCollection(podcastId).where("startsAfterEpisodeId", "==", episodeId).get();
+  return snap.docs.map((doc) => doc.data() as Episode);
 }
 
 /**
