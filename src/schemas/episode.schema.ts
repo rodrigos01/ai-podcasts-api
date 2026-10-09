@@ -95,6 +95,15 @@ export const episodeSchema = z.object({
   // created before this field existed get `undefined` here (Firestore is
   // schemaless and this isn't backfilled) — treat as 0.
   generatedAudioSeconds: z.number().nonnegative(),
+  // True once every TTS chunk is cached, i.e. the audio is a finished, fixed-
+  // length file. `generatedAudioSeconds` alone can't say this (it only says how
+  // much exists so far), and clients can't infer it from the stream either: a
+  // live response that gets cut short looks like a complete file of whatever
+  // length arrived. `audioDurationSeconds` is the exact total, set together
+  // with it. Both are absent on episodes created before they existed until
+  // their audio is next streamed in full (audio.service.ts backfills them).
+  audioComplete: z.boolean().optional(),
+  audioDurationSeconds: z.number().nonnegative().nullable().optional(),
   error: z.string().nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),

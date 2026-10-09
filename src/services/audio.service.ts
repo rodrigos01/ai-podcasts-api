@@ -6,7 +6,7 @@ import {
   putCachedChunk,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
-import { bumpGeneratedAudioSeconds } from "../data/episode.repository";
+import { bumpGeneratedAudioSeconds, markAudioComplete } from "../data/episode.repository";
 import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
@@ -18,6 +18,7 @@ import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
 import { createAacStreamEncoder, encodePcmToAac, getAdtsDurationSeconds, sliceAdtsByTime } from "../utils/aac";
 import { HttpError } from "../utils/HttpError";
+import { createByteSkipper } from "../utils/rangeSkip";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -74,6 +75,54 @@ async function resolveCastVoices(
   return assignments;
 }
 
+/**
+ * Once every chunk is cached the audio is a finished file: records
+ * `audioComplete` and its exact duration on the episode so clients can tell
+ * "done" from "stream cut short" without inferring it from the stream itself.
+ * Cheap while chunks are missing (size lookups only); reads the chunk bodies
+ * (to sum their ADTS durations) just once, when the last one lands.
+ */
+async function recordAudioCompletionIfDone(
+  podcastId: string,
+  episodeId: string,
+  chunkCount: number,
+): Promise<void> {
+  const sizes = await Promise.all(
+    Array.from({ length: chunkCount }, (_, i) => getCachedChunkSize(podcastId, episodeId, i)),
+  );
+  if (chunkCount === 0 || sizes.some((s) => s === null)) return;
+
+  let totalSeconds = 0;
+  for (let i = 0; i < chunkCount; i++) {
+    const data = await getCachedChunk(podcastId, episodeId, i);
+    if (!data) return;
+    totalSeconds += getAdtsDurationSeconds(data);
+  }
+  await markAudioComplete(podcastId, episodeId, totalSeconds);
+}
+
+/** In-flight completion checks on this process instance, so concurrent callers share one. */
+const completionInFlight = new Map<string, Promise<void>>();
+
+/**
+ * Records completion if every chunk is cached, sharing a single in-flight check per episode
+ * (the generating instance and the /stream request that ends the response both ask). Never
+ * rejects: a failure to record is logged, not fatal to playback.
+ */
+function recordAudioCompletion(podcastId: string, episodeId: string, chunkCount: number): Promise<void> {
+  const key = `${podcastId}:${episodeId}`;
+  const existing = completionInFlight.get(key);
+  if (existing) return existing;
+
+  const promise = recordAudioCompletionIfDone(podcastId, episodeId, chunkCount)
+    .catch((err) => {
+      console.error(`Failed to record audio completion for ${podcastId}/${episodeId}:`, err);
+    })
+    .finally(() => completionInFlight.delete(key));
+  completionInFlight.set(key, promise);
+  return promise;
+}
+
 /** In-flight generation promises on this process instance */
 const inFlightGenerations = new Map<string, Promise<Buffer>>();
 
@@ -94,6 +143,7 @@ async function generateOrJoinChunk(
   chunkTurns: ScriptTurn[],
   voices: TtsVoiceAssignment[],
   chunkStartSeconds: number,
+  chunkCount: number,
   onDelta: (delta: Buffer) => void,
 ): Promise<Buffer> {
   for (;;) {
@@ -114,6 +164,11 @@ async function generateOrJoinChunk(
           episodeId,
           chunkStartSeconds + chunkSec,
         );
+        // Done here, by the generating instance, as well as before a /stream
+        // response ends: the listener may have disconnected before the last
+        // chunk landed, and nobody else would record the completion. Not
+        // awaited, so the listener hears the chunk's audio without waiting on it.
+        void recordAudioCompletion(podcastId, episodeId, chunkCount);
         return fullAac;
       } catch (err) {
         encoder.destroy(err instanceof Error ? err : undefined);
@@ -140,6 +195,7 @@ function getOrStartChunkGeneration(
   chunkTurns: ScriptTurn[],
   voices: TtsVoiceAssignment[],
   chunkStartSeconds: number,
+  chunkCount: number,
   onDelta: (delta: Buffer) => void,
 ): { promise: Promise<Buffer>; isLeader: boolean } {
   const key = chunkKey(podcastId, episodeId, index);
@@ -155,6 +211,7 @@ function getOrStartChunkGeneration(
     chunkTurns,
     voices,
     chunkStartSeconds,
+    chunkCount,
     onDelta,
   );
 
@@ -194,39 +251,28 @@ export async function streamEpisodeAudio(
   res.set("Content-Type", "audio/aac");
   res.set("Accept-Ranges", "bytes");
 
-  // Path 1: All chunks are cached -> serve seekable static AAC resource
+  // Path 1: All chunks are cached -> serve seekable static AAC resource.
+  //
+  // The byte space of this response is this URL's own stream: it starts at
+  // `?t=` (frame-aligned) when given, else at the start of the episode. A
+  // `Range` header is applied on top of that, never instead of it — a player
+  // retrying a `?t=` stream re-requests the same URL with `Range: bytes=N-`
+  // where N counts bytes into the response it was already reading, so N must
+  // be resolved against the same start `t` gave the original response.
   if (allCached) {
-    const totalAacBytes = cachedSizes.reduce((sum, s) => sum + (s ?? 0), 0);
-
-    // Handle HTTP Range request (e.g. Range: bytes=1000- or bytes=0-)
-    if (seek.rangeStart !== null) {
-      if (seek.rangeStart >= totalAacBytes) {
-        throw new HttpError(416, "Range Not Satisfiable");
-      }
-      res.status(206);
-      res.set("Content-Range", `bytes ${seek.rangeStart}-${totalAacBytes - 1}/${totalAacBytes}`);
-      res.set("Content-Length", String(totalAacBytes - seek.rangeStart));
-
-      let currentOffset = 0;
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkData = await getCachedChunk(podcastId, episodeId, i);
-        if (!chunkData) continue;
-        const chunkEnd = currentOffset + chunkData.length;
-        if (chunkEnd > seek.rangeStart) {
-          const sliceStart = Math.max(0, seek.rangeStart - currentOffset);
-          res.write(chunkData.subarray(sliceStart));
-        }
-        currentOffset = chunkEnd;
-      }
-      res.end();
-      void finalizeEpisodeAudio(podcastId, episodeId);
-      return;
+    // Flag completion before any bytes go out, so a client that sees this
+    // stream end can already tell it's a genuine end. Only episodes whose audio
+    // finished before the flag existed (or whose generating instance died
+    // before recording it) pay for this, once.
+    if (!episode.audioComplete) {
+      await recordAudioCompletion(podcastId, episodeId, chunks.length);
     }
 
-    // Handle ?t=SECONDS seek into cached chunks
+    let startChunkIndex = 0;
+    let firstPart: Buffer = Buffer.alloc(0);
+
     if (seek.startTimeSeconds !== null && seek.startTimeSeconds > 0) {
       let cumulativeSec = 0;
-      let startChunkIndex = 0;
       let seekOffsetInsideChunk = 0;
       for (let i = 0; i < chunks.length; i++) {
         const chunkData = await getCachedChunk(podcastId, episodeId, i);
@@ -240,37 +286,37 @@ export async function streamEpisodeAudio(
         startChunkIndex = i;
         seekOffsetInsideChunk = Math.max(0, seek.startTimeSeconds - cumulativeSec);
       }
-
       const startChunkData = await getCachedChunk(podcastId, episodeId, startChunkIndex);
-      const { buffer: slicedStartChunk } = startChunkData
-        ? sliceAdtsByTime(startChunkData, seekOffsetInsideChunk)
-        : { buffer: Buffer.alloc(0) };
-
-      const laterBytes = cachedSizes
-        .slice(startChunkIndex + 1)
-        .reduce((sum, s) => sum + (s ?? 0), 0);
-      const totalBytes = slicedStartChunk.length + laterBytes;
-      res.status(200);
-      res.set("Content-Length", String(totalBytes));
-
-      if (slicedStartChunk.length > 0) {
-        res.write(slicedStartChunk);
+      if (startChunkData) {
+        firstPart = sliceAdtsByTime(startChunkData, seekOffsetInsideChunk).buffer;
       }
-      for (let i = startChunkIndex + 1; i < chunks.length; i++) {
-        const chunkData = await getCachedChunk(podcastId, episodeId, i);
-        if (chunkData) res.write(chunkData);
-      }
-      res.end();
-      void finalizeEpisodeAudio(podcastId, episodeId);
-      return;
+    } else {
+      firstPart = (await getCachedChunk(podcastId, episodeId, 0)) ?? Buffer.alloc(0);
     }
 
-    // Fresh 200 OK request for all cached chunks
-    res.status(200);
-    res.set("Content-Length", String(totalAacBytes));
-    for (let i = 0; i < chunks.length; i++) {
+    const laterBytes = cachedSizes
+      .slice(startChunkIndex + 1)
+      .reduce((sum, s) => sum + (s ?? 0), 0);
+    const streamBytes = firstPart.length + laterBytes;
+
+    const skipBytes = seek.rangeStart ?? 0;
+    if (seek.rangeStart !== null) {
+      if (seek.rangeStart >= streamBytes) {
+        res.set("Content-Range", `bytes */${streamBytes}`);
+        throw new HttpError(416, "Range Not Satisfiable");
+      }
+      res.status(206);
+      res.set("Content-Range", `bytes ${skipBytes}-${streamBytes - 1}/${streamBytes}`);
+    } else {
+      res.status(200);
+    }
+    res.set("Content-Length", String(streamBytes - skipBytes));
+
+    const write = createByteSkipper(skipBytes, (data) => res.write(data));
+    write(firstPart);
+    for (let i = startChunkIndex + 1; i < chunks.length; i++) {
       const chunkData = await getCachedChunk(podcastId, episodeId, i);
-      if (chunkData) res.write(chunkData);
+      if (chunkData) write(chunkData);
     }
     res.end();
     void finalizeEpisodeAudio(podcastId, episodeId);
@@ -287,7 +333,15 @@ export async function streamEpisodeAudio(
   if (typeof res.removeHeader === "function") {
     res.removeHeader("Content-Length");
   }
-  res.status(200);
+  // As in Path 1, `Range: bytes=N-` is N bytes into this URL's own stream
+  // (from `?t=` if given), so a player retrying a live stream resumes at the
+  // right byte; the skipped bytes are dropped here rather than re-downloaded
+  // and discarded by the client. 206 tells the client we honored the Range (a
+  // 200 would make it skip N bytes itself). No Content-Range: the total isn't
+  // known while chunks are still generating.
+  const rangeSkipBytes = seek.rangeStart ?? 0;
+  res.status(seek.rangeStart !== null ? 206 : 200);
+  const write = createByteSkipper(rangeSkipBytes, (data) => res.write(data));
 
   // Determine starting chunk if ?t=SECONDS was specified
   let startChunkIndex = 0;
@@ -336,9 +390,9 @@ export async function streamEpisodeAudio(
     if (cached) {
       if (index === startChunkIndex && seekOffsetInsideChunk > 0) {
         const { buffer: sliced } = sliceAdtsByTime(cached, seekOffsetInsideChunk);
-        if (!stopped && sliced.length > 0) res.write(sliced);
+        if (!stopped && sliced.length > 0) write(sliced);
       } else {
-        if (!stopped) res.write(cached);
+        if (!stopped) write(cached);
       }
       runningAudioSeconds += getAdtsDurationSeconds(cached);
       continue;
@@ -357,6 +411,7 @@ export async function streamEpisodeAudio(
       chunkTurns,
       voices,
       chunkStartSec,
+      chunks.length,
       (delta) => {
         if (stopped) return;
         if (liveSeekRemaining > 0) {
@@ -367,9 +422,9 @@ export async function streamEpisodeAudio(
           }
           const { buffer: sliced } = sliceAdtsByTime(delta, liveSeekRemaining);
           liveSeekRemaining = 0;
-          if (sliced.length > 0) res.write(sliced);
+          if (sliced.length > 0) write(sliced);
         } else {
-          res.write(delta);
+          write(delta);
         }
       },
     );
@@ -379,9 +434,9 @@ export async function streamEpisodeAudio(
       if (!isLeader && !stopped) {
         if (index === startChunkIndex && seekOffsetInsideChunk > 0) {
           const { buffer: sliced } = sliceAdtsByTime(fullChunk, seekOffsetInsideChunk);
-          if (sliced.length > 0) res.write(sliced);
+          if (sliced.length > 0) write(sliced);
         } else {
-          res.write(fullChunk);
+          write(fullChunk);
         }
       }
       runningAudioSeconds += getAdtsDurationSeconds(fullChunk);
@@ -391,15 +446,23 @@ export async function streamEpisodeAudio(
     }
   }
 
+  // If that was the last chunk, flag completion *before* ending the response, so
+  // a client that sees this stream end can already tell it's the real end and
+  // not a close at the live generation edge. Skipped if the client already left.
+  const finalCachedSizes = await Promise.all(
+    chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
+  );
+  const nowComplete = chunks.length > 0 && finalCachedSizes.every((s) => s !== null);
+  if (nowComplete && !stopped) {
+    await recordAudioCompletion(podcastId, episodeId, chunks.length);
+  }
+
   if (!res.destroyed && !res.writableEnded) {
     res.end();
   }
 
   // Trigger voice cleanup if all chunks are now ready
-  const finalCachedSizes = await Promise.all(
-    chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
-  );
-  if (finalCachedSizes.every((s) => s !== null)) {
+  if (nowComplete) {
     void finalizeEpisodeAudio(podcastId, episodeId);
   }
 }

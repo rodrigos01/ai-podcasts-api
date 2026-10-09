@@ -42,6 +42,26 @@ export async function stream(req: Request, res: Response) {
   const rangeStart = parseRangeStart(req.headers.range);
   const startTime = parseStartTime(req.query);
 
+  // Diagnostics for dropped/cut-short streams: a client that sees the response
+  // end early (proxy/Cloud Run timeout, network drop) can't tell us why, so log
+  // how each stream began and how it ended.
+  const startedAt = Date.now();
+  let bytesSent = 0;
+  const originalWrite = res.write.bind(res) as (chunk: unknown, ...rest: unknown[]) => boolean;
+  res.write = ((chunk: unknown, ...rest: unknown[]) => {
+    if (Buffer.isBuffer(chunk)) bytesSent += chunk.length;
+    return originalWrite(chunk, ...rest);
+  }) as typeof res.write;
+  console.log(
+    `audio stream start ${podcastId}/${episodeId} range=${req.headers.range ?? "-"} t=${startTime ?? "-"}`,
+  );
+  res.on("close", () => {
+    console.log(
+      `audio stream close ${podcastId}/${episodeId} status=${res.statusCode} ` +
+        `completed=${res.writableFinished} bytes=${bytesSent} elapsedMs=${Date.now() - startedAt}`,
+    );
+  });
+
   await streamEpisodeAudio(podcastId, episodeId, episode, podcast, res, {
     rangeStart,
     startTimeSeconds: startTime,
