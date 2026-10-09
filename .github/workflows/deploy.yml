@@ -1,8 +1,8 @@
 name: Deploy to Cloud Run
 
 # Deploys on every push to main (production: ai-podcast-api, unprefixed) or
-# claude-develop (the shared dev service: claude-develop-ai-podcast-api).
-# Agents should push to claude-develop to get a live URL rather than running
+# staging (the shared testing service: staging-ai-podcast-api).
+# Agents should push to staging to get a live URL rather than running
 # `npm run deploy` interactively. Mirrors rodrigos01/ai-audio-book's
 # .github/workflows/deploy.yml -- same GCP project, same Workload Identity
 # Federation pool/provider and deploying service account -- minus the
@@ -15,7 +15,7 @@ on:
   push:
     branches:
       - main
-      - claude-develop
+      - staging
   workflow_dispatch: {}
 
 # Two overlapping `gcloud run deploy` calls against the same service can
