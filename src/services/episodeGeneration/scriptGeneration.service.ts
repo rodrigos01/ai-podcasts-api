@@ -8,6 +8,7 @@ import {
 } from "../../llm/prompts/scriptGeneration.prompts";
 import { countWords } from "../../utils/wordCount";
 import { parseScriptTurns, type ScriptTurn } from "../../utils/scriptText";
+import { isGenerationSuperseded } from "../../utils/generationLease";
 import { buildTranscript } from "./transcriptBuilder";
 import { speakerLabel, type Cast } from "./speakerSelection";
 
@@ -258,6 +259,37 @@ export async function consumeScriptStream(
 }
 
 /**
+ * A script that was already partly written when this run started: the
+ * transcript persisted by a run that stalled (its instance recycled or
+ * throttled mid-generation), to be finished rather than rewritten.
+ * `exposed` is whether TTS chunks were already sealed from it — i.e. whether a
+ * listener may be on it — which decides, as for any run, whether running out
+ * of attempts salvages a shorter episode or fails it.
+ */
+export interface ScriptSeed {
+  transcript: string;
+  exposed: boolean;
+}
+
+/**
+ * The turns of a persisted transcript, and which of the two speakers have
+ * spoken in it. Persisted transcripts are always the canonical output of
+ * `buildTranscript` over already-validated turns, so they parse back exactly.
+ */
+export function seedFromTranscript(
+  transcript: string,
+  labelA: string,
+  labelB: string,
+): { turns: ScriptTurn[]; seenA: boolean; seenB: boolean } {
+  const turns = parseScriptTurns(transcript);
+  return {
+    turns,
+    seenA: turns.some((turn) => turn.speaker === labelA),
+    seenB: turns.some((turn) => turn.speaker === labelB),
+  };
+}
+
+/**
  * Replaces the old per-turn `runConversation` loop (conversationLoop.ts) with
  * a single call that writes the whole episode's script itself — see
  * AGENTS.md's migration note for why. Streams the call (`generatePlainTextStream`)
@@ -278,22 +310,34 @@ export async function consumeScriptStream(
  * version did; if something *was* exposed, it instead returns the
  * best-known-good transcript as a shorter-than-targeted but complete,
  * playable episode (`incomplete: true`) rather than cutting a listener off.
+ *
+ * With a `seed`, the run starts from the transcript a stalled run left behind
+ * instead of an empty script: its first attempt is already a continuation.
  */
 export async function generateEpisodeScript(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
   onProgress?: (progress: ScriptStreamProgress) => Promise<boolean>,
+  seed?: ScriptSeed,
 ): Promise<EpisodeScript> {
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
 
-  let turns: ScriptTurn[] = [];
-  let seenA = false;
-  let seenB = false;
-  let exposed = false;
+  const seeded = seed ? seedFromTranscript(seed.transcript, labelA, labelB) : null;
+  let turns: ScriptTurn[] = seeded?.turns ?? [];
+  let seenA = seeded?.seenA ?? false;
+  let seenB = seeded?.seenB ?? false;
+  let exposed = seed?.exposed ?? false;
   let lastError: unknown;
+
+  // A run that stalled right at the end already has a script as long as it
+  // was going to get; asking the model to "continue" past the target would
+  // only make it ramble.
+  if (seed && seenA && seenB && countWords(seed.transcript) >= wordTarget.max) {
+    return { transcript: seed.transcript, wordCount: countWords(seed.transcript) };
+  }
 
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
     const transcriptSoFar = buildTranscript(turns.map(turnToTranscriptTurn));
@@ -322,6 +366,8 @@ export async function generateEpisodeScript(
       const transcript = buildTranscript(turns.map(turnToTranscriptTurn));
       return { transcript, wordCount: countWords(transcript) };
     }
+    // Another run owns this episode now: stop, don't retry over its progress.
+    if (isGenerationSuperseded(result.error)) throw result.error;
     lastError = result.error;
   }
 

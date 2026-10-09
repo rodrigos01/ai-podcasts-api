@@ -11,16 +11,13 @@ import {
 import { MAX_HISTORY_EPISODES } from "../constants/episodeHistory";
 import { getSource } from "../data/source.repository";
 import { requireUserId } from "../middleware/requireAuth";
-import { episodeCreateRequestSchema, episodeUpdateSchema } from "../schemas/episode.schema";
+import { type Episode, episodeCreateRequestSchema, episodeUpdateSchema } from "../schemas/episode.schema";
 import {
   type EpisodeWizardSuggestionsResponse,
   episodeWizardOptionsRequestSchema,
   episodeWizardReviseRequestSchema,
 } from "../schemas/wizard.schema";
-import {
-  runEpisodeGeneration,
-  runEpisodeGenerationSequence,
-} from "../services/episodeGeneration/orchestrator";
+import { ensureGenerationRunning, runEpisodeGeneration } from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
 import { prepareHostsForUpdate, withVoicePrompt } from "../utils/voicePrompt";
 import { requireOwnedPodcast } from "../services/podcastAccess";
@@ -96,7 +93,7 @@ export async function create(req: Request, res: Response) {
   const input = episodeCreateRequestSchema.parse(req.body);
   const picker = await createVoicePicker(ownerId, input.sessionId);
 
-  const episodes = [];
+  const episodes: Episode[] = [];
   const decisions = [];
   for (const episodeInput of input.episodes) {
     const prepared = episodeInput.guests.map(withVoicePrompt);
@@ -109,20 +106,24 @@ export async function create(req: Request, res: Response) {
     }));
     decisions.push(...guestDecisions);
     episodes.push(
-      await createEpisode(podcastId, { ...episodeInput, guests }, guestDecisions.map((d) => d.fields)),
+      await createEpisode(
+        podcastId,
+        { ...episodeInput, guests },
+        guestDecisions.map((d) => d.fields),
+        // Each later part starts after the one before it — see below.
+        episodes.at(-1)?.id,
+      ),
     );
   }
 
-  // Every episode is created and returned immediately; generation itself
-  // runs sequentially in the background (part 2, if any, only actually
-  // starts once part 1 is "ready") — see orchestrator.ts's
-  // runEpisodeGenerationSequence for why. The caller doesn't do anything
-  // differently for a split vs. a single episode.
-  void runEpisodeGenerationSequence(
-    podcastId,
-    episodes.map((episode) => episode.id),
-  ).catch((err: unknown) => {
-    console.error(`Episode generation sequence failed for ${podcastId}:`, err);
+  // Every episode is created and returned immediately, but only the first
+  // starts generating now. Each part starts the next when it finishes (part 2
+  // continues from part 1's transcript, which only exists once part 1 is
+  // done) — see orchestrator.ts's startDependents. The caller doesn't do
+  // anything differently for a split vs. a single episode.
+  const [first] = episodes;
+  void runEpisodeGeneration(podcastId, first!.id).catch((err: unknown) => {
+    console.error(`Episode generation failed for ${podcastId}/${first!.id}:`, err);
   });
 
   res.status(202).json({ episodes: episodes.map((episode) => presentEpisode(publicOrigin(req), episode)) });
@@ -149,6 +150,9 @@ export async function status(req: Request, res: Response) {
   await requireOwnedPodcast(podcastId, requireUserId(req));
   const episode = await getEpisode(podcastId, requireParam(req.params, "episodeId"));
   if (!episode) throw HttpError.notFound("Episode not found");
+  // Clients poll this while an episode generates, which makes it the natural
+  // place to notice a generation that stalled and resume it.
+  void ensureGenerationRunning(podcastId, episode);
   res.json({
     status: episode.status,
     progress: episode.progress,

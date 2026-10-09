@@ -33,10 +33,10 @@ export const episodeCreateSchema = z
 // Confirming an episode always takes the whole wizard suggestion at once —
 // 1 entry for a single episode, or 2 for a confirmed split — never a bare
 // single-episode object. The server creates all of them immediately and
-// generates them sequentially in the background (see
-// episodeGeneration/orchestrator.ts's runEpisodeGenerationSequence); the
-// sequencing is transparent to the caller, who just gets back every created
-// episode in one response and polls each one's own status as usual.
+// generates them sequentially in the background (each part starts the next
+// when it finishes — see episodeGeneration/orchestrator.ts's startDependents);
+// the sequencing is transparent to the caller, who just gets back every
+// created episode in one response and polls each one's own status as usual.
 export const episodeCreateRequestSchema = z.object({
   episodes: z.array(episodeCreateSchema).min(1).max(2),
   // The voice-design session the wizard handed out (see voices.controller.ts's
@@ -107,6 +107,19 @@ export const episodeSchema = z.object({
   audioEpoch: z.number().int().nonnegative().optional(),
   audioComplete: z.boolean().optional(),
   audioDurationSeconds: z.number().nonnegative().nullable().optional(),
+  // Set only on the later part(s) of a multi-episode suggestion confirmed in
+  // one request: generation of this episode starts when the episode with this
+  // id is "ready" (orchestrator.ts chains it on, and ensureGenerationRunning
+  // picks it up if that chain was lost). A scheduling dependency, not a
+  // "series"/"partOf" relationship — nothing else reads it.
+  startsAfterEpisodeId: z.string().min(1).optional(),
+  // The run currently generating this script, if any (see
+  // utils/generationLease.ts). Null/absent: nobody is — which, for an episode
+  // that's meant to be generating, means it stalled and can be resumed.
+  generationLease: z
+    .object({ owner: z.string().min(1), heartbeatAt: z.number() })
+    .nullable()
+    .optional(),
   error: z.string().nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),
