@@ -20,6 +20,7 @@ vi.mock("../src/data/episode.repository", () => ({
   bumpGeneratedAudioSeconds: vi.fn(),
   markAudioComplete: vi.fn(),
   getAudioEpoch: vi.fn().mockResolvedValue(0),
+  getEpisode: vi.fn(),
 }));
 
 vi.mock("../src/services/episodeGeneration/audioFinalize.service", () => ({
@@ -151,7 +152,7 @@ const mockEpisode: Episode = {
   participantHostIds: ["h1", "h2"],
   guests: [],
   productionNotes: "Notes",
-  status: "streamable",
+  status: "ready",
   progress: null,
   transcript: "Alice: Line 1\n\nBob: Line 2",
   ttsChunks: [
@@ -624,4 +625,117 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
     });
   });
 
+  describe("still-generating episode (progressive sealing)", () => {
+    // Only chunk 0 has been sealed so far; the orchestrator is still
+    // writing the rest of the script. A listener who started here should
+    // ride straight into chunk 1 once it's sealed, rather than the
+    // response ending the moment chunk 0 (the only chunk known when the
+    // request started) finishes.
+    const streamableEpisode: Episode = {
+      ...mockEpisode,
+      status: "streamable",
+      ttsChunks: [mockEpisode.ttsChunks![0]!],
+    };
+
+    it("polls for newly-sealed chunks instead of ending once the known chunk list is exhausted", async () => {
+      const chunk0Aac = Buffer.alloc(8000, 1);
+      const chunk1Aac = Buffer.alloc(8000, 2);
+
+      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => {
+        return i === 0 ? chunk0Aac.length : null;
+      });
+      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => {
+        return i === 0 ? chunk0Aac : null;
+      });
+      vi.mocked(episodeRepo.getEpisode).mockResolvedValue({
+        ...mockEpisode,
+        status: "ready",
+        ttsChunks: mockEpisode.ttsChunks,
+      });
+      vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+      vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+        onDelta(chunk1Aac);
+      });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, streamableEpisode.id, streamableEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      expect(episodeRepo.getEpisode).toHaveBeenCalledWith(mockPodcast.id, streamableEpisode.id);
+      expect(res.written).toHaveLength(2);
+      expect(res.written[0]).toEqual(chunk0Aac);
+      // chunk1 goes through the mock AAC encoder (see createAacStreamEncoder
+      // above), so only its length is predictable, not its exact bytes.
+      expect(res.written[1]?.length).toBe(Math.floor(chunk1Aac.length / 6));
+      expect(res.writableEnded).toBe(true);
+    });
+
+    it("stops polling once a refetch reports the episode has failed", async () => {
+      const chunk0Aac = Buffer.alloc(8000, 1);
+      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => {
+        return i === 0 ? chunk0Aac.length : null;
+      });
+      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => {
+        return i === 0 ? chunk0Aac : null;
+      });
+      vi.mocked(episodeRepo.getEpisode).mockResolvedValue({
+        ...mockEpisode,
+        status: "failed",
+        ttsChunks: streamableEpisode.ttsChunks,
+      });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, streamableEpisode.id, streamableEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      expect(res.written).toHaveLength(1);
+      expect(res.written[0]).toEqual(chunk0Aac);
+      expect(res.writableEnded).toBe(true);
+      expect(ttsClient.streamEpisodeSynthesis).not.toHaveBeenCalled();
+    });
+
+    it("does not serve a still-generating episode as a fully-cached static resource, even when every known chunk is already cached", async () => {
+      const chunk0Aac = Buffer.alloc(8000, 1);
+      vi.mocked(audioCache.getCachedChunkSize).mockResolvedValue(chunk0Aac.length);
+      vi.mocked(audioCache.getCachedChunk).mockResolvedValue(chunk0Aac);
+      // Next poll reports the episode is done after all — no more chunks.
+      vi.mocked(episodeRepo.getEpisode).mockResolvedValue({
+        ...mockEpisode,
+        status: "ready",
+        ttsChunks: streamableEpisode.ttsChunks,
+      });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, streamableEpisode.id, streamableEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      // The all-cached fast path sets a Content-Length and never polls;
+      // taking the live path instead means no Content-Length and a real
+      // getEpisode call to find out whether more chunks are coming.
+      expect(res.headers["content-length"]).toBeUndefined();
+      expect(episodeRepo.getEpisode).toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a still-generating episode with no sealed chunks yet", async () => {
+    const generatingEpisode: Episode = {
+      ...mockEpisode,
+      status: "generating",
+      ttsChunks: null,
+    };
+    const res = createMockResponse();
+
+    await expect(
+      streamEpisodeAudio(mockPodcast.id, generatingEpisode.id, generatingEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      }),
+    ).rejects.toThrow(/not ready yet/);
+  });
 });

@@ -18,7 +18,7 @@ export interface WordTarget {
   max: number;
 }
 
-function sourceBlock(sources: Source[]): string {
+export function sourceBlock(sources: Source[]): string {
   if (sources.length === 0) return "(no source material was provided for this episode)";
   return sources.map((s) => `### ${s.title}\n${s.contents}`).join("\n\n");
 }
@@ -87,6 +87,51 @@ export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationCon
 ${draft}${guestBlock}
 
 The script *must* have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
+
+Sources:
+${sourceBlock(ctx.sources)}`;
+}
+
+/**
+ * Sibling to `buildScriptGenerationPrompt`, used when a generation attempt
+ * has to pick back up after a failure (a bad speaker label, a dropped
+ * stream) instead of restarting — see scriptGeneration.service.ts's
+ * `generateEpisodeScript` and AGENTS.md's continuation-based recovery
+ * design: discarding already-validated turns and starting over would
+ * regenerate different content for any TTS chunk already sealed from them,
+ * which a listener may already be partway through. Interactions calls are
+ * stateless (`store: false`, no `previous_interaction_id` chaining — see
+ * geminiClient.ts), so this is a brand-new call that has to restate
+ * everything the model needs (sources, draft, guest bio, target) exactly
+ * like a fresh start, plus the transcript written so far and an explicit
+ * instruction to continue it rather than restart it.
+ */
+export function buildScriptContinuationPrompt(
+  cast: Cast,
+  ctx: ScriptGenerationContext,
+  wordTarget: WordTarget,
+  transcriptSoFar: string,
+  wordCountSoFar: number,
+): string {
+  const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
+  const guest = cast.speakers.find((s) => !s.isHost);
+  const guestBlock = guest
+    ? `\n\nThe guest for this episode is ${guest.name} and here's their bio: ${guest.persona}`
+    : "";
+  const draft = `Title: ${ctx.episode.title}\nTopics: ${ctx.episode.topics}${
+    ctx.episode.productionNotes ? `\nProduction notes: ${ctx.episode.productionNotes}` : ""
+  }`;
+
+  return `You already started writing the script for an episode based on the sources below, following this draft:
+${draft}${guestBlock}
+
+The script *must* have between ${wordTarget.min}-${wordTarget.max} words total (for a ~${minutes}m episode). \
+You've written ${wordCountSoFar} words so far.
+
+Here is the script as written so far — do not repeat, rewrite, or re-greet; continue it naturally from exactly \
+where it leaves off, in the same "Name: line" / optional "Style:" format:
+
+${transcriptSoFar}
 
 Sources:
 ${sourceBlock(ctx.sources)}`;
