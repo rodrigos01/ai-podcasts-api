@@ -36,6 +36,17 @@ cd "$(dirname "$0")/.."
 # Cloud Run request timeout would cut every live stream after ~5 minutes —
 # the player then sees a clean end-of-stream. 3600s is Cloud Run's maximum;
 # a client reconnect (Range/?t=) picks up from there for anything longer.
+#
+# --no-cpu-throttling: episode generation runs fire-and-forget, detached from
+# the request that kicked it off (confirm returns 202 immediately — see
+# AGENTS.md's async job pattern). Cloud Run's default ("CPU only allocated
+# while handling a request") throttles that background work to a crawl the
+# moment the triggering request's response is sent, unless another request
+# happens to be active on the same instance — confirmed live: streaming
+# generation reliably completed with a listener attached (whose /stream
+# request kept the instance's CPU allocated) and stalled without one.
+# Always-allocated CPU costs more (billed for the instance's whole lifetime,
+# not just request-processing time) but background generation needs it.
 
 ENV_FILE=".env"
 SERVICE_NAME="${SERVICE_NAME:-ai-podcast-api}"
@@ -99,4 +110,5 @@ gcloud run deploy "$SERVICE_NAME" \
   --region "$REGION" \
   --allow-unauthenticated \
   --timeout=3600 \
+  --no-cpu-throttling \
   --env-vars-file "$TMP_ENV_YAML"

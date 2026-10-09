@@ -83,6 +83,16 @@ jobs:
 
       # --timeout 3600: /audio/stream holds one request open while a listener plays a
       # still-generating episode; Cloud Run's 300s default would cut it after ~5 minutes.
+      # --no-cpu-throttling: episode generation runs fire-and-forget, detached from the
+      # request that kicked it off (confirm returns 202 immediately -- see AGENTS.md's
+      # async job pattern) -- Cloud Run's default "CPU only allocated while handling a
+      # request" throttles that background work to a crawl the moment the triggering
+      # request's response is sent, unless another request happens to be active on the
+      # same instance (e.g. a listener's /stream call keeps the whole instance's CPU
+      # allocated). Confirmed live: streaming generation reliably completed with a
+      # listener attached and stalled/never finished without one. Always-allocated CPU
+      # removes that dependency; it costs more (CPU is billed for the instance's whole
+      # lifetime, not just request-processing time) but background generation needs it.
       - name: Deploy
         run: |
           gcloud run deploy "${{ steps.meta.outputs.service }}" \
@@ -92,6 +102,7 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --timeout 3600 \
+            --no-cpu-throttling \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
             --update-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET},FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE_ID}" \
             --remove-secrets "GEMINI_API_KEY"
