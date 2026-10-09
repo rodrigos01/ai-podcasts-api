@@ -3,6 +3,7 @@ import { getEpisode } from "../data/episode.repository";
 import { requireUserId } from "../middleware/requireAuth";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { streamEpisodeAudio } from "../services/audio.service";
+import { ensureGenerationRunning } from "../services/episodeGeneration/orchestrator";
 import { clearEpisodeAudio } from "../services/audioClear.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
@@ -39,6 +40,9 @@ export async function stream(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   const episodeId = requireParam(req.params, "episodeId");
   const { podcast, episode } = await loadContext(podcastId, episodeId, requireUserId(req));
+
+  // A listener on an episode whose generation stalled brings it back.
+  void ensureGenerationRunning(podcastId, episode);
 
   const rangeStart = parseRangeStart(req.headers.range);
   const startTime = parseStartTime(req.query);

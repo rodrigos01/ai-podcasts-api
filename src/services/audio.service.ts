@@ -13,6 +13,7 @@ import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
 import { hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
 import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service";
+import { ensureGenerationRunning } from "./episodeGeneration/orchestrator";
 import { chunkTranscript, getChunkTurns } from "./episodeGeneration/chunker";
 import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
@@ -470,6 +471,9 @@ export async function streamEpisodeAudio(
       const fresh = await getEpisode(podcastId, episodeId);
       if (!fresh) break;
       currentEpisode = fresh;
+      // The generation this listener is waiting on may have died (its
+      // instance recycled): resume it rather than wait on it forever.
+      void ensureGenerationRunning(podcastId, fresh);
       chunks =
         currentEpisode.ttsChunks && currentEpisode.ttsChunks.length > 0
           ? currentEpisode.ttsChunks

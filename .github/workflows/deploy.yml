@@ -83,6 +83,11 @@ jobs:
 
       # --timeout 3600: /audio/stream holds one request open while a listener plays a
       # still-generating episode; Cloud Run's 300s default would cut it after ~5 minutes.
+      # --cpu-throttling: the default, stated so it can't drift -- `gcloud run deploy`
+      # keeps unspecified settings from the previous revision, so omitting it would not
+      # undo a service someone once switched to always-allocated CPU. Episode generation
+      # is built to survive the instance being throttled or recycled (it resumes from its
+      # persisted transcript -- see AGENTS.md), so the service keeps scale-to-zero.
       - name: Deploy
         run: |
           gcloud run deploy "${{ steps.meta.outputs.service }}" \
@@ -92,6 +97,7 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --timeout 3600 \
+            --cpu-throttling \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
             --update-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET},FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE_ID}" \
             --remove-secrets "GEMINI_API_KEY"

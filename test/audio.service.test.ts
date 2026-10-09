@@ -23,6 +23,10 @@ vi.mock("../src/data/episode.repository", () => ({
   getEpisode: vi.fn(),
 }));
 
+vi.mock("../src/services/episodeGeneration/orchestrator", () => ({
+  ensureGenerationRunning: vi.fn(),
+}));
+
 vi.mock("../src/services/episodeGeneration/audioFinalize.service", () => ({
   finalizeEpisodeAudio: vi.fn(),
 }));
@@ -70,6 +74,7 @@ vi.mock("../src/utils/aac", () => ({
 import * as audioCache from "../src/storage/audioCache.repository";
 import * as audioLock from "../src/data/audioLock.repository";
 import * as episodeRepo from "../src/data/episode.repository";
+import * as orchestrator from "../src/services/episodeGeneration/orchestrator";
 import * as ttsClient from "../src/llm/ttsClient";
 import * as voiceResolution from "../src/services/episodeGeneration/voiceResolution.service";
 import { streamEpisodeAudio } from "../src/services/audio.service";
@@ -670,6 +675,24 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       // above), so only its length is predictable, not its exact bytes.
       expect(res.written[1]?.length).toBe(Math.floor(chunk1Aac.length / 6));
       expect(res.writableEnded).toBe(true);
+    });
+
+    it("asks for a stalled generation to be resumed each time it checks for more chunks", async () => {
+      const chunk0Aac = Buffer.alloc(8000, 1);
+      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac.length : null));
+      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac : null));
+      const refetched: Episode = { ...streamableEpisode, status: "failed" };
+      vi.mocked(episodeRepo.getEpisode).mockResolvedValue(refetched);
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, streamableEpisode.id, streamableEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      // The refetched doc is what gets checked: it's the current state of the
+      // episode, not the snapshot the request started from.
+      expect(orchestrator.ensureGenerationRunning).toHaveBeenCalledWith(mockPodcast.id, refetched);
     });
 
     it("stops polling once a refetch reports the episode has failed", async () => {
