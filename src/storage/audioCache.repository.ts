@@ -9,11 +9,19 @@ export async function getCachedChunk(
   episodeId: string,
   chunkIndex: number,
 ): Promise<Buffer | null> {
-  const file = storageBucket.file(chunkPath(podcastId, episodeId, chunkIndex));
-  const [exists] = await file.exists();
-  if (!exists) return null;
-  const [contents] = await file.download();
-  return contents;
+  // Not `file.download()`: the Storage SDK's stream-based download (teeny-request's PassThrough +
+  // pipeline) attaches 11+ listeners to one stream per call, so every download logged a
+  // MaxListenersExceededWarning. A plain authenticated GET of the media endpoint returns the same
+  // bytes with no stream, and its 404 doubles as the existence check (one round trip, not two).
+  const url =
+    `https://storage.googleapis.com/storage/v1/b/${storageBucket.name}/o/` +
+    `${encodeURIComponent(chunkPath(podcastId, episodeId, chunkIndex))}?alt=media`;
+  const res = await storageBucket.storage.authClient.request<ArrayBuffer>({
+    url,
+    responseType: "arraybuffer",
+    validateStatus: (status) => status === 200 || status === 404,
+  });
+  return res.status === 404 ? null : Buffer.from(res.data);
 }
 
 /** Cheap size check (no download) — used to compute byte offsets across chunks for Range requests. */
