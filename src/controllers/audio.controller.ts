@@ -7,7 +7,8 @@ import { ensureGenerationRunning } from "../services/episodeGeneration/orchestra
 import { clearEpisodeAudio } from "../services/audioClear.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
-import { episodeAudioUrl } from "../utils/audioUrl";
+import { env } from "../config/env";
+import { signedEpisodeAudioUrl, verifyAudioSignature } from "../utils/audioUrl";
 import { publicOrigin } from "../utils/voicePreview";
 import { getPodcast } from "../data/podcast.repository";
 import type { Episode } from "../schemas/episode.schema";
@@ -84,22 +85,28 @@ export async function stream(req: Request, res: Response) {
   await serveAudio(req, res, podcast, episode);
 }
 
-/** Authenticated: hands the caller the URL to play (and to send to a cast device). */
+/**
+ * Authenticated: hands the caller a signed, expiring URL to play (and to send
+ * to a cast device). Returns `{ url, expiresAt }` (unix seconds).
+ */
 export async function url(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   const episodeId = requireParam(req.params, "episodeId");
   await loadContext(podcastId, episodeId, requireUserId(req));
-  res.json({ url: episodeAudioUrl(publicOrigin(req), podcastId, episodeId) });
+  res.json(signedEpisodeAudioUrl(publicOrigin(req), podcastId, episodeId, env.AUDIO_URL_SECRET));
 }
 
 /**
- * Unauthenticated, for players that can't send credentials (a cast receiver
- * fetches this itself). Same stream as `/audio/stream`, so the episode id is
- * the only thing guarding it for now.
+ * For players that can't send credentials (a cast receiver fetches this
+ * itself): authorized by the `exp`/`sig` query params of a URL from `url`
+ * above instead of a Firebase token. Same stream as `/audio/stream`.
  */
 export async function publicAudio(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   const episodeId = requireParam(req.params, "episodeId");
+  if (!verifyAudioSignature(env.AUDIO_URL_SECRET, podcastId, episodeId, req.query.exp, req.query.sig)) {
+    throw new HttpError(403, "Invalid or expired audio URL");
+  }
   const podcast = await getPodcast(podcastId);
   const episode = podcast ? await getEpisode(podcastId, episodeId) : null;
   if (!podcast || !episode) throw HttpError.notFound("Episode not found");

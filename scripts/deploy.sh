@@ -20,6 +20,9 @@ cd "$(dirname "$0")/.."
 #   - FIREBASE_WEB_API_KEY: not read by src/config/env.ts at all — only
 #     ever used for manual local testing (minting ID tokens from a
 #     terminal), not by the running server.
+#   - AUDIO_URL_SECRET: a real secret, so it's mounted from Secret Manager
+#     (`audio-url-signing-key`) via --update-secrets below instead of being
+#     forwarded as a plain env var.
 #
 # The remaining values (FIREBASE_WEB_API_KEY excluded above, project id,
 # storage bucket, Firestore database ids) are passed as plain Cloud Run env
@@ -44,7 +47,7 @@ SERVICE_NAME="${SERVICE_NAME:-ai-podcast-api}"
 # central single region for the Cloud Run service rather than guessing;
 # override with REGION= if you want somewhere else.
 REGION="${REGION:-us-central1}"
-EXCLUDED_KEYS="PORT FIREBASE_SERVICE_ACCOUNT_PATH FIREBASE_WEB_API_KEY"
+EXCLUDED_KEYS="PORT FIREBASE_SERVICE_ACCOUNT_PATH FIREBASE_WEB_API_KEY AUDIO_URL_SECRET"
 REQUIRED_KEYS="FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET"
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -99,4 +102,5 @@ gcloud run deploy "$SERVICE_NAME" \
   --region "$REGION" \
   --allow-unauthenticated \
   --timeout=3600 \
-  --env-vars-file "$TMP_ENV_YAML"
+  --env-vars-file "$TMP_ENV_YAML" \
+  --update-secrets "AUDIO_URL_SECRET=audio-url-signing-key:latest"

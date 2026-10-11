@@ -25,6 +25,10 @@ const envSchema = z.object({
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1).optional(),
   FIREBASE_STORAGE_BUCKET: z.string().min(1, "FIREBASE_STORAGE_BUCKET is required"),
   FIRESTORE_DATABASE_ID: z.string().min(1).default("podcasts"),
+  // HMAC key for the signed public audio URLs (utils/audioUrl.ts). In a
+  // deployed service it's mounted from the `audio-url-signing-key` Secret
+  // Manager secret (see deploy.yml); locally, any random 32+ char string.
+  AUDIO_URL_SECRET: z.string().min(32, "AUDIO_URL_SECRET must be at least 32 characters"),
 });
 
 const parsed = envSchema.safeParse(process.env);
