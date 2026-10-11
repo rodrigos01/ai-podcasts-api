@@ -100,6 +100,7 @@ jobs:
             --cpu-throttling \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
             --update-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET},FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE_ID}" \
-            --remove-secrets "GEMINI_API_KEY"
+            --remove-secrets "GEMINI_API_KEY" \
+            --update-secrets "AUDIO_URL_SECRET=audio-url-signing-key:latest"
           url=$(gcloud run services describe "${{ steps.meta.outputs.service }}" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')
           echo "Deployed ${{ steps.meta.outputs.service }}: $url" >> "$GITHUB_STEP_SUMMARY"
