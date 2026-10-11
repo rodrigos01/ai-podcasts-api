@@ -119,6 +119,10 @@ Early testing (on the old per-turn, two-independent-agent pipeline) found that g
 
 Cache layout in Storage: `podcasts/{podcastId}/episodes/{episodeId}/audio/chunk-{index}.aac` — each one standalone and independently playable (no shared container to stitch), meant to expire after 90 days.
 
+### Public audio URL for casting (2026-10-11, test infrastructure)
+
+`GET /podcasts/:podcastId/episodes/:episodeId/audio/url` (authenticated, owner-checked) returns `{ url }` — the absolute, stable `.../podcasts/:podcastId/episodes/:episodeId/audio` (`utils/audioUrl.ts`). That route is **deliberately unauthenticated**: it's registered in `app.ts` *before* the `requireAuth`-guarded `/podcasts` mount, loads the podcast/episode without an ownership check, and serves through the same `streamEpisodeAudio` as `/audio/stream` (shared `serveAudio` in `audio.controller.ts`). Clients fetch the URL once and use it for both their own player and cast devices. `middleware/castCors.ts` adds open CORS (`*`, Range allowed, `Content-Range`/`Content-Length` exposed, `OPTIONS` answered) to that one route only, since a Chromecast receiver fetches cross-origin. **For now the podcast and episode ids are the only protection, and anyone with them can trigger billed TTS generation** — this exists to find out whether casting works at all (raw ADTS on the receiver, seek/duration while an episode is still generating). The planned follow-up is an HMAC-signed, expiring version of the same URL; `/audio/stream` and its `?token=` fallback are unchanged.
+
 ## Project structure
 
 ```
