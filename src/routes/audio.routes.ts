@@ -6,3 +6,4 @@ export const audioRouter = Router({ mergeParams: true });
 
 audioRouter.get("/stream", asyncHandler(audioController.stream));
 audioRouter.delete("/", asyncHandler(audioController.clear));
+audioRouter.get("/url", asyncHandler(audioController.url));

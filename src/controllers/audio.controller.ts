@@ -7,6 +7,11 @@ import { ensureGenerationRunning } from "../services/episodeGeneration/orchestra
 import { clearEpisodeAudio } from "../services/audioClear.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
+import { episodeAudioUrl } from "../utils/audioUrl";
+import { publicOrigin } from "../utils/voicePreview";
+import { getPodcast } from "../data/podcast.repository";
+import type { Episode } from "../schemas/episode.schema";
+import type { Podcast } from "../schemas/podcast.schema";
 
 async function loadContext(podcastId: string, episodeId: string, userId: string) {
   const podcast = await requireOwnedPodcast(podcastId, userId);
@@ -36,10 +41,9 @@ function parseStartTime(query: Request["query"]): number | null {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
 }
 
-export async function stream(req: Request, res: Response) {
-  const podcastId = requireParam(req.params, "podcastId");
-  const episodeId = requireParam(req.params, "episodeId");
-  const { podcast, episode } = await loadContext(podcastId, episodeId, requireUserId(req));
+async function serveAudio(req: Request, res: Response, podcast: Podcast, episode: Episode) {
+  const podcastId = podcast.id;
+  const episodeId = episode.id;
 
   // A listener on an episode whose generation stalled brings it back.
   void ensureGenerationRunning(podcastId, episode);
@@ -71,6 +75,35 @@ export async function stream(req: Request, res: Response) {
     rangeStart,
     startTimeSeconds: startTime,
   });
+}
+
+export async function stream(req: Request, res: Response) {
+  const podcastId = requireParam(req.params, "podcastId");
+  const episodeId = requireParam(req.params, "episodeId");
+  const { podcast, episode } = await loadContext(podcastId, episodeId, requireUserId(req));
+  await serveAudio(req, res, podcast, episode);
+}
+
+/** Authenticated: hands the caller the URL to play (and to send to a cast device). */
+export async function url(req: Request, res: Response) {
+  const podcastId = requireParam(req.params, "podcastId");
+  const episodeId = requireParam(req.params, "episodeId");
+  await loadContext(podcastId, episodeId, requireUserId(req));
+  res.json({ url: episodeAudioUrl(publicOrigin(req), podcastId, episodeId) });
+}
+
+/**
+ * Unauthenticated, for players that can't send credentials (a cast receiver
+ * fetches this itself). Same stream as `/audio/stream`, so the episode id is
+ * the only thing guarding it for now.
+ */
+export async function publicAudio(req: Request, res: Response) {
+  const podcastId = requireParam(req.params, "podcastId");
+  const episodeId = requireParam(req.params, "episodeId");
+  const podcast = await getPodcast(podcastId);
+  const episode = podcast ? await getEpisode(podcastId, episodeId) : null;
+  if (!podcast || !episode) throw HttpError.notFound("Episode not found");
+  await serveAudio(req, res, podcast, episode);
 }
 
 export async function clear(req: Request, res: Response) {
