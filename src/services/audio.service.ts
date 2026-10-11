@@ -286,6 +286,8 @@ function getOrStartChunkGeneration(
  * - Transitions seamlessly from already-cached chunk audio to live-generating audio.
  * - Each chunk is encoded and cached as ADTS AAC, enabling direct concatenation without container overhead.
  */
+const MAX_CONTENT_LENGTH_BYTES = 24 * 1024 * 1024;
+
 export async function streamEpisodeAudio(
   podcastId: string,
   episodeId: string,
@@ -383,7 +385,13 @@ export async function streamEpisodeAudio(
     } else {
       res.status(200);
     }
-    res.set("Content-Length", String(streamBytes - skipBytes));
+    // Cloud Run rejects an HTTP/1 response with a Content-Length over 32 MiB ("Response size was
+    // too large", surfaced as a 500) but streams a chunked one without limit. A long episode
+    // (~64 kbps, so ~30 MiB an hour) can cross it; past the threshold, leave the length off.
+    // Range/Content-Range above still carry the full size, so seeking works either way.
+    if (streamBytes - skipBytes <= MAX_CONTENT_LENGTH_BYTES) {
+      res.set("Content-Length", String(streamBytes - skipBytes));
+    }
 
     const write = createByteSkipper(skipBytes, (data) => res.write(data));
     write(firstPart);
