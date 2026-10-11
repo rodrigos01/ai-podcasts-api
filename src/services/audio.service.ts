@@ -392,7 +392,9 @@ export async function streamEpisodeAudio(
       if (chunkData) write(chunkData);
     }
     res.end();
-    void finalizeEpisodeAudio(podcastId, episodeId);
+    finalizeEpisodeAudio(podcastId, episodeId).catch((err) =>
+      console.error(`Audio finalize failed for ${podcastId}/${episodeId}:`, err),
+    );
     return;
   }
 
@@ -578,6 +580,8 @@ export async function streamEpisodeAudio(
 
   // Trigger voice cleanup if all chunks are now ready
   if (nowComplete) {
-    void finalizeEpisodeAudio(podcastId, episodeId);
+    finalizeEpisodeAudio(podcastId, episodeId).catch((err) =>
+      console.error(`Audio finalize failed for ${podcastId}/${episodeId}:`, err),
+    );
   }
 }

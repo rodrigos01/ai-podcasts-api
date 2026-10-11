@@ -1,4 +1,4 @@
-import { getEpisode } from "../../data/episode.repository";
+import { clearUnpinnedGuestVoices } from "../../data/episode.repository";
 import { cleanupGuestVoice } from "./voiceResolution.service";
 
 /**
@@ -9,7 +9,9 @@ import { cleanupGuestVoice } from "./voiceResolution.service";
  * valid and reusable for a retry.
  */
 export async function finalizeEpisodeAudio(podcastId: string, episodeId: string): Promise<void> {
-  const episode = await getEpisode(podcastId, episodeId);
-  const guest = episode?.guests[0];
-  if (guest) await cleanupGuestVoice(guest);
+  // Forget the stored id in the same step (atomically) as claiming it for deletion: this runs
+  // after every complete playback, and the second one must find nothing left to delete rather
+  // than deleting the already-deleted voice again (a 404 from the Voices API).
+  const guests = await clearUnpinnedGuestVoices(podcastId, episodeId);
+  await Promise.all(guests.map((guest) => cleanupGuestVoice(guest)));
 }

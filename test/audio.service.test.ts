@@ -28,7 +28,7 @@ vi.mock("../src/services/episodeGeneration/orchestrator", () => ({
 }));
 
 vi.mock("../src/services/episodeGeneration/audioFinalize.service", () => ({
-  finalizeEpisodeAudio: vi.fn(),
+  finalizeEpisodeAudio: vi.fn(async () => {}),
 }));
 
 vi.mock("../src/services/episodeGeneration/voiceResolution.service", () => ({
