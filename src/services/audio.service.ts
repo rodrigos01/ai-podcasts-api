@@ -1,13 +1,9 @@
 import type { Response } from "express";
 import { streamEpisodeSynthesis, type TtsVoiceAssignment } from "../llm/ttsClient";
 import {
-  deleteFinalAudio,
   getCachedChunk,
   getCachedChunkSize,
-  getFinalAudioSignedUrl,
-  getFinalAudioSize,
   putCachedChunk,
-  putFinalAudio,
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
 import { bumpGeneratedAudioSeconds, getAudioEpoch, getEpisode, markAudioComplete } from "../data/episode.repository";
@@ -91,12 +87,11 @@ async function resolveCastVoices(
 }
 
 /**
- * Once every chunk is cached the audio is a finished file: consolidates the chunks into the single
- * `final.aac` that /stream redirects to, and records `audioComplete` and the exact duration on the
- * episode so clients can tell "done" from "stream cut short" without inferring it from the stream
- * itself. Cheap while chunks are missing (size lookups only); reads the chunk bodies just once,
- * when the last one lands (or, for an episode finished before consolidation existed, on its first
- * /stream).
+ * Once every chunk is cached the audio is a finished file: records
+ * `audioComplete` and its exact duration on the episode so clients can tell
+ * "done" from "stream cut short" without inferring it from the stream itself.
+ * Cheap while chunks are missing (size lookups only); reads the chunk bodies
+ * (to sum their ADTS durations) just once, when the last one lands.
  */
 async function recordAudioCompletionIfDone(
   podcastId: string,
@@ -110,21 +105,13 @@ async function recordAudioCompletionIfDone(
   if (chunkCount === 0 || sizes.some((s) => s === null)) return;
 
   let totalSeconds = 0;
-  const parts: Buffer[] = [];
   for (let i = 0; i < chunkCount; i++) {
     const data = await getCachedChunk(podcastId, episodeId, i);
     if (!data) return;
     totalSeconds += getAdtsDurationSeconds(data);
-    parts.push(data);
   }
-  // The epoch guards both writes: if the audio was cleared while the chunks were being read, the
-  // files are (being) deleted and neither a consolidated file nor the completion flag may land.
-  if ((await getAudioEpoch(podcastId, episodeId)) !== startEpoch) return;
-  await putFinalAudio(podcastId, episodeId, Buffer.concat(parts));
-  if ((await getAudioEpoch(podcastId, episodeId)) !== startEpoch) {
-    await deleteFinalAudio(podcastId, episodeId);
-    return;
-  }
+  // Guarded by the epoch: if the audio was cleared while the chunks were being read, the files
+  // are (being) deleted and the episode must not be marked complete.
   await markAudioComplete(podcastId, episodeId, totalSeconds, startEpoch);
 }
 
@@ -299,12 +286,6 @@ function getOrStartChunkGeneration(
  * - Transitions seamlessly from already-cached chunk audio to live-generating audio.
  * - Each chunk is encoded and cached as ADTS AAC, enabling direct concatenation without container overhead.
  */
-
-/**
- * Cloud Run rejects a buffered HTTP/1 response over 32 MiB. A finished episode is normally handed
- * to Storage by redirect (see streamEpisodeAudio), so this only matters for the `?t=` resume path
- * that serves bytes itself: past this size it goes out chunked, without a Content-Length.
- */
 const MAX_CONTENT_LENGTH_BYTES = 24 * 1024 * 1024;
 
 export async function streamEpisodeAudio(
@@ -328,27 +309,6 @@ export async function streamEpisodeAudio(
     episode.ttsChunks && episode.ttsChunks.length > 0
       ? episode.ttsChunks
       : chunkTranscript(episode.transcript);
-
-  // A finished episode is one consolidated file in Storage: send the player there with a signed
-  // URL (Range works natively, and no bytes pass through this instance). `?t=` can't be expressed
-  // as a redirect, so those requests keep being served below.
-  if (episode.status === "ready" && !(seek.startTimeSeconds !== null && seek.startTimeSeconds > 0)) {
-    let consolidated = episode.audioComplete === true && (await getFinalAudioSize(podcastId, episodeId)) !== null;
-    if (!consolidated) {
-      // Finished before consolidation existed (or it never landed): build it now from the chunks,
-      // if they are all there. Otherwise fall through to live generation below.
-      await recordAudioCompletion(podcastId, episodeId, chunks.length, startEpoch);
-      consolidated = (await getFinalAudioSize(podcastId, episodeId)) !== null;
-    }
-    if (consolidated) {
-      res.set("Cache-Control", "private, no-store");
-      res.redirect(302, await getFinalAudioSignedUrl(podcastId, episodeId));
-      finalizeEpisodeAudio(podcastId, episodeId).catch((err) =>
-        console.error(`Audio finalize failed for ${podcastId}/${episodeId}:`, err),
-      );
-      return;
-    }
-  }
 
   const cachedSizes = await Promise.all(
     chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),

@@ -24,13 +24,6 @@ export async function getCachedChunk(
   return res.status === 404 ? null : Buffer.from(res.data);
 }
 
-function finalPath(podcastId: string, episodeId: string): string {
-  return `podcasts/${podcastId}/episodes/${episodeId}/audio/final.aac`;
-}
-
-/** How long a signed playback URL stays valid — long enough to pause and resume a long episode. */
-const SIGNED_URL_TTL_MS = 6 * 60 * 60 * 1000;
-
 /** Cheap size check (no download) — used to compute byte offsets across chunks for Range requests. */
 export async function getCachedChunkSize(
   podcastId: string,
@@ -73,45 +66,4 @@ export async function deleteEpisodeAudio(podcastId: string, episodeId: string): 
 export async function deletePodcastAudio(podcastId: string): Promise<void> {
   const prefix = `podcasts/${podcastId}/`;
   await storageBucket.deleteFiles({ prefix });
-}
-
-/**
- * The whole episode as one ADTS AAC file (the finished chunks concatenated — ADTS frames are
- * self-contained, so that is a valid stream). Lets /stream hand playback to Storage with a signed
- * URL instead of proxying the bytes (Cloud Run caps a buffered HTTP/1 response at 32 MiB).
- */
-export async function putFinalAudio(podcastId: string, episodeId: string, aac: Buffer): Promise<void> {
-  await storageBucket.file(finalPath(podcastId, episodeId)).save(aac, {
-    contentType: "audio/aac",
-    metadata: { customTime: new Date().toISOString() },
-  });
-}
-
-export async function getFinalAudioSize(podcastId: string, episodeId: string): Promise<number | null> {
-  try {
-    const [metadata] = await storageBucket.file(finalPath(podcastId, episodeId)).getMetadata();
-    return metadata.size ? Number(metadata.size) : 0;
-  } catch (err) {
-    if ((err as { code?: number }).code === 404) return null;
-    throw err;
-  }
-}
-
-export async function deleteFinalAudio(podcastId: string, episodeId: string): Promise<void> {
-  await storageBucket.file(finalPath(podcastId, episodeId)).delete({ ignoreNotFound: true });
-}
-
-/**
- * A time-limited URL that serves the consolidated file straight from Storage (with Range support).
- * Signing uses the runtime service account: in a deployed environment that needs
- * `iam.serviceAccounts.signBlob` on itself (e.g. roles/iam.serviceAccountTokenCreator).
- */
-export async function getFinalAudioSignedUrl(podcastId: string, episodeId: string): Promise<string> {
-  const [url] = await storageBucket.file(finalPath(podcastId, episodeId)).getSignedUrl({
-    version: "v4",
-    action: "read",
-    expires: Date.now() + SIGNED_URL_TTL_MS,
-    responseType: "audio/aac",
-  });
-  return url;
 }
