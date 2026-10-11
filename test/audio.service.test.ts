@@ -9,10 +9,6 @@ vi.mock("../src/storage/audioCache.repository", () => ({
   getCachedChunk: vi.fn(),
   getCachedChunkSize: vi.fn(),
   putCachedChunk: vi.fn(),
-  putFinalAudio: vi.fn(),
-  getFinalAudioSize: vi.fn(),
-  getFinalAudioSignedUrl: vi.fn(),
-  deleteFinalAudio: vi.fn(),
 }));
 
 vi.mock("../src/data/audioLock.repository", () => ({
@@ -113,11 +109,6 @@ function createMockResponse(): Response & {
   emitter.destroy = vi.fn(() => {
     emitter.destroyed = true;
   });
-  emitter.redirect = vi.fn((code: number, url: string) => {
-    emitter.statusCode = code;
-    emitter.headers.location = url;
-    emitter.writableEnded = true;
-  });
   emitter.end = vi.fn(() => {
     emitter.writableEnded = true;
   });
@@ -197,8 +188,6 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(episodeRepo.getAudioEpoch).mockResolvedValue(0);
-    // By default no consolidated file exists (and writing one doesn't make it appear).
-    vi.mocked(audioCache.getFinalAudioSize).mockResolvedValue(null);
   });
 
   it("serves all cached chunks with 200 OK and audio/aac for fresh request", async () => {
@@ -513,98 +502,6 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
     expect(res.statusCode).toBe(206);
     expect(res.headers["content-length"]).toBeUndefined();
     expect(Buffer.concat(res.written).length).toBe(8000 - 1000);
-  });
-
-  describe("consolidated audio", () => {
-    const run = (episode: Episode, seek = { rangeStart: null as number | null, startTimeSeconds: null as number | null }) => {
-      const res = createMockResponse();
-      return streamEpisodeAudio(mockPodcast.id, episode.id, episode, mockPodcast, res, seek).then(() => res);
-    };
-
-    it("redirects a finished episode to a signed URL without touching the chunks", async () => {
-      vi.mocked(audioCache.getFinalAudioSize).mockResolvedValue(16000);
-      vi.mocked(audioCache.getFinalAudioSignedUrl).mockResolvedValue("https://signed.example/final.aac");
-
-      const res = await run({ ...mockEpisode, audioComplete: true });
-
-      expect(res.redirect).toHaveBeenCalledWith(302, "https://signed.example/final.aac");
-      expect(res.written).toHaveLength(0);
-      expect(audioCache.getCachedChunk).not.toHaveBeenCalled();
-      expect(res.headers["cache-control"]).toBe("private, no-store");
-    });
-
-    it("redirects a Range request too (the player re-sends the Range to Storage)", async () => {
-      vi.mocked(audioCache.getFinalAudioSize).mockResolvedValue(16000);
-      vi.mocked(audioCache.getFinalAudioSignedUrl).mockResolvedValue("https://signed.example/final.aac");
-
-      const res = await run({ ...mockEpisode, audioComplete: true }, { rangeStart: 100, startTimeSeconds: null });
-
-      expect(res.redirect).toHaveBeenCalledTimes(1);
-    });
-
-    it("consolidates a legacy fully-cached episode on first play, then redirects", async () => {
-      const chunk0 = Buffer.alloc(8000, 1);
-      const chunk1 = Buffer.alloc(8000, 2);
-      let finalSize: number | null = null;
-      vi.mocked(audioCache.getFinalAudioSize).mockImplementation(async () => finalSize);
-      vi.mocked(audioCache.putFinalAudio).mockImplementation(async (_, __, data) => {
-        finalSize = data.length;
-      });
-      vi.mocked(audioCache.getCachedChunkSize).mockResolvedValue(8000);
-      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0 : chunk1));
-      vi.mocked(audioCache.getFinalAudioSignedUrl).mockResolvedValue("https://signed.example/final.aac");
-
-      const res = await run(mockEpisode);
-
-      expect(audioCache.putFinalAudio).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, Buffer.concat([chunk0, chunk1]));
-      expect(episodeRepo.markAudioComplete).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id, 2, 0);
-      expect(res.redirect).toHaveBeenCalledWith(302, "https://signed.example/final.aac");
-      expect(res.written).toHaveLength(0);
-    });
-
-    it("writes the consolidated file when the last chunk lands, before marking the episode complete", async () => {
-      const chunk0Aac = Buffer.alloc(8000, 1);
-      const cached = new Map<number, Buffer>([[0, chunk0Aac]]);
-      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => cached.get(i)?.length ?? null);
-      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => cached.get(i) ?? null);
-      vi.mocked(audioCache.putCachedChunk).mockImplementation(async (_, __, i, data) => {
-        cached.set(i, data);
-      });
-      vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
-      vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_t, _v, onDelta) => {
-        onDelta(Buffer.alloc(24000, 2));
-      });
-
-      await run(mockEpisode);
-
-      expect(audioCache.putFinalAudio).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(audioCache.putFinalAudio).mock.invocationCallOrder[0]!).toBeLessThan(
-        vi.mocked(episodeRepo.markAudioComplete).mock.invocationCallOrder[0]!,
-      );
-    });
-
-    it("does not leave a consolidated file behind when the audio was cleared meanwhile", async () => {
-      vi.mocked(audioCache.getCachedChunkSize).mockResolvedValue(8000);
-      vi.mocked(audioCache.getCachedChunk).mockResolvedValue(Buffer.alloc(8000, 1));
-      // Same epoch at the start, then a clear lands while the file is uploading.
-      vi.mocked(episodeRepo.getAudioEpoch).mockResolvedValueOnce(0).mockResolvedValue(1);
-
-      await run(mockEpisode);
-
-      expect(audioCache.deleteFinalAudio).toHaveBeenCalledWith(mockPodcast.id, mockEpisode.id);
-      expect(episodeRepo.markAudioComplete).not.toHaveBeenCalled();
-    });
-
-    it("keeps serving ?t= resumes itself, since a redirect can't carry a start time", async () => {
-      vi.mocked(audioCache.getFinalAudioSize).mockResolvedValue(16000);
-      vi.mocked(audioCache.getCachedChunkSize).mockResolvedValue(8000);
-      vi.mocked(audioCache.getCachedChunk).mockResolvedValue(Buffer.alloc(8000, 1));
-
-      const res = await run({ ...mockEpisode, audioComplete: true }, { rangeStart: null, startTimeSeconds: 1 });
-
-      expect(res.redirect).not.toHaveBeenCalled();
-      expect(res.written.length).toBeGreaterThan(0);
-    });
   });
 
   it("records audioComplete and the exact duration once the last chunk is generated", async () => {
