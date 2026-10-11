@@ -18,13 +18,11 @@ export function createApp() {
   app.use(express.json());
   app.use(healthRouter);
   app.use(voicesRouter);
-  // Public on purpose and registered before the authenticated /podcasts mount:
-  // the URL GET /podcasts/:id/episodes/:id/audio/url hands out, which a cast
-  // receiver (no way to send a token) fetches directly.
-  app.use("/podcasts/:podcastId/episodes/:episodeId/audio", (req, res, next) =>
-    req.path === "/" && ["GET", "HEAD", "OPTIONS"].includes(req.method) ? castCors(req, res, next) : next(),
-  );
-  app.get("/podcasts/:podcastId/episodes/:episodeId/audio", asyncHandler(audioController.publicAudio));
+  // Public on purpose: the signed URL GET /podcasts/:id/episodes/:id/audio/url
+  // hands out, which a cast receiver (no way to send a token) fetches directly.
+  // The token in the path is the authorization (see utils/audioUrl.ts).
+  app.use("/stream", castCors);
+  app.get("/stream/:token", asyncHandler(audioController.publicAudio));
   app.use("/podcasts", asyncHandler(requireAuth), podcastsRouter);
 
   app.use(errorHandler);

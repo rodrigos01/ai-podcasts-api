@@ -8,7 +8,7 @@ import { clearEpisodeAudio } from "../services/audioClear.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
 import { env } from "../config/env";
-import { signedEpisodeAudioUrl, verifyAudioSignature } from "../utils/audioUrl";
+import { signedEpisodeAudioUrl, verifyAudioToken } from "../utils/audioUrl";
 import { publicOrigin } from "../utils/voicePreview";
 import { getPodcast } from "../data/podcast.repository";
 import type { Episode } from "../schemas/episode.schema";
@@ -97,18 +97,16 @@ export async function url(req: Request, res: Response) {
 }
 
 /**
- * For players that can't send credentials (a cast receiver fetches this
- * itself): authorized by the `exp`/`sig` query params of a URL from `url`
- * above instead of a Firebase token. Same stream as `/audio/stream`.
+ * `GET /stream/:token`, for players that can't send credentials (a cast
+ * receiver fetches this itself): the token from `url` above carries the
+ * podcast and episode ids, so it needs no Firebase token. Same stream as
+ * `/audio/stream`.
  */
 export async function publicAudio(req: Request, res: Response) {
-  const podcastId = requireParam(req.params, "podcastId");
-  const episodeId = requireParam(req.params, "episodeId");
-  if (!verifyAudioSignature(env.AUDIO_URL_SECRET, podcastId, episodeId, req.query.exp, req.query.sig)) {
-    throw new HttpError(403, "Invalid or expired audio URL");
-  }
-  const podcast = await getPodcast(podcastId);
-  const episode = podcast ? await getEpisode(podcastId, episodeId) : null;
+  const ids = verifyAudioToken(env.AUDIO_URL_SECRET, req.params.token);
+  if (!ids) throw new HttpError(403, "Invalid or expired audio URL");
+  const podcast = await getPodcast(ids.podcastId);
+  const episode = podcast ? await getEpisode(ids.podcastId, ids.episodeId) : null;
   if (!podcast || !episode) throw HttpError.notFound("Episode not found");
   await serveAudio(req, res, podcast, episode);
 }
