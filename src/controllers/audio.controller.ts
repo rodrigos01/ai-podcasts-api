@@ -8,7 +8,8 @@ import { clearEpisodeAudio } from "../services/audioClear.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
 import { env } from "../config/env";
-import { signedEpisodeAudioUrl, verifyAudioToken } from "../utils/audioUrl";
+import { verifyAudioToken } from "../utils/audioUrl";
+import { resolveEpisodeAudioUrl } from "../services/audioUrl.service";
 import { publicOrigin } from "../utils/voicePreview";
 import { getPodcast } from "../data/podcast.repository";
 import type { Episode } from "../schemas/episode.schema";
@@ -87,13 +88,15 @@ export async function stream(req: Request, res: Response) {
 
 /**
  * Authenticated: hands the caller a signed, expiring URL to play (and to send
- * to a cast device). Returns `{ url, expiresAt }` (unix seconds).
+ * to a cast device). Returns `{ url, expiresAt }` (unix seconds): a signed
+ * Storage URL once the episode's audio is complete, the `/stream/<token>` URL
+ * before that (see audioUrl.service.ts).
  */
 export async function url(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   const episodeId = requireParam(req.params, "episodeId");
-  await loadContext(podcastId, episodeId, requireUserId(req));
-  res.json(signedEpisodeAudioUrl(publicOrigin(req), podcastId, episodeId, env.AUDIO_URL_SECRET));
+  const { episode } = await loadContext(podcastId, episodeId, requireUserId(req));
+  res.json(await resolveEpisodeAudioUrl(publicOrigin(req), podcastId, episodeId, episode, env.AUDIO_URL_SECRET));
 }
 
 /**
