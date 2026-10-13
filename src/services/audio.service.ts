@@ -416,15 +416,19 @@ export async function streamEpisodeAudio(
   if (typeof res.removeHeader === "function") {
     res.removeHeader("Content-Length");
   }
-  // As in Path 1, `Range: bytes=N-` is N bytes into this URL's own stream
-  // (from `?t=` if given), so a player retrying a live stream resumes at the
-  // right byte; the skipped bytes are dropped here rather than re-downloaded
-  // and discarded by the client. 206 tells the client we honored the Range (a
-  // 200 would make it skip N bytes itself). No Content-Range: the total isn't
-  // known while chunks are still generating.
-  const rangeSkipBytes = seek.rangeStart ?? 0;
-  res.status(seek.rangeStart !== null ? 206 : 200);
-  const write = createByteSkipper(rangeSkipBytes, (data) => res.write(data));
+  // A `Range` can't be honored here: a 206 must carry a Content-Range, and there is no valid one
+  // for a stream that is still growing (`bytes N-*` is not a range; the total isn't known). A
+  // 206 without it is malformed, and a Cast receiver would not accept it for buffered media. So
+  // the live response ignores `Range` and answers 200 from the start of this URL's stream (from
+  // `?t=` if given) — which is also the correct answer to `bytes=0-`. A player that resumes with
+  // `bytes=N-` after a drop skips the N bytes it already has (ExoPlayer does this on a 200), and
+  // `Accept-Ranges: none` tells a player it can't seek by byte, so it shouldn't try. The bytes it
+  // skips come from the cached chunks, which cost nothing to send again.
+  res.set("Accept-Ranges", "none");
+  res.status(200);
+  const write = (data: Buffer) => {
+    res.write(data);
+  };
 
   // Determine starting chunk if ?t=SECONDS was specified
   let startChunkIndex = 0;
