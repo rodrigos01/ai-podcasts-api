@@ -431,15 +431,17 @@ export async function streamEpisodeAudio(
   if (typeof res.removeHeader === "function") {
     res.removeHeader("Content-Length");
   }
-  // A `Range` can't be honored here: a 206 must carry a Content-Range, and there is no valid one
-  // for a stream that is still growing (`bytes N-*` is not a range; the total isn't known). A
-  // 206 without it is malformed, and a Cast receiver would not accept it for buffered media. So
-  // the live response ignores `Range` and answers 200 from the start of this URL's stream (from
-  // `?t=` if given) — which is also the correct answer to `bytes=0-`. A player that resumes with
-  // `bytes=N-` after a drop skips the N bytes it already has (ExoPlayer does this on a 200), and
-  // `Accept-Ranges: none` tells a player it can't seek by byte, so it shouldn't try. The bytes it
-  // skips come from the cached chunks, which cost nothing to send again.
-  res.set("Accept-Ranges", "none");
+  // The live response ignores `Range` and always answers 200, from the start of this URL's stream
+  // (from `?t=` if given). A 206 must carry a Content-Range, and a stream that is still growing has
+  // no valid one (the total isn't known; Chromium doesn't read past a `bytes N-M/*` slice either).
+  // A 206 without it is rejected by Chrome's media stack (reproduced in Chromium: the media never
+  // starts; a Cast receiver shares that stack), while ExoPlayer tolerates it. A 200 is a valid
+  // answer to any Range, including the `bytes=0-` a browser opens with, and a player resuming with
+  // `bytes=N-` after a dropped connection (Chromium does, whatever `Accept-Ranges` says) discards
+  // the N bytes it already has from a 200 and carries on at the right spot (checked in Chromium
+  // with a rising tone across a killed connection). The cost is re-sending those N bytes, which
+  // come from the cached chunks. `Accept-Ranges: bytes` stays advertised (set above): it makes no
+  // difference to any of this.
   res.status(200);
   const write = (data: Buffer) => {
     res.write(data);
