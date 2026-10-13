@@ -68,6 +68,3 @@ export const CHUNK_LOCK_TTL_MS = 5 * 60 * 1000;
 // Polling interval while waiting for another instance to finish a chunk lock.
 export const CHUNK_LOCK_POLL_INTERVAL_MS = 1_500;
 
-// Polling interval while tailing or polling audio status.
-export const AUDIO_POLL_INTERVAL_MS = 1_500;
-

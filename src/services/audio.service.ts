@@ -7,13 +7,12 @@ import {
 } from "../storage/audioCache.repository";
 import { releaseChunkLock, tryAcquireChunkLock } from "../data/audioLock.repository";
 import { bumpGeneratedAudioSeconds, getAudioEpoch, getEpisode, markAudioComplete } from "../data/episode.repository";
-import { AUDIO_POLL_INTERVAL_MS, CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
-import type { Episode, TtsChunk } from "../schemas/episode.schema";
+import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
+import type { Episode } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
 import { hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
 import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service";
-import { ensureGenerationRunning } from "./episodeGeneration/orchestrator";
 import { chunkTranscript, getChunkTurns } from "./episodeGeneration/chunker";
 import type { ScriptTurn } from "../utils/scriptText";
 import { DEFAULT_PCM_FORMAT, durationSeconds } from "../utils/wav";
@@ -28,22 +27,13 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Checks that the episode is in a state where audio can be streamed.
- * Generation failure or missing transcript blocks playback. A
- * `"generating"` episode with a transcript but no sealed `ttsChunks` yet
- * is also blocked — see orchestrator.ts's progressive-sealing design: that
- * narrow pre-gate window (both cast members haven't spoken yet) means
- * whatever transcript tail exists might still be mid-turn, so it isn't
- * safe to chunk on the fly the way the fallback below does for an episode
- * that's already streamable/ready.
+ * Generation failure or missing transcript blocks playback.
  */
 function assertAudioAvailable(episode: Episode): asserts episode is Episode & { transcript: string } {
   if (episode.status === "failed") {
     throw HttpError.badRequest("Episode generation failed");
   }
   if (!episode.transcript) {
-    throw HttpError.badRequest("Episode audio is not ready yet");
-  }
-  if (episode.status === "generating" && (!episode.ttsChunks || episode.ttsChunks.length === 0)) {
     throw HttpError.badRequest("Episode audio is not ready yet");
   }
 }
@@ -316,11 +306,7 @@ export async function streamEpisodeAudio(
   // Audio cleared after this point cancels this request's generation (see utils/audioCancellation.ts).
   const startEpoch = episode.audioEpoch ?? 0;
 
-  // Reassigned below (in the live path) whenever a still-in-progress
-  // episode's currently-known chunks run out and a fresh copy is fetched —
-  // see the "ran out of known chunks" branch of the main loop.
-  let currentEpisode: Episode = episode;
-  let chunks: TtsChunk[] =
+  const chunks =
     episode.ttsChunks && episode.ttsChunks.length > 0
       ? episode.ttsChunks
       : chunkTranscript(episode.transcript);
@@ -328,20 +314,12 @@ export async function streamEpisodeAudio(
   const cachedSizes = await Promise.all(
     chunks.map((_, i) => getCachedChunkSize(podcastId, episodeId, i)),
   );
-  // Only a "ready" episode's ttsChunks is guaranteed to be the complete,
-  // final list — while "generating"/"streamable", more chunks may still be
-  // coming even if every chunk sealed *so far* happens to already be
-  // cached, so that case must still take the live path below instead of
-  // being served as a truncated, Content-Length-bounded static resource.
-  const allCached =
-    episode.status === "ready" && chunks.length > 0 && cachedSizes.every((s) => s !== null);
+  const allCached = chunks.length > 0 && cachedSizes.every((s) => s !== null);
 
   res.set("Content-Type", "audio/aac");
   res.set("Accept-Ranges", "bytes");
 
-  // Path 1: episode is "ready" (the only state guaranteeing ttsChunks is the
-  // complete, final list) and every chunk is cached -> serve seekable static
-  // AAC resource.
+  // Path 1: All chunks are cached -> serve seekable static AAC resource.
   //
   // The byte space of this response is this URL's own stream: it starts at
   // `?t=` (frame-aligned) when given, else at the start of the episode. A
@@ -486,37 +464,9 @@ export async function streamEpisodeAudio(
     }
   }
 
-  // A `for` loop over a fixed `chunks.length` would end the response the
-  // moment it catches up to whatever was known when this request started —
-  // wrong for a still-generating episode, where more chunks may land in
-  // Firestore while this request is in flight. Once `index` runs out of
-  // currently-known chunks, re-fetch the episode and keep going instead of
-  // stopping, as long as it isn't done yet (by the orchestrator's
-  // continuation-based recovery design, an episode that's ever sealed a
-  // chunk can only reach "ready" from here, never "failed" — see AGENTS.md).
-  let index = startChunkIndex;
-  while (!stopped) {
-    if (index >= chunks.length) {
-      if (currentEpisode.status === "ready" || currentEpisode.status === "failed") break;
-      await sleep(AUDIO_POLL_INTERVAL_MS);
-      const fresh = await getEpisode(podcastId, episodeId);
-      if (!fresh) break;
-      currentEpisode = fresh;
-      // The generation this listener is waiting on may have died (its
-      // instance recycled): resume it rather than wait on it forever.
-      void ensureGenerationRunning(podcastId, fresh);
-      chunks =
-        currentEpisode.ttsChunks && currentEpisode.ttsChunks.length > 0
-          ? currentEpisode.ttsChunks
-          : chunkTranscript(currentEpisode.transcript ?? episode.transcript);
-      continue;
-    }
-
+  for (let index = startChunkIndex; index < chunks.length && !stopped; index++) {
     const chunk = chunks[index];
-    if (!chunk) {
-      index++;
-      continue;
-    }
+    if (!chunk) continue;
 
     const cached = await getCachedChunk(podcastId, episodeId, index);
     if (cached) {
@@ -527,12 +477,11 @@ export async function streamEpisodeAudio(
         if (!stopped) write(cached);
       }
       runningAudioSeconds += getAdtsDurationSeconds(cached);
-      index++;
       continue;
     }
 
     // Chunk is NOT cached — live generation
-    const chunkTurns = getChunkTurns(currentEpisode.transcript ?? episode.transcript, chunk);
+    const chunkTurns = getChunkTurns(episode.transcript, chunk);
     const chunkStartSec = runningAudioSeconds;
 
     let liveSeekRemaining = index === startChunkIndex ? seekOffsetInsideChunk : 0;
@@ -589,7 +538,6 @@ export async function streamEpisodeAudio(
       console.error(`Chunk ${index} generation failed for ${podcastId}/${episodeId}:`, err);
       throw err;
     }
-    index++;
   }
 
   // If that was the last chunk, flag completion *before* ending the response, so

@@ -1,23 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  consumeScriptStream,
   reattachOrphanedStyle,
   resolveEmptyTurnText,
-  seedFromTranscript,
   validateSpeakerTurns,
 } from "../src/services/episodeGeneration/scriptGeneration.service";
-
-// Hand-written fake in place of generatePlainTextStream's real
-// AsyncGenerator<string> — consumeScriptStream only depends on that
-// interface, so no Gemini client mocking is needed to test it.
-async function* fakeStream(...deltas: string[]): AsyncGenerator<string> {
-  for (const delta of deltas) yield delta;
-}
-
-async function* throwingStream(...deltas: string[]): AsyncGenerator<string> {
-  for (const delta of deltas) yield delta;
-  throw new Error("stream dropped");
-}
 
 describe("validateSpeakerTurns", () => {
   it("accepts turns that only use the two expected labels", () => {
@@ -154,105 +140,5 @@ describe("reattachOrphanedStyle", () => {
       { speaker: "Marcus", text: "Hi." },
     ];
     expect(reattachOrphanedStyle(turns)).toEqual(turns);
-  });
-});
-
-describe("consumeScriptStream", () => {
-  it("completes cleanly, reporting canSeal only once both labels have appeared", async () => {
-    const progress: boolean[] = [];
-    const stream = fakeStream("Maya: Hey there.\n\n", "Camille: Hi Maya.\n\n", "Maya: Great to have you.");
-    const result = await consumeScriptStream(stream, [], "Maya", "Camille", false, false, async (p) => {
-      progress.push(p.canSeal);
-      return false;
-    });
-
-    expect(result.error).toBeNull();
-    expect(result.seenA).toBe(true);
-    expect(result.seenB).toBe(true);
-    expect(result.turns).toEqual([
-      { speaker: "Maya", text: "Hey there." },
-      { speaker: "Camille", text: "Hi Maya." },
-      { speaker: "Maya", text: "Great to have you." },
-    ]);
-    // canSeal only flips to true once Camille's turn is confirmed (the
-    // second progress call); it stays true for the final call once the
-    // stream ends and the last turn is folded in too.
-    expect(progress).toEqual([false, true, true]);
-  });
-
-  it("only folds a turn once the next one starts (the last parsed turn may still be growing)", async () => {
-    const seen: Array<string[]> = [];
-    const stream = fakeStream("Maya: Hey", " there.\n\nCamille: Hi.");
-    await consumeScriptStream(stream, [], "Maya", "Camille", false, false, async (p) => {
-      seen.push(p.transcript.split("\n\n"));
-      return false;
-    });
-    // "Maya: Hey there." only gets folded in (first progress call) once
-    // "Camille: Hi." starts arriving — a single delta that's still mid-turn
-    // confirms nothing yet. The second call is the final one, once the
-    // stream ends and Camille's turn is folded in too.
-    expect(seen).toEqual([["Maya: Hey there."], ["Maya: Hey there.", "Camille: Hi."]]);
-  });
-
-  it("stops on an unexpected speaker label, keeping every turn validated before it", async () => {
-    const stream = fakeStream("Maya: Hey.\n\n", "Narrator: Once upon a time.\n\n", "Maya: more text here");
-    const result = await consumeScriptStream(stream, [], "Maya", "Camille", false, false);
-
-    expect((result.error as Error).message).toMatch(/unexpected speaker label "Narrator"/);
-    expect(result.turns).toEqual([{ speaker: "Maya", text: "Hey." }]);
-  });
-
-  it("errors if one of the two expected speakers never appears by stream end", async () => {
-    const stream = fakeStream("Maya: Hey.\n\n", "Maya: Still me.");
-    const result = await consumeScriptStream(stream, [], "Maya", "Camille", false, false);
-
-    expect((result.error as Error).message).toMatch(/never gives Camille a line/);
-    expect(result.turns).toEqual([
-      { speaker: "Maya", text: "Hey." },
-      { speaker: "Maya", text: "Still me." },
-    ]);
-  });
-
-  it("surfaces a stream-level error while preserving turns validated before it", async () => {
-    const stream = throwingStream("Maya: Hey.\n\n", "Camille: Hi.\n\n");
-    const result = await consumeScriptStream(stream, [], "Maya", "Camille", false, false);
-
-    expect(result.error).toBeInstanceOf(Error);
-    expect((result.error as Error).message).toBe("stream dropped");
-    expect(result.turns).toEqual([{ speaker: "Maya", text: "Hey." }]);
-  });
-
-  it("resumes from seeded priorTurns/seenA/seenB, as a continuation attempt would", async () => {
-    const priorTurns = [{ speaker: "Maya", text: "Hey." }];
-    const stream = fakeStream("Camille: Hi Maya.");
-    const result = await consumeScriptStream(stream, priorTurns, "Maya", "Camille", true, false);
-
-    expect(result.error).toBeNull();
-    expect(result.turns).toEqual([
-      { speaker: "Maya", text: "Hey." },
-      { speaker: "Camille", text: "Hi Maya." },
-    ]);
-  });
-});
-
-describe("seedFromTranscript", () => {
-  it("parses a persisted transcript back into the turns it was built from", () => {
-    const seeded = seedFromTranscript("Maya: Hey there.\nStyle: warm\n\nCamille: Hi Maya.", "Maya", "Camille");
-    expect(seeded.turns).toEqual([
-      { speaker: "Maya", text: "Hey there.", style: "warm" },
-      { speaker: "Camille", text: "Hi Maya." },
-    ]);
-    expect(seeded.seenA).toBe(true);
-    expect(seeded.seenB).toBe(true);
-  });
-
-  it("reports which speakers haven't spoken yet", () => {
-    const seeded = seedFromTranscript("Maya: Hey there.\n\nMaya: Anyone?", "Maya", "Camille");
-    expect(seeded.seenA).toBe(true);
-    expect(seeded.seenB).toBe(false);
-  });
-
-  it("treats an empty transcript as nothing written yet", () => {
-    expect(seedFromTranscript("", "Maya", "Camille")).toEqual({ turns: [], seenA: false, seenB: false });
   });
 });
