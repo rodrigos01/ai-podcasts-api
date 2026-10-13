@@ -482,7 +482,7 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
     expect(res.headers["content-range"]).toBe("bytes */12000");
   });
 
-  it("honors Range on the live path: 206, no Content-Length, first N bytes dropped", async () => {
+  it("answers a Range on the live path with a plain 200 of the whole stream (a 206 would need a Content-Range)", async () => {
     const chunk0Aac = Buffer.alloc(8000, 1); // cached
     vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac.length : null));
     vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac : null));
@@ -492,16 +492,21 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       onDelta(Buffer.alloc(24000, 3)); // -> 4000 AAC bytes
     });
 
-    const res = createMockResponse();
-    // Skip all of cached chunk 0 plus 1000 bytes of the live chunk.
-    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
-      rangeStart: 9000,
-      startTimeSeconds: null,
-    });
+    for (const rangeStart of [0, 9000]) {
+      vi.mocked(ttsClient.streamEpisodeSynthesis).mockClear();
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+        rangeStart,
+        startTimeSeconds: null,
+      });
 
-    expect(res.statusCode).toBe(206);
-    expect(res.headers["content-length"]).toBeUndefined();
-    expect(Buffer.concat(res.written).length).toBe(8000 - 1000);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-range"]).toBeUndefined();
+      expect(res.headers["content-length"]).toBeUndefined();
+      expect(res.headers["accept-ranges"]).toBe("bytes");
+      // Cached chunk 0 (8000) plus the live chunk (8000): nothing is skipped on the server.
+      expect(Buffer.concat(res.written).length).toBe(16000);
+    }
   });
 
   it("records audioComplete and the exact duration once the last chunk is generated", async () => {
