@@ -556,9 +556,9 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       expect(Buffer.concat(res.written).length).toBe(4000 + 4000);
     });
 
-    it("does not advertise byte ranges it can't serve", async () => {
+    it("keeps advertising byte ranges: Chromium resumes with Range either way and skips the bytes of a 200 itself", async () => {
       const res = await streamLive(null);
-      expect(res.headers["accept-ranges"]).toBe("none");
+      expect(res.headers["accept-ranges"]).toBe("bytes");
     });
   });
 
