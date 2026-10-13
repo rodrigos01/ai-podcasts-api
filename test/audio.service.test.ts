@@ -188,6 +188,9 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(episodeRepo.getAudioEpoch).mockResolvedValue(0);
+    // The stored episode: completion is only recorded against a "ready" one (see
+    // recordAudioCompletionIfDone). Tests of a still-generating episode override it.
+    vi.mocked(episodeRepo.getEpisode).mockReset().mockResolvedValue(mockEpisode);
   });
 
   it("serves all cached chunks with 200 OK and audio/aac for fresh request", async () => {
@@ -748,6 +751,63 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       // The refetched doc is what gets checked: it's the current state of the
       // episode, not the snapshot the request started from.
       expect(orchestrator.ensureGenerationRunning).toHaveBeenCalledWith(mockPodcast.id, refetched);
+    });
+
+    // `audioComplete` means "the whole episode's audio is cached", and clients (and /audio/url)
+    // act on it: a signed Storage URL, BUFFERED casting. While the script is still being
+    // written, "every chunk sealed so far is cached" is not that — more chunks are coming.
+    it("does not mark the audio complete when the chunks sealed so far land but the episode is still generating", async () => {
+      const cached = new Map<number, Buffer>();
+      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => cached.get(i)?.length ?? null);
+      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => cached.get(i) ?? null);
+      vi.mocked(audioCache.putCachedChunk).mockImplementation(async (_, __, i, data) => {
+        cached.set(i, data);
+      });
+      vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+      vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+        onDelta(Buffer.alloc(24000, 2));
+      });
+      // The first look at the episode (when the chunk lands) still says "streamable"; the
+      // next one (the poll for more chunks) ends the request.
+      vi.mocked(episodeRepo.getEpisode)
+        .mockResolvedValueOnce({ ...streamableEpisode })
+        .mockResolvedValue({ ...streamableEpisode, status: "failed" });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, streamableEpisode.id, streamableEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      expect(res.written.length).toBeGreaterThan(0); // the chunk was generated and sent
+      expect(episodeRepo.markAudioComplete).not.toHaveBeenCalled();
+    });
+
+    it("does not mark the audio complete from a stale chunk count once more chunks were sealed", async () => {
+      // The request began when only chunk 0 was sealed (so chunk generation was told "1 chunk"),
+      // but by the time chunk 0 lands the episode is ready with two.
+      const cached = new Map<number, Buffer>();
+      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => cached.get(i)?.length ?? null);
+      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => cached.get(i) ?? null);
+      vi.mocked(audioCache.putCachedChunk).mockImplementation(async (_, __, i, data) => {
+        cached.set(i, data);
+      });
+      vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+      vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+        onDelta(Buffer.alloc(24000, 2));
+      });
+      const readyWithTwo: Episode = { ...mockEpisode, status: "ready" }; // two chunks
+      vi.mocked(episodeRepo.getEpisode)
+        .mockResolvedValueOnce(readyWithTwo)
+        .mockResolvedValue({ ...readyWithTwo, status: "failed" });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, streamableEpisode.id, streamableEpisode, mockPodcast, res, {
+        rangeStart: null,
+        startTimeSeconds: null,
+      });
+
+      expect(episodeRepo.markAudioComplete).not.toHaveBeenCalled();
     });
 
     it("stops polling once a refetch reports the episode has failed", async () => {

@@ -104,6 +104,21 @@ async function recordAudioCompletionIfDone(
   );
   if (chunkCount === 0 || sizes.some((s) => s === null)) return;
 
+  // "Every chunk is cached" only means "the audio is complete" once the chunk list can't grow any
+  // more: the episode is "ready" (its script is done) and the list this was counted against is
+  // that final list. While it is still "streamable", the chunks sealed so far landing is not it
+  // (and `chunkCount` may be older than the sealed list too: a listener's request is told how many
+  // chunks there were when it began). Marking it complete early made clients cast it as a finished
+  // file and /audio/url hand out a Storage URL for a truncated one.
+  const current = await getEpisode(podcastId, episodeId);
+  if (!current || current.status !== "ready") return;
+  const finalChunkCount = current.ttsChunks?.length
+    ? current.ttsChunks.length
+    : current.transcript
+      ? chunkTranscript(current.transcript).length
+      : 0;
+  if (finalChunkCount !== chunkCount) return;
+
   let totalSeconds = 0;
   for (let i = 0; i < chunkCount; i++) {
     const data = await getCachedChunk(podcastId, episodeId, i);

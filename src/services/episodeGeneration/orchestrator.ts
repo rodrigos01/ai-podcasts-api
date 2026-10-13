@@ -168,7 +168,11 @@ export async function runEpisodeGeneration(
         const sealed = canSeal ? sealedChunksSoFar(transcript) : [];
         await patch({
           transcript,
-          ...(sealed.length > 0 ? { ttsChunks: sealed, status: "streamable" as const } : {}),
+          // More chunks are being sealed, so the audio is not complete (also corrects an episode
+          // that was flagged complete early, before completion required "ready").
+          ...(sealed.length > 0
+            ? { ttsChunks: sealed, status: "streamable" as const, audioComplete: false, audioDurationSeconds: null }
+            : {}),
           progress: { stage: "conversation", currentWordCount: wordCount, targetWordRange: wordTarget },
         });
         return sealed.length > 0;
@@ -209,6 +213,9 @@ export async function runEpisodeGeneration(
       transcript: script.transcript,
       ttsChunks,
       status: "ready",
+      // The last chunk was withheld until now, so it can't be cached yet: not complete until it is.
+      audioComplete: false,
+      audioDurationSeconds: null,
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: script.incomplete
         ? "Episode is shorter than targeted — generation couldn't finish after an in-progress recovery"

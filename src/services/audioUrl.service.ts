@@ -5,7 +5,7 @@ import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service"
 
 /**
  * The URL a client should play (and cast) for an episode: once its audio is complete
- * (`audioComplete`), a signed Storage URL for the consolidated `final.aac` — Storage serves it as
+ * (`audioComplete` on a `ready` episode), a signed Storage URL for the consolidated `final.aac` — Storage serves it as
  * a plain static file; until then, the `/stream/<token>` URL, which generates audio on demand.
  *
  * An episode that is complete but not consolidated yet (finalize runs when a playback ends, so
@@ -17,10 +17,11 @@ export async function resolveEpisodeAudioUrl(
   origin: string,
   podcastId: string,
   episodeId: string,
-  episode: Pick<Episode, "audioComplete">,
+  episode: Pick<Episode, "audioComplete" | "status">,
   streamSecret: string,
 ): Promise<{ url: string; expiresAt: number }> {
-  if (episode.audioComplete === true) {
+  // "ready" too: the audio can only be complete once the script is, whatever a stale flag says.
+  if (episode.audioComplete === true && episode.status === "ready") {
     try {
       if ((await getFinalAudioSize(podcastId, episodeId)) === null) {
         await finalizeEpisodeAudio(podcastId, episodeId);

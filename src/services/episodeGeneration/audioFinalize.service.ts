@@ -42,8 +42,10 @@ function consolidateAudio(podcastId: string, episodeId: string): Promise<void> {
 
 async function consolidateAudioOnce(podcastId: string, episodeId: string): Promise<void> {
   const episode = await getEpisode(podcastId, episodeId);
-  // `audioComplete` is the "every chunk is cached" fact: nothing to consolidate before it.
-  if (!episode?.audioComplete || !episode.transcript) return;
+  // `audioComplete` is the "every chunk is cached" fact: nothing to consolidate before it. "ready"
+  // too, so an episode that is still being written is never consolidated from the chunks sealed
+  // so far (a truncated file).
+  if (!episode?.audioComplete || episode.status !== "ready" || !episode.transcript) return;
   if ((await getFinalAudioSize(podcastId, episodeId)) !== null) return;
 
   const chunkCount = episode.ttsChunks?.length ? episode.ttsChunks.length : chunkTranscript(episode.transcript).length;

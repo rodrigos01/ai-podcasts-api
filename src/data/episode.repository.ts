@@ -321,6 +321,9 @@ export async function markAudioComplete(
     if (!snap.exists) return;
     // A generation that began before the audio was cleared must not mark it complete again.
     if (isStaleEpoch(snap.data()?.audioEpoch, epoch)) return;
+    // Only a "ready" episode's chunk list is final, so only then can its audio be complete (the
+    // caller checks too; this closes the window in which the episode is reset in between).
+    if (snap.data()?.status !== "ready") return;
     const current = (snap.data()?.generatedAudioSeconds as number | undefined) ?? 0;
     tx.update(ref, {
       audioComplete: true,

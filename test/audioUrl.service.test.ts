@@ -18,8 +18,8 @@ const EP = "a1b2c3d4-e5f6-4789-9abc-def012345678";
 const SECRET = "test-secret-test-secret-test-secret";
 const GCS = { url: "https://storage.googleapis.com/bucket/final.aac?X-Goog-Signature=abc", expiresAt: 1_800_021_600 };
 
-const resolve = (audioComplete: boolean | undefined) =>
-  resolveEpisodeAudioUrl(ORIGIN, POD, EP, { audioComplete }, SECRET);
+const resolve = (audioComplete: boolean | undefined, status: "ready" | "streamable" = "ready") =>
+  resolveEpisodeAudioUrl(ORIGIN, POD, EP, { audioComplete, status }, SECRET);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -34,6 +34,15 @@ describe("resolveEpisodeAudioUrl", () => {
       expect(url).toMatch(/^https:\/\/api\.example\.com\/stream\/[A-Za-z0-9_-]{70}$/);
     }
     expect(getFinalAudioSize).not.toHaveBeenCalled();
+  });
+
+  it("hands out the /stream token URL for an episode still being written, even if audioComplete is set", async () => {
+    // A stale flag (set early, before completion required "ready") must not produce a Storage URL
+    // for a truncated file, nor consolidate one.
+    vi.mocked(getFinalAudioSize).mockResolvedValue(1000);
+    expect((await resolve(true, "streamable")).url).toContain("/stream/");
+    expect(getFinalAudioSize).not.toHaveBeenCalled();
+    expect(finalizeEpisodeAudio).not.toHaveBeenCalled();
   });
 
   it("hands out the signed Storage URL once the audio is complete and consolidated", async () => {
