@@ -482,26 +482,47 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
     expect(res.headers["content-range"]).toBe("bytes */12000");
   });
 
-  it("honors Range on the live path: 206, no Content-Length, first N bytes dropped", async () => {
-    const chunk0Aac = Buffer.alloc(8000, 1); // cached
-    vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac.length : null));
-    vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac : null));
-    vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
-    vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
-      onDelta(Buffer.alloc(24000, 2)); // -> 4000 AAC bytes (mock encoder)
-      onDelta(Buffer.alloc(24000, 3)); // -> 4000 AAC bytes
+  describe("Range on the live path", () => {
+    // A 206 needs a Content-Range, and a stream that is still growing has no valid one — so the
+    // live response ignores Range and answers 200 from the start (a Cast receiver rejected the
+    // 206 without Content-Range).
+    async function streamLive(rangeStart: number | null) {
+      const chunk0Aac = Buffer.alloc(8000, 1); // cached
+      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac.length : null));
+      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac : null));
+      vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+      vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+        onDelta(Buffer.alloc(24000, 2)); // -> 4000 AAC bytes (mock encoder)
+        onDelta(Buffer.alloc(24000, 3)); // -> 4000 AAC bytes
+      });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+        rangeStart,
+        startTimeSeconds: null,
+      });
+      return res;
+    }
+
+    it("answers bytes=0- (what a Cast receiver opens with) with a plain 200 of the whole stream", async () => {
+      const res = await streamLive(0);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-range"]).toBeUndefined();
+      expect(res.headers["content-length"]).toBeUndefined();
+      expect(Buffer.concat(res.written).length).toBe(16000);
     });
 
-    const res = createMockResponse();
-    // Skip all of cached chunk 0 plus 1000 bytes of the live chunk.
-    await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
-      rangeStart: 9000,
-      startTimeSeconds: null,
+    it("answers a resume with bytes=N- with a 200 from the start too, for the player to skip N bytes", async () => {
+      const res = await streamLive(9000);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-range"]).toBeUndefined();
+      expect(Buffer.concat(res.written).length).toBe(16000);
     });
 
-    expect(res.statusCode).toBe(206);
-    expect(res.headers["content-length"]).toBeUndefined();
-    expect(Buffer.concat(res.written).length).toBe(8000 - 1000);
+    it("does not advertise byte ranges it can't serve", async () => {
+      const res = await streamLive(null);
+      expect(res.headers["accept-ranges"]).toBe("none");
+    });
   });
 
   it("records audioComplete and the exact duration once the last chunk is generated", async () => {
