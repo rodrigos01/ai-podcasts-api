@@ -24,6 +24,7 @@ const TRANSCRIPT = "Maya: Hello there.\n\nJordan: Hi, Maya.";
 
 const complete = (extra: Record<string, unknown> = {}) => ({
   id: "ep",
+  status: "ready",
   audioComplete: true,
   transcript: TRANSCRIPT,
   ttsChunks: [{}, {}, {}],
@@ -47,6 +48,13 @@ describe("finalizeEpisodeAudio: consolidation", () => {
 
   it("does nothing before the audio is complete", async () => {
     vi.mocked(getEpisode).mockResolvedValue(complete({ audioComplete: false }) as never);
+    await finalizeEpisodeAudio("pod", "ep");
+    expect(composeFinalAudio).not.toHaveBeenCalled();
+  });
+
+  it("does nothing while the episode is still being written, even if audioComplete is set", async () => {
+    // Only the chunks sealed so far exist: composing them would produce a truncated file.
+    vi.mocked(getEpisode).mockResolvedValue(complete({ status: "streamable" }) as never);
     await finalizeEpisodeAudio("pod", "ep");
     expect(composeFinalAudio).not.toHaveBeenCalled();
   });
