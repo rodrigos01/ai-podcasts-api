@@ -519,6 +519,40 @@ describe("streamEpisodeAudio with AAC chunking and seeking", () => {
       expect(Buffer.concat(res.written).length).toBe(16000);
     });
 
+    // Seeking while an episode is still generating works by reloading the stream with `?t=`; that
+    // must keep working, with or without a Range header (a player retrying the URL sends one).
+    async function streamLiveFrom(startTimeSeconds: number, rangeStart: number | null) {
+      const chunk0Aac = Buffer.alloc(8000, 1); // cached, 1.0s
+      vi.mocked(audioCache.getCachedChunkSize).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac.length : null));
+      vi.mocked(audioCache.getCachedChunk).mockImplementation(async (_, __, i) => (i === 0 ? chunk0Aac : null));
+      vi.mocked(audioLock.tryAcquireChunkLock).mockResolvedValue(true);
+      vi.mocked(ttsClient.streamEpisodeSynthesis).mockImplementation(async (_turns, _voices, onDelta) => {
+        onDelta(Buffer.alloc(24000, 2)); // -> 4000 AAC bytes (mock encoder)
+      });
+
+      const res = createMockResponse();
+      await streamEpisodeAudio(mockPodcast.id, mockEpisode.id, mockEpisode, mockPodcast, res, {
+        rangeStart,
+        startTimeSeconds,
+      });
+      return res;
+    }
+
+    it("still starts a live stream at ?t= inside the generated range", async () => {
+      const res = await streamLiveFrom(0.5, null);
+      expect(res.statusCode).toBe(200);
+      // Second half of cached chunk 0 (4000) plus the live chunk (4000).
+      expect(Buffer.concat(res.written).length).toBe(4000 + 4000);
+      expect(res.written[0]).toEqual(Buffer.alloc(4000, 1));
+    });
+
+    it("starts at ?t= even when a Range header comes with it, instead of skipping bytes on top", async () => {
+      const res = await streamLiveFrom(0.5, 3000);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-range"]).toBeUndefined();
+      expect(Buffer.concat(res.written).length).toBe(4000 + 4000);
+    });
+
     it("does not advertise byte ranges it can't serve", async () => {
       const res = await streamLive(null);
       expect(res.headers["accept-ranges"]).toBe("none");
