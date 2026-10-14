@@ -78,6 +78,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       transcript: null,
       ttsChunks: null,
       interactionId: null,
+      pastNotes: null,
       generatedAudioSeconds: 0,
       audioComplete: false,
       audioDurationSeconds: null,
@@ -103,9 +104,14 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity: earlier transcripts in the prompt, or a chained interaction,
-    // per the podcast's useInteractionContext flag (see continuity.ts).
-    const { previousEpisodes, previousInteractionId } = await resolveScriptContinuity(podcast, episode);
+    // Continuity: earlier transcripts in the prompt, a chained interaction, or
+    // notes about earlier episodes, per the podcast's historyMethod (see
+    // continuity.ts).
+    const { previousEpisodes, previousInteractionId, pastNotes } = await resolveScriptContinuity(
+      podcast,
+      episode,
+      sources,
+    );
 
     await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
 
@@ -116,7 +122,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // started over (see ensureGenerationRunning).
     const scriptPromise = generateEpisodeScript(
       cast,
-      { podcast, episode, sources, previousEpisodes },
+      { podcast, episode, sources, previousEpisodes, ...(pastNotes ? { pastNotes } : {}) },
       wordTarget,
       previousInteractionId,
     );
@@ -146,6 +152,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       transcript: script.transcript,
       ttsChunks,
       interactionId: script.interactionId,
+      pastNotes: pastNotes ?? null,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,

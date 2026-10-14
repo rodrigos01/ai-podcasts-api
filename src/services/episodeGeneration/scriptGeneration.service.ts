@@ -131,7 +131,7 @@ async function generateOnce(
   const labelB = speakerLabel(b.name, a.name);
   // Only a podcast on interaction context chains from stored interactions;
   // the others keep the zero-retention default.
-  const store = ctx.podcast.useInteractionContext === true;
+  const store = ctx.podcast.historyMethod === "interaction";
 
   const { text: raw, interactionId } = await generatePlainText({
     systemInstruction: buildScriptSystemInstruction(cast, ctx),

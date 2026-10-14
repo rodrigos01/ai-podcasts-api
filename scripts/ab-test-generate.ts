@@ -8,93 +8,13 @@
  *  2. Episodes 2..N are generated in pairs, [A_i, B_i] in parallel, in order —
  *     A with manual history, B chained from the previous interaction.
  *
- * Mirrors orchestrator.ts minus voice resolution and the dependents chain (audio
- * isn't needed, and the pairs are sequenced here). Resumable: episodes that
- * already have a transcript are skipped.
+ * Mirrors orchestrator.ts minus voice resolution and the dependents chain (see
+ * lib/abTest.ts). Resumable: episodes that already have a transcript are skipped.
  *
  *   npx tsx scripts/ab-test-generate.ts <podcastAId> <podcastBId> [lastEpisode=5]
  */
-import { randomUUID } from "node:crypto";
-import { LENGTH_RANGES } from "../src/constants/lengthRanges";
-import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../src/constants/generationLease";
-import {
-  acquireGenerationLease,
-  getEpisode,
-  heartbeatGenerationLease,
-  listEpisodes,
-  patchEpisodeStateAsOwner,
-  releaseGenerationLease,
-} from "../src/data/episode.repository";
 import type { Episode } from "../src/schemas/episode.schema";
-import { getPodcast } from "../src/data/podcast.repository";
-import { getSource } from "../src/data/source.repository";
-import { resolveScriptContinuity } from "../src/services/episodeGeneration/continuity";
-import { chunkTranscript } from "../src/services/episodeGeneration/chunker";
-import { generateEpisodeScript, type EpisodeScript } from "../src/services/episodeGeneration/scriptGeneration.service";
-import { selectCast } from "../src/services/episodeGeneration/speakerSelection";
-
-const log = (label: string, msg: string) => console.log(`[${new Date().toISOString()}] ${label}: ${msg}`);
-
-async function inSeriesOrder(podcastId: string) {
-  return (await listEpisodes(podcastId)).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
-}
-
-/** Runs the script call for one episode; `save` is called with the result while the lease is held. */
-async function generate(
-  label: string,
-  podcastId: string,
-  episodeId: string,
-  save: (script: EpisodeScript, patch: (f: Partial<Episode>) => Promise<void>) => Promise<void>,
-): Promise<EpisodeScript> {
-  const owner = randomUUID();
-  if (!(await acquireGenerationLease(podcastId, episodeId, owner))) throw new Error(`${label}: lease held elsewhere`);
-  const heartbeat = setInterval(() => heartbeatGenerationLease(podcastId, episodeId, owner).catch(() => {}), GENERATION_HEARTBEAT_INTERVAL_MS);
-  const patch = (f: Partial<Episode>) => patchEpisodeStateAsOwner(podcastId, episodeId, owner, f);
-  try {
-    const podcast = (await getPodcast(podcastId))!;
-    const episode = (await getEpisode(podcastId, episodeId))!;
-    const hosts = podcast.hosts.filter((h) => episode.participantHostIds.includes(h.id));
-    const cast = selectCast(hosts, episode.guests);
-    const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(podcastId, id)))).filter((s) => s !== null);
-    const wordTarget = LENGTH_RANGES[episode.length];
-    const { previousEpisodes, previousInteractionId } = await resolveScriptContinuity(podcast, episode);
-    log(
-      label,
-      `start (${podcast.useInteractionContext ? `chained from ${previousInteractionId ?? "nothing"}` : `${previousEpisodes.length} prior transcripts`})`,
-    );
-    const t0 = Date.now();
-    const script = await generateEpisodeScript(cast, { podcast, episode, sources, previousEpisodes }, wordTarget, previousInteractionId);
-    await save(script, patch);
-    log(label, `done: ${script.wordCount} words (target ${wordTarget.min}-${wordTarget.max}) in ${Math.round((Date.now() - t0) / 1000)}s`);
-    return script;
-  } catch (err) {
-    await patch({ status: "failed", error: err instanceof Error ? err.message : String(err) }).catch(() => {});
-    throw err;
-  } finally {
-    clearInterval(heartbeat);
-    await releaseGenerationLease(podcastId, episodeId, owner).catch(() => {});
-  }
-}
-
-const ready = (script: EpisodeScript): Partial<Episode> => ({
-  transcript: script.transcript,
-  ttsChunks: chunkTranscript(script.transcript),
-  interactionId: script.interactionId,
-  status: "ready",
-  progress: { stage: "done", currentWordCount: script.wordCount },
-  error: null,
-});
-
-/** Writes `fields` to an episode that nothing else is generating. */
-async function writeEpisode(podcastId: string, episodeId: string, fields: Partial<Episode>) {
-  const owner = randomUUID();
-  if (!(await acquireGenerationLease(podcastId, episodeId, owner))) throw new Error("lease held elsewhere");
-  try {
-    await patchEpisodeStateAsOwner(podcastId, episodeId, owner, fields);
-  } finally {
-    await releaseGenerationLease(podcastId, episodeId, owner);
-  }
-}
+import { generate, inSeriesOrder, log, ready, writeEpisode } from "./lib/abTest";
 
 async function main() {
   const [aId, bId, lastArg] = process.argv.slice(2);

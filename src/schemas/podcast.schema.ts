@@ -2,6 +2,13 @@ import { z } from "zod";
 import { languageCodeSchema } from "./common.schema";
 import { personSaveSchema, personSchema } from "./person.schema";
 
+// How script generation learns what happened in earlier episodes (see
+// services/episodeGeneration/continuity.ts): their full transcripts in the
+// prompt, a chain of stored Interactions API calls, or notes written about
+// them by an intermediary LLM call. Absent = "transcripts".
+export const historyMethodSchema = z.enum(["transcripts", "interaction", "notes"]);
+export type HistoryMethod = z.infer<typeof historyMethodSchema>;
+
 export const podcastCreateSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
@@ -11,11 +18,7 @@ export const podcastCreateSchema = z.object({
   // every voice design for this podcast's hosts and guests; absent on
   // podcasts created before it existed, whose voices are designed without one.
   languageCode: languageCodeSchema,
-  // A/B switch for how script generation gets the series so far: false/absent
-  // sends earlier episodes' transcripts in the prompt (manual history); true
-  // chains each episode's Interactions API call from the previous episode's
-  // stored interaction instead (see services/episodeGeneration/continuity.ts).
-  useInteractionContext: z.boolean().optional(),
+  historyMethod: historyMethodSchema.optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -38,7 +41,7 @@ export const podcastUpdateSchema = z.object({
   structure: z.string().min(1).optional(),
   hosts: z.array(hostUpdateInputSchema).min(1).optional(),
   languageCode: languageCodeSchema,
-  useInteractionContext: z.boolean().optional(),
+  historyMethod: historyMethodSchema.optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({

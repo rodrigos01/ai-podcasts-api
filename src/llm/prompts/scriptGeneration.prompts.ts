@@ -3,6 +3,7 @@ import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
+import { buildPastNotesBlock } from "./pastNotes.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
@@ -15,6 +16,8 @@ export interface ScriptGenerationContext {
    * from a chained interaction instead (continuity.ts).
    */
   previousEpisodes?: PriorEpisode[];
+  /** Notes about earlier episodes written by pastNotes.service.ts, for podcasts using that history method. */
+  pastNotes?: string;
 }
 
 export interface WordTarget {
@@ -43,7 +46,9 @@ export function buildScriptSystemInstruction(
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
-  const history = buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast);
+  const history = ctx.pastNotes
+    ? buildPastNotesBlock(ctx.pastNotes)
+    : buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast);
   const historySection = history
     ? `\n\n${history}
 

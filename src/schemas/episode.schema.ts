@@ -94,6 +94,10 @@ export const episodeSchema = z.object({
   // (scriptGeneration.service.ts). Null/absent: not generated yet, or written
   // before this existed.
   interactionId: z.string().min(1).nullable().optional(),
+  // The "relevant notes from past episodes" the script call was given, for
+  // podcasts whose historyMethod is "notes" (pastNotes.service.ts); kept so a
+  // generation can be inspected afterwards. Null/absent: not used.
+  pastNotes: z.string().min(1).nullable().optional(),
   // Total audio duration generated so far, in seconds — updated in
   // Firestore as chunks finish generating (audio.service.ts), not computed
   // at request time, so polling clients (GET .../status) can build a "how
