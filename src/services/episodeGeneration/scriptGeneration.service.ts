@@ -15,6 +15,8 @@ const MAX_GENERATION_ATTEMPTS = 3;
 export interface EpisodeScript {
   transcript: string;
   wordCount: number;
+  /** The stored interaction that wrote it; the next episode chains from this. */
+  interactionId: string;
 }
 
 /**
@@ -122,14 +124,17 @@ async function generateOnce(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
+  previousInteractionId: string | undefined,
 ): Promise<EpisodeScript> {
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
 
-  const raw = await generatePlainText({
+  const { text: raw, interactionId } = await generatePlainText({
     systemInstruction: buildScriptSystemInstruction(cast, ctx),
     prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
+    store: true,
+    ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 
   const turns = parseScriptTurns(raw);
@@ -153,7 +158,7 @@ async function generateOnce(
     })),
   );
 
-  return { transcript, wordCount: countWords(transcript) };
+  return { transcript, wordCount: countWords(transcript), interactionId };
 }
 
 /**
@@ -164,16 +169,21 @@ async function generateOnce(
  * one of the two speakers entirely) rather than failing the episode
  * outright: a fresh generation is cheap relative to what it protects
  * against (wrong TTS voice attribution).
+ *
+ * `previousInteractionId` continues the previous episode's stored interaction,
+ * which already holds the series so far; the caller then leaves
+ * `ctx.previousEpisodes` empty so the transcripts aren't sent a second time.
  */
 export async function generateEpisodeScript(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
+  previousInteractionId?: string,
 ): Promise<EpisodeScript> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
     try {
-      return await generateOnce(cast, ctx, wordTarget);
+      return await generateOnce(cast, ctx, wordTarget, previousInteractionId);
     } catch (err) {
       lastError = err;
     }

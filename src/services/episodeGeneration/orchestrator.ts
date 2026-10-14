@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { LENGTH_RANGES } from "../../constants/lengthRanges";
-import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLease";
 import {
   acquireGenerationLease,
@@ -78,6 +77,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       status: "generating",
       transcript: null,
       ttsChunks: null,
+      interactionId: null,
       generatedAudioSeconds: 0,
       audioComplete: false,
       audioDurationSeconds: null,
@@ -103,14 +103,13 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity: the transcripts of the episodes that come *before* this one
-    // in series order (not merely the newest ones), so regenerating an old
-    // episode never sees episodes that were written after it.
-    const previousEpisodes = await getPriorEpisodes(
-      podcastId,
-      { id: episode.id, createdAt: episode.createdAt },
-      MAX_HISTORY_EPISODES,
-    );
+    // Continuity comes from the Interactions API, not the prompt: the script
+    // call continues the stored interaction of the episode immediately before
+    // this one in series order (so regenerating an old episode never sees
+    // later ones). An episode with no predecessor, or one whose predecessor
+    // has no interaction id (written before this existed), starts fresh.
+    const [previousEpisode] = await getPriorEpisodes(podcastId, { id: episode.id, createdAt: episode.createdAt }, 1);
+    const previousInteractionId = previousEpisode?.episode.interactionId ?? undefined;
 
     await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
 
@@ -121,8 +120,9 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // started over (see ensureGenerationRunning).
     const scriptPromise = generateEpisodeScript(
       cast,
-      { podcast, episode, sources, previousEpisodes },
+      { podcast, episode, sources },
       wordTarget,
+      previousInteractionId,
     );
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
@@ -149,6 +149,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     await patch({
       transcript: script.transcript,
       ttsChunks,
+      interactionId: script.interactionId,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,
