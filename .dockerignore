@@ -5,3 +5,5 @@ dist
 .github
 .claude
 ai-audio-book-*.json
+admin/node_modules
+admin/dist

@@ -2,6 +2,19 @@
 # the GitHub Actions runner with Docker Buildx (+ its GitHub Actions layer
 # cache) instead of `gcloud run deploy --source`'s buildpacks. `npm run
 # deploy` (scripts/deploy.sh) still deploys via buildpacks and ignores this.
+# The admin SPA (admin/) is built separately and served by the API at /admin.
+# The Firebase web config is public (it ships in the bundle); the API key comes
+# in as a build arg from the FIREBASE_WEB_API_KEY repository variable.
+FROM node:22-slim AS admin-build
+WORKDIR /admin
+ARG VITE_FIREBASE_API_KEY
+ARG VITE_FIREBASE_AUTH_DOMAIN
+ARG VITE_FIREBASE_PROJECT_ID
+COPY admin/package*.json ./
+RUN npm ci
+COPY admin/ ./
+RUN npm run build
+
 FROM node:22-slim AS build
 WORKDIR /app
 COPY package*.json ./
@@ -19,4 +32,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=admin-build /admin/dist ./admin/dist
 CMD ["node", "dist/index.js"]

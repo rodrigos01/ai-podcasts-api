@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import express from "express";
 import { asyncHandler } from "./middleware/asyncHandler";
 import { errorHandler } from "./middleware/errorHandler";
@@ -29,6 +31,18 @@ export function createApp() {
   // (services/podcastAccess.ts's requireAccessiblePodcast) and the list
   // returns every user's podcasts.
   app.use("/admin/api/podcasts", asyncHandler(requireAuth), requireAdmin, podcastsRouter);
+
+  // The admin SPA (admin/, built by the Dockerfile), served at /admin. Public
+  // files with nothing in them: all data comes through /admin/api above, which
+  // needs an admin ID token. Unknown /admin/* paths fall back to index.html for
+  // client-side routing. Absent in a checkout where admin/ hasn't been built.
+  const adminDist = path.join(__dirname, "..", "admin", "dist");
+  if (existsSync(adminDist)) {
+    app.use("/admin", express.static(adminDist));
+    app.get(/^\/admin(?!\/(api|assets)(\/|$))(\/.*)?$/, (_req, res) => {
+      res.sendFile(path.join(adminDist, "index.html"));
+    });
+  }
 
   app.use(errorHandler);
 
