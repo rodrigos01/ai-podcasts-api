@@ -4,7 +4,6 @@ import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLeas
 import {
   acquireGenerationLease,
   getEpisode,
-  getPriorEpisodes,
   heartbeatGenerationLease,
   listDependentEpisodes,
   patchEpisodeState,
@@ -17,6 +16,7 @@ import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
 import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
+import { resolveScriptContinuity } from "./continuity";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
@@ -103,13 +103,9 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity comes from the Interactions API, not the prompt: the script
-    // call continues the stored interaction of the episode immediately before
-    // this one in series order (so regenerating an old episode never sees
-    // later ones). An episode with no predecessor, or one whose predecessor
-    // has no interaction id (written before this existed), starts fresh.
-    const [previousEpisode] = await getPriorEpisodes(podcastId, { id: episode.id, createdAt: episode.createdAt }, 1);
-    const previousInteractionId = previousEpisode?.episode.interactionId ?? undefined;
+    // Continuity: earlier transcripts in the prompt, or a chained interaction,
+    // per the podcast's useInteractionContext flag (see continuity.ts).
+    const { previousEpisodes, previousInteractionId } = await resolveScriptContinuity(podcast, episode);
 
     await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
 
@@ -120,7 +116,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // started over (see ensureGenerationRunning).
     const scriptPromise = generateEpisodeScript(
       cast,
-      { podcast, episode, sources },
+      { podcast, episode, sources, previousEpisodes },
       wordTarget,
       previousInteractionId,
     );

@@ -15,8 +15,8 @@ const MAX_GENERATION_ATTEMPTS = 3;
 export interface EpisodeScript {
   transcript: string;
   wordCount: number;
-  /** The stored interaction that wrote it; the next episode chains from this. */
-  interactionId: string;
+  /** The stored interaction that wrote it (the next episode chains from it); null when it wasn't stored. */
+  interactionId: string | null;
 }
 
 /**
@@ -129,11 +129,14 @@ async function generateOnce(
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
+  // Only a podcast on interaction context chains from stored interactions;
+  // the others keep the zero-retention default.
+  const store = ctx.podcast.useInteractionContext === true;
 
   const { text: raw, interactionId } = await generatePlainText({
     systemInstruction: buildScriptSystemInstruction(cast, ctx),
     prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
-    store: true,
+    store,
     ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 
@@ -158,7 +161,7 @@ async function generateOnce(
     })),
   );
 
-  return { transcript, wordCount: countWords(transcript), interactionId };
+  return { transcript, wordCount: countWords(transcript), interactionId: store ? interactionId : null };
 }
 
 /**
@@ -172,7 +175,8 @@ async function generateOnce(
  *
  * `previousInteractionId` continues the previous episode's stored interaction,
  * which already holds the series so far; the caller then leaves
- * `ctx.previousEpisodes` empty so the transcripts aren't sent a second time.
+ * `ctx.previousEpisodes` empty so the transcripts aren't sent a second time
+ * (see continuity.ts).
  */
 export async function generateEpisodeScript(
   cast: Cast,

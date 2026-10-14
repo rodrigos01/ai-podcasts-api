@@ -1,12 +1,20 @@
+import type { PriorEpisode } from "../../utils/episodeHistory";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
+import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
   podcast: Podcast;
   episode: Episode;
   sources: Source[];
+  /**
+   * Earlier episodes' transcripts, oldest first — see episodeHistory.prompts.ts.
+   * Only for podcasts using manual history; empty/absent when continuity comes
+   * from a chained interaction instead (continuity.ts).
+   */
+  previousEpisodes?: PriorEpisode[];
 }
 
 export interface WordTarget {
@@ -35,6 +43,13 @@ export function buildScriptSystemInstruction(
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
+  const history = buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast);
+  const historySection = history
+    ? `\n\n${history}
+
+The history might have been generated with an earlier version of the show's title, premise, structure or \
+host personas, so prioritize the details in this document above past episode's formulas.`
+    : "";
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
@@ -43,7 +58,7 @@ And episodes follow this structure:
 ${ctx.podcast.structure}
 
 The show host(s) are:
-${hosts}
+${hosts}${historySection}
 
 
 The scripts will be used with a TTS engine, and follow this format:

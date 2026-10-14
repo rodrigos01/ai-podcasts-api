@@ -11,6 +11,11 @@ export const podcastCreateSchema = z.object({
   // every voice design for this podcast's hosts and guests; absent on
   // podcasts created before it existed, whose voices are designed without one.
   languageCode: languageCodeSchema,
+  // A/B switch for how script generation gets the series so far: false/absent
+  // sends earlier episodes' transcripts in the prompt (manual history); true
+  // chains each episode's Interactions API call from the previous episode's
+  // stored interaction instead (see services/episodeGeneration/continuity.ts).
+  useInteractionContext: z.boolean().optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -33,6 +38,7 @@ export const podcastUpdateSchema = z.object({
   structure: z.string().min(1).optional(),
   hosts: z.array(hostUpdateInputSchema).min(1).optional(),
   languageCode: languageCodeSchema,
+  useInteractionContext: z.boolean().optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({
