@@ -54,14 +54,7 @@ export async function create(req: Request, res: Response) {
 
 export async function list(req: Request, res: Response) {
   const origin = publicOrigin(req);
-  // Admins see every podcast (optionally narrowed with ?ownerId=); everyone
-  // else only their own.
-  const ownerId = req.isAdmin
-    ? typeof req.query.ownerId === "string" && req.query.ownerId
-      ? req.query.ownerId
-      : undefined
-    : requireUserId(req);
-  res.json((await listPodcasts(ownerId)).map((podcast) => presentPodcast(origin, podcast)));
+  res.json((await listPodcasts(requireUserId(req))).map((podcast) => presentPodcast(origin, podcast)));
 }
 
 export async function get(req: Request, res: Response) {

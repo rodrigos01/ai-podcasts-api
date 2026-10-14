@@ -1,11 +1,11 @@
 import { Alert, Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { ConfirmButton } from "../ConfirmButton";
 import { EditDialog } from "../EditDialog";
-import type { Episode, EpisodeStatusResponse } from "../types";
+import { useEpisode } from "../firestore";
 
 export function EpisodePage() {
   const { podcastId = "", episodeId = "" } = useParams();
@@ -14,17 +14,7 @@ export function EpisodePage() {
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
 
-  const episode = useQuery({ queryKey: ["episode", episodeId], queryFn: () => api<Episode>(base) });
-  // Polling /status also nudges a stalled generation back to life (see the API).
-  const status = useQuery({
-    queryKey: ["episodeStatus", episodeId],
-    queryFn: () => api<EpisodeStatusResponse>(`${base}/status`),
-    refetchInterval: (q) => (q.state.data?.status === "generating" ? 3000 : false),
-  });
-  const currentStatus = status.data?.status;
-  useEffect(() => {
-    void qc.invalidateQueries({ queryKey: ["episode", episodeId] });
-  }, [currentStatus, qc, episodeId]);
+  const episode = useEpisode(podcastId, episodeId);
 
   const audio = useQuery({
     queryKey: ["episodeAudioUrl", episodeId, episode.data?.audioComplete],
@@ -33,25 +23,21 @@ export function EpisodePage() {
     staleTime: 60 * 60 * 1000,
   });
 
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ["episode", episodeId] });
-    void qc.invalidateQueries({ queryKey: ["episodeStatus", episodeId] });
-    void qc.invalidateQueries({ queryKey: ["episodeAudioUrl", episodeId] });
-  };
-  const update = useMutation({ mutationFn: (body: Record<string, string>) => api(base, { method: "PATCH", body }), onSuccess: refresh });
-  const regenerate = useMutation({ mutationFn: () => api(`${base}/regenerate`, { method: "POST" }), onSuccess: refresh });
-  const clearAudio = useMutation({ mutationFn: () => api(`${base}/audio`, { method: "DELETE" }), onSuccess: refresh });
+  const refreshAudio = () => void qc.invalidateQueries({ queryKey: ["episodeAudioUrl", episodeId] });
+  const update = useMutation({ mutationFn: (body: Record<string, string>) => api(base, { method: "PATCH", body }), });
+  const regenerate = useMutation({ mutationFn: () => api(`${base}/regenerate`, { method: "POST" }), onSuccess: refreshAudio });
+  const clearAudio = useMutation({ mutationFn: () => api(`${base}/audio`, { method: "DELETE" }), onSuccess: refreshAudio });
+  // Generation runs in this API process and is picked back up by whoever asks about it
+  // (see ensureGenerationRunning); this does that for an episode that looks stuck.
+  const nudge = useMutation({ mutationFn: () => api(`${base}/status`) });
   const remove = useMutation({
     mutationFn: () => api(base, { method: "DELETE" }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["episodes", podcastId] });
-      navigate(`/podcasts/${podcastId}`);
-    },
+    onSuccess: () => navigate(`/podcasts/${podcastId}`),
   });
 
-  const e = episode.data;
-  const error = episode.error ?? update.error ?? regenerate.error ?? clearAudio.error ?? remove.error;
-  const shownStatus = currentStatus ?? e?.status;
+  const e = episode.data ?? undefined;
+  const error = episode.error ?? update.error ?? regenerate.error ?? clearAudio.error ?? remove.error ?? nudge.error;
+  const shownStatus = e?.status;
 
   return (
     <Stack spacing={3}>
@@ -93,9 +79,22 @@ export function EpisodePage() {
             </Stack>
           </Stack>
 
-          {(e.error || status.data?.error) && (
+          {e.error && (
             <Alert severity="error" sx={{ mt: 2 }}>
-              {status.data?.error ?? e.error}
+              {e.error}
+            </Alert>
+          )}
+          {e.status === "generating" && (
+            <Alert
+              severity="info"
+              sx={{ mt: 2 }}
+              action={
+                <Button size="small" disabled={nudge.isPending} onClick={() => nudge.mutate()}>
+                  Resume if stalled
+                </Button>
+              }
+            >
+              Generating…
             </Alert>
           )}
           <Typography variant="subtitle2" sx={{ mt: 2 }}>

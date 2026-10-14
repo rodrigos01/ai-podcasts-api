@@ -8,6 +8,12 @@ service cloud.firestore {
       return request.auth != null;
     }
     
+    // Admins (Firebase custom claim `admin: true`, set by scripts/grant-admin.ts)
+    // can read everything; the admin app (admin/) reads Firestore directly.
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
     function isOwner(data) {
       return isSignedIn() && (
         ('ownerId' in data && data.ownerId == request.auth.uid) ||
@@ -22,18 +28,18 @@ service cloud.firestore {
     }
 
     match /podcasts/{podcastId} {
-      allow read: if isOwner(resource.data);
+      allow read: if isAdmin() || isOwner(resource.data);
       allow create: if false;
       allow update, delete: if false;
 
       match /episodes/{episodeId} {
-        allow read: if isPodcastOwner(podcastId);
+        allow read: if isAdmin() || isPodcastOwner(podcastId);
         allow create: if false;
         allow update, delete: if false;
       }
 
       match /sources/{sourceId} {
-        allow read: if isPodcastOwner(podcastId);
+        allow read: if isAdmin() || isPodcastOwner(podcastId);
         allow create: if false;
         allow update, delete: if false;
       }

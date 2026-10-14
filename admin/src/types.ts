@@ -38,11 +38,6 @@ export interface Episode {
   updatedAt: number;
 }
 
-export interface EpisodeStatusResponse {
-  status: EpisodeStatus;
-  error: string | null;
-  audioComplete: boolean;
-}
 
 export interface Source {
   id: string;

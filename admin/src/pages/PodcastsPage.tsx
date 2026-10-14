@@ -1,16 +1,11 @@
 import { Alert, Link as MuiLink, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from "@mui/material";
-import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api";
-import type { Podcast } from "../types";
+import { usePodcasts } from "../firestore";
 
 export function PodcastsPage() {
   const [ownerId, setOwnerId] = useState("");
-  const { data, error, isLoading } = useQuery({
-    queryKey: ["podcasts", ownerId],
-    queryFn: () => api<Podcast[]>(ownerId ? `?ownerId=${encodeURIComponent(ownerId)}` : ""),
-  });
+  const { data, error, loading: isLoading } = usePodcasts(ownerId);
 
   return (
     <>

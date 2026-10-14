@@ -1,50 +1,43 @@
 import { Alert, Box, Button, Chip, Link as MuiLink, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from "@mui/material";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { ConfirmButton } from "../ConfirmButton";
 import { EditDialog } from "../EditDialog";
-import type { Episode, Podcast, Source } from "../types";
+import { useEpisodes, usePodcast, useSources } from "../firestore";
 
 export function PodcastPage() {
   const { podcastId = "" } = useParams();
-  const qc = useQueryClient();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [sourceTitle, setSourceTitle] = useState("");
   const [sourceText, setSourceText] = useState("");
 
-  const podcast = useQuery({ queryKey: ["podcast", podcastId], queryFn: () => api<Podcast>(`/${podcastId}`) });
-  const episodes = useQuery({ queryKey: ["episodes", podcastId], queryFn: () => api<Episode[]>(`/${podcastId}/episodes`) });
-  const sources = useQuery({ queryKey: ["sources", podcastId], queryFn: () => api<Source[]>(`/${podcastId}/sources`) });
+  const podcast = usePodcast(podcastId);
+  const episodes = useEpisodes(podcastId);
+  const sources = useSources(podcastId);
 
   const update = useMutation({
     mutationFn: (body: Record<string, string>) => api(`/${podcastId}`, { method: "PATCH", body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["podcast", podcastId] }),
   });
   const remove = useMutation({
     mutationFn: () => api(`/${podcastId}`, { method: "DELETE" }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["podcasts"] });
-      navigate("/");
-    },
+    onSuccess: () => navigate("/"),
   });
   const addSource = useMutation({
     mutationFn: () => api(`/${podcastId}/sources`, { method: "POST", body: { title: sourceTitle, contents: sourceText } }),
     onSuccess: () => {
       setSourceTitle("");
       setSourceText("");
-      void qc.invalidateQueries({ queryKey: ["sources", podcastId] });
     },
   });
   const removeSource = useMutation({
     mutationFn: (id: string) => api(`/${podcastId}/sources/${id}`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["sources", podcastId] }),
   });
 
   const p = podcast.data;
-  const error = podcast.error ?? update.error ?? remove.error ?? addSource.error ?? removeSource.error;
+  const error = podcast.error ?? episodes.error ?? sources.error ?? update.error ?? remove.error ?? addSource.error ?? removeSource.error;
 
   return (
     <Stack spacing={3}>
