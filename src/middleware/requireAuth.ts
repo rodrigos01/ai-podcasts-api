@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { getAuth } from "firebase-admin/auth";
 import { firebaseApp } from "../config/firebase";
 import { HttpError } from "../utils/HttpError";
+import { hasAdminClaim } from "../utils/admin";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -10,6 +11,8 @@ declare global {
       userId?: string;
       /** Set by requireAdmin: the caller may act on any user's podcasts. */
       isAdmin?: boolean;
+      /** Whether the verified ID token carries the `admin` custom claim. */
+      hasAdminClaim?: boolean;
     }
   }
 }
@@ -41,6 +44,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   try {
     const decoded = await getAuth(firebaseApp).verifyIdToken(idToken);
     req.userId = decoded.uid;
+    req.hasAdminClaim = hasAdminClaim(decoded);
     next();
   } catch {
     throw new HttpError(401, "Invalid or expired ID token");

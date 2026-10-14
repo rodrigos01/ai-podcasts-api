@@ -1,6 +1,5 @@
 import dotenv from "dotenv";
 import { z } from "zod";
-import { parseAdminUids } from "../utils/admin";
 
 // quiet: true suppresses dotenv v17's random stdout "tips" (self-promo for
 // dotenvx.com and a partner site) — noise we don't want in server logs.
@@ -29,11 +28,6 @@ const envSchema = z.object({
   // HMAC key for the signed public audio URLs (utils/audioUrl.ts). In a
   // deployed service it's mounted from the `audio-url-signing-key` Secret
   // Manager secret (see deploy.yml); locally, any random 32+ char string.
-  // Firebase uids allowed into /admin/api (comma-separated; see
-  // middleware/requireAdmin.ts). Empty/unset means nobody is an admin. A plain
-  // allowlist for now; Firebase custom claims could replace it later without
-  // touching the routes.
-  ADMIN_UIDS: z.string().default("").transform(parseAdminUids),
   AUDIO_URL_SECRET: z.string().min(32, "AUDIO_URL_SECRET must be at least 32 characters"),
 });
 
