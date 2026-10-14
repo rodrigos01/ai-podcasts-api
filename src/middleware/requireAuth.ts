@@ -8,6 +8,8 @@ declare global {
   namespace Express {
     interface Request {
       userId?: string;
+      /** Set by requireAdmin: the caller may act on any user's podcasts. */
+      isAdmin?: boolean;
     }
   }
 }

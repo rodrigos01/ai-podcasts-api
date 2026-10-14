@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
+import { z } from "zod";
 import { listEpisodes } from "../data/episode.repository";
 import { createPodcast, deletePodcast, listPodcasts, updatePodcast } from "../data/podcast.repository";
 import { requireUserId } from "../middleware/requireAuth";
@@ -10,7 +11,7 @@ import {
   podcastWizardReviseRequestSchema,
 } from "../schemas/wizard.schema";
 import { prepareHostsForUpdate, withVoicePrompt } from "../utils/voicePrompt";
-import { requireOwnedPodcast } from "../services/podcastAccess";
+import { requireAccessiblePodcast } from "../services/podcastAccess";
 import * as podcastWizardService from "../services/podcastWizard.service";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
@@ -25,11 +26,17 @@ function withHostVoicePrompts(options: PodcastOption[]) {
   return options.map((option) => ({ ...option, hosts: option.hosts.map(withVoicePrompt) }));
 }
 
+const adminCreateSchema = z.object({ ownerId: z.string().min(1).optional() });
+
 export async function create(req: Request, res: Response) {
   const { sessionId, ...input } = podcastCreateRequestSchema.parse(req.body);
-  const ownerId = requireUserId(req);
+  const callerId = requireUserId(req);
+  // An admin may create a podcast on someone else's behalf; by default (and
+  // always for a regular user) the caller owns it.
+  const ownerId = req.isAdmin ? (adminCreateSchema.parse(req.body).ownerId ?? callerId) : callerId;
   const prepared = input.hosts.map(withVoicePrompt);
-  const picker = await createVoicePicker(ownerId, sessionId);
+  // Voice candidates belong to whoever designed them, i.e. the caller.
+  const picker = await createVoicePicker(callerId, sessionId);
 
   // A picked voice (validated against this wizard session) starts the host
   // with it; anything else, including an unknown id, is designed lazily at the
@@ -47,18 +54,24 @@ export async function create(req: Request, res: Response) {
 
 export async function list(req: Request, res: Response) {
   const origin = publicOrigin(req);
-  res.json((await listPodcasts(requireUserId(req))).map((podcast) => presentPodcast(origin, podcast)));
+  // Admins see every podcast (optionally narrowed with ?ownerId=); everyone
+  // else only their own.
+  const ownerId = req.isAdmin
+    ? typeof req.query.ownerId === "string" && req.query.ownerId
+      ? req.query.ownerId
+      : undefined
+    : requireUserId(req);
+  res.json((await listPodcasts(ownerId)).map((podcast) => presentPodcast(origin, podcast)));
 }
 
 export async function get(req: Request, res: Response) {
-  const podcast = await requireOwnedPodcast(requireParam(req.params, "podcastId"), requireUserId(req));
+  const podcast = await requireAccessiblePodcast(req, requireParam(req.params, "podcastId"));
   res.json(presentPodcast(publicOrigin(req), podcast));
 }
 
 export async function update(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  const ownerId = requireUserId(req);
-  const existing = await requireOwnedPodcast(podcastId, ownerId);
+  const existing = await requireAccessiblePodcast(req, podcastId);
   const input = podcastUpdateSchema.parse(req.body);
 
   if (!input.hosts) {
@@ -71,7 +84,7 @@ export async function update(req: Request, res: Response) {
   // Voice picks in an edit come from the podcast's own design session (the
   // session id is the podcast id). Cleanup only runs when hosts are sent.
   const prepared = prepareHostsForUpdate(existing.hosts, input.hosts);
-  const picker = await createVoicePicker(ownerId, podcastId);
+  const picker = await createVoicePicker(requireUserId(req), podcastId);
   const currentById = new Map(existing.hosts.map((host) => [host.id, host]));
   const decisions = prepared.map((host) =>
     decideVoice(host.id ? currentById.get(host.id) : undefined, host, picker.pick(host.resolvedVoiceId)),
@@ -98,7 +111,7 @@ export async function update(req: Request, res: Response) {
 
 export async function remove(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  const podcast = await requireOwnedPodcast(podcastId, requireUserId(req));
+  const podcast = await requireAccessiblePodcast(req, podcastId);
   const episodes = await listEpisodes(podcastId);
   await deletePodcast(podcastId);
   res.status(204).send();

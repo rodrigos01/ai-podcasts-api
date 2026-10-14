@@ -20,7 +20,7 @@ import {
 import { ensureGenerationRunning, runEpisodeGeneration } from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
 import { prepareHostsForUpdate, withVoicePrompt } from "../utils/voicePrompt";
-import { requireOwnedPodcast } from "../services/podcastAccess";
+import { requireAccessiblePodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
 import { requireParam } from "../utils/params";
 import { presentEpisode, publicOrigin } from "../utils/voicePreview";
@@ -42,7 +42,7 @@ function withGuestVoicePrompts(result: EpisodeWizardSuggestionsResponse) {
 
 export async function wizardOptions(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  const podcast = await requireOwnedPodcast(podcastId, requireUserId(req));
+  const podcast = await requireAccessiblePodcast(req, podcastId);
   const input = episodeWizardOptionsRequestSchema.parse(req.body);
 
   const sources = (
@@ -67,7 +67,7 @@ export async function wizardOptions(req: Request, res: Response) {
 
 export async function wizardRevise(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  const podcast = await requireOwnedPodcast(podcastId, requireUserId(req));
+  const podcast = await requireAccessiblePodcast(req, podcastId);
   const input = episodeWizardReviseRequestSchema.parse(req.body);
   const previousEpisodes = await getPriorEpisodes(podcastId, undefined, MAX_HISTORY_EPISODES);
   const result = await episodeWizardService.reviseSuggestions(
@@ -88,10 +88,9 @@ export async function wizardRevise(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  const ownerId = requireUserId(req);
-  await requireOwnedPodcast(podcastId, ownerId);
+  await requireAccessiblePodcast(req, podcastId);
   const input = episodeCreateRequestSchema.parse(req.body);
-  const picker = await createVoicePicker(ownerId, input.sessionId);
+  const picker = await createVoicePicker(requireUserId(req), input.sessionId);
 
   const episodes: Episode[] = [];
   const decisions = [];
@@ -132,14 +131,14 @@ export async function create(req: Request, res: Response) {
 
 export async function list(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   const origin = publicOrigin(req);
   res.json((await listEpisodes(podcastId)).map((episode) => presentEpisode(origin, episode)));
 }
 
 export async function get(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   const episode = await getEpisode(podcastId, requireParam(req.params, "episodeId"));
   if (!episode) throw HttpError.notFound("Episode not found");
   res.json(presentEpisode(publicOrigin(req), episode));
@@ -147,7 +146,7 @@ export async function get(req: Request, res: Response) {
 
 export async function status(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   const episode = await getEpisode(podcastId, requireParam(req.params, "episodeId"));
   if (!episode) throw HttpError.notFound("Episode not found");
   // Clients poll this while an episode generates, which makes it the natural
@@ -168,8 +167,7 @@ export async function status(req: Request, res: Response) {
 export async function update(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   const episodeId = requireParam(req.params, "episodeId");
-  const ownerId = requireUserId(req);
-  await requireOwnedPodcast(podcastId, ownerId);
+  await requireAccessiblePodcast(req, podcastId);
   const input = episodeUpdateSchema.parse(req.body);
 
   if (!input.guests) {
@@ -188,7 +186,7 @@ export async function update(req: Request, res: Response) {
   // Voice picks in an edit come from the episode's own design session (the
   // session id is the episode id). Cleanup only runs when guests are sent.
   const prepared = prepareHostsForUpdate(existing.guests, input.guests);
-  const picker = await createVoicePicker(ownerId, episodeId);
+  const picker = await createVoicePicker(requireUserId(req), episodeId);
   const currentById = new Map(existing.guests.map((guest) => [guest.id, guest]));
   const decisions = prepared.map((guest) =>
     decideVoice(guest.id ? currentById.get(guest.id) : undefined, guest, picker.pick(guest.resolvedVoiceId)),
@@ -206,7 +204,7 @@ export async function update(req: Request, res: Response) {
 
 export async function remove(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   const episodeId = requireParam(req.params, "episodeId");
   const episode = await getEpisode(podcastId, episodeId);
   const deleted = await deleteEpisode(podcastId, episodeId);
@@ -217,7 +215,7 @@ export async function remove(req: Request, res: Response) {
 
 export async function regenerate(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   const episodeId = requireParam(req.params, "episodeId");
   const episode = await getEpisode(podcastId, episodeId);
   if (!episode) throw HttpError.notFound("Episode not found");

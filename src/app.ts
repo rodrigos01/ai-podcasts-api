@@ -3,6 +3,7 @@ import { asyncHandler } from "./middleware/asyncHandler";
 import { errorHandler } from "./middleware/errorHandler";
 import * as audioController from "./controllers/audio.controller";
 import { castCors } from "./middleware/castCors";
+import { requireAdmin } from "./middleware/requireAdmin";
 import { requireAuth } from "./middleware/requireAuth";
 import { healthRouter } from "./routes/health.routes";
 import { podcastsRouter } from "./routes/podcasts.routes";
@@ -24,6 +25,10 @@ export function createApp() {
   app.use("/stream", castCors);
   app.get("/stream/:token", asyncHandler(audioController.publicAudio));
   app.use("/podcasts", asyncHandler(requireAuth), podcastsRouter);
+  // The same router for admins: requireAdmin lifts the ownership check
+  // (services/podcastAccess.ts's requireAccessiblePodcast) and the list
+  // returns every user's podcasts.
+  app.use("/admin/api/podcasts", asyncHandler(requireAuth), requireAdmin, podcastsRouter);
 
   app.use(errorHandler);
 

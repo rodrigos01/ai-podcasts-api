@@ -46,11 +46,11 @@ export async function getPodcast(podcastId: string): Promise<Podcast | null> {
 // compound query, to avoid depending on a manually-provisioned composite
 // index — same reasoning as episode.repository.ts's getPriorEpisodes, fine at
 // this app's expected scale (podcasts per user).
-export async function listPodcasts(ownerId: string): Promise<Podcast[]> {
+export async function listPodcasts(ownerId?: string): Promise<Podcast[]> {
   const snap = await podcastsCollection.orderBy("createdAt", "desc").get();
   return snap.docs
     .map((doc) => doc.data() as Podcast)
-    .filter((podcast) => podcast.ownerId === ownerId);
+    .filter((podcast) => ownerId === undefined || podcast.ownerId === ownerId);
 }
 
 export async function updatePodcast(

@@ -1,8 +1,7 @@
 import type { Request, Response } from "express";
 import { createSource, deleteSource, getSource, listSources } from "../data/source.repository";
-import { requireUserId } from "../middleware/requireAuth";
 import { sourceCreateSchema, sourceGoogleDriveSchema } from "../schemas/source.schema";
-import { requireOwnedPodcast } from "../services/podcastAccess";
+import { requireAccessiblePodcast } from "../services/podcastAccess";
 import { fetchGoogleDriveSource } from "../services/googleDrive.service";
 import { extractPdfText } from "../services/source.service";
 import { HttpError } from "../utils/HttpError";
@@ -10,7 +9,7 @@ import { requireParam } from "../utils/params";
 
 export async function create(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
 
   if (req.file) {
     const isPdf =
@@ -50,13 +49,13 @@ export async function create(req: Request, res: Response) {
 
 export async function list(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   res.json(await listSources(podcastId));
 }
 
 export async function get(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   const source = await getSource(podcastId, requireParam(req.params, "sourceId"));
   if (!source) throw HttpError.notFound("Source not found");
   res.json(source);
@@ -64,7 +63,7 @@ export async function get(req: Request, res: Response) {
 
 export async function remove(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
-  await requireOwnedPodcast(podcastId, requireUserId(req));
+  await requireAccessiblePodcast(req, podcastId);
   const deleted = await deleteSource(podcastId, requireParam(req.params, "sourceId"));
   if (!deleted) throw HttpError.notFound("Source not found");
   res.status(204).send();
