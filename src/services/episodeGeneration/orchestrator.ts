@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { LENGTH_RANGES } from "../../constants/lengthRanges";
+import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLease";
 import {
   acquireGenerationLease,
   getEpisode,
+  getPriorEpisodes,
   heartbeatGenerationLease,
   listDependentEpisodes,
   patchEpisodeState,
@@ -16,7 +18,6 @@ import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
 import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
-import { resolveScriptContinuity } from "./continuity";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
@@ -77,8 +78,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       status: "generating",
       transcript: null,
       ttsChunks: null,
-      interactionId: null,
-      pastNotes: null,
       generatedAudioSeconds: 0,
       audioComplete: false,
       audioDurationSeconds: null,
@@ -104,13 +103,13 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity: earlier transcripts in the prompt, a chained interaction, or
-    // notes about earlier episodes, per the podcast's historyMethod (see
-    // continuity.ts).
-    const { previousEpisodes, previousInteractionId, pastNotes } = await resolveScriptContinuity(
-      podcast,
-      episode,
-      sources,
+    // Continuity: the transcripts of the episodes that come *before* this one
+    // in series order (not merely the newest ones), so regenerating an old
+    // episode never sees episodes that were written after it.
+    const previousEpisodes = await getPriorEpisodes(
+      podcastId,
+      { id: episode.id, createdAt: episode.createdAt },
+      MAX_HISTORY_EPISODES,
     );
 
     await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
@@ -122,9 +121,8 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // started over (see ensureGenerationRunning).
     const scriptPromise = generateEpisodeScript(
       cast,
-      { podcast, episode, sources, previousEpisodes, ...(pastNotes ? { pastNotes } : {}) },
+      { podcast, episode, sources, previousEpisodes },
       wordTarget,
-      previousInteractionId,
     );
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
@@ -151,8 +149,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     await patch({
       transcript: script.transcript,
       ttsChunks,
-      interactionId: script.interactionId,
-      pastNotes: pastNotes ?? null,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,

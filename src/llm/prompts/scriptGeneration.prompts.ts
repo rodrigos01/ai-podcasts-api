@@ -3,21 +3,14 @@ import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
-import { buildPastNotesBlock } from "./pastNotes.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
   podcast: Podcast;
   episode: Episode;
   sources: Source[];
-  /**
-   * Earlier episodes' transcripts, oldest first — see episodeHistory.prompts.ts.
-   * Only for podcasts using manual history; empty/absent when continuity comes
-   * from a chained interaction instead (continuity.ts).
-   */
-  previousEpisodes?: PriorEpisode[];
-  /** Notes about earlier episodes written by pastNotes.service.ts, for podcasts using that history method. */
-  pastNotes?: string;
+  /** Earlier episodes' transcripts, oldest first — see episodeHistory.prompts.ts. */
+  previousEpisodes: PriorEpisode[];
 }
 
 export interface WordTarget {
@@ -35,60 +28,28 @@ export function sourceBlock(sources: Source[]): string {
 const WORDS_PER_MINUTE = 155;
 
 /**
- * A single system instruction that writes BOTH speakers' lines itself —
- * see AGENTS.md's migration note: a single writer can't structurally keep
- * each speaker's knowledge separate; the prompt only asks for it.
+ * Earlier episodes are shared history, not a template for new ones — the
+ * model tends to rebuild an episode around the shape of the ones it is shown.
+ * The one thing worth carrying over verbatim is the show's catchphrases.
  */
-/** Whether the history goes in the prompt (leaving the system instruction identical for every episode). */
-function historyInPrompt(ctx: ScriptGenerationContext): boolean {
-  return ctx.podcast.historyPlacement === "prompt";
-}
-
-/** The history block (full transcripts or notes), or "" when the episode has none. */
-function historyBlock(ctx: ScriptGenerationContext): string {
-  return ctx.pastNotes
-    ? buildPastNotesBlock(ctx.pastNotes)
-    : buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast);
-}
-
-function outdatedNote(where: string): string {
-  return `The history might have been generated with an earlier version of the show's title, premise, structure or \
-host personas, so prioritize the details in ${where} above past episode's formulas.`;
-}
-
-// The system instruction can't name the episode's labels when it has to be the
-// same for every episode, and it must not show a placeholder in the label's
-// place either: the model copies it literally (e.g. "[Penny]: ..." from
-// "[first label]: ..."), which the script parser doesn't recognise.
-const FORMAT_WITHOUT_LABELS = `The scripts will be used with a TTS engine. Each turn is one line made of the \
-speaker's label, a colon, a space, and the spoken words, with a blank line between turns. A turn can have a second \
-line, "Style: " followed by delivery directions for that turn. Write the label as plain text, with no brackets, \
-asterisks, or other decoration around it, and write the Style line without parentheses.`;
-
-const EXAMPLE_WITHOUT_LABELS = `For Example, this single turn:
-  I think the most important part of the story is what they didn't say. |How so?| Because it's not just what's seen. It's what's felt.
-Will be rendered by the TTS engine as the active speaker saying "I think the most important part of the story is \
-what they didn't say.", then the other speaker overlapping with "How so?", then the active speaker finishing with \
-"Because it's not just what's seen. It's what's felt."`;
-
-const TEMPLATE_RULE = `
-- Earlier episodes of this show are shared history, not a template for new ones. Do not reuse an earlier \
+const HISTORY_IS_NOT_A_TEMPLATE_RULE = `- Earlier episodes of this show are shared history, not a template for new ones. Do not reuse an earlier \
 episode's structure, beats, pacing, jokes, or phrasing to build this episode. The one exception is the show's \
 catchphrases (its recurring signature phrases, such as greetings, sign-offs, and segment names), which can be \
 reused as they were.`;
 
-export function buildScriptSystemInstruction(
-  cast: Cast,
-  ctx: ScriptGenerationContext,
-): string {
-  const [a, b] = cast.speakers;
-  // With the history in the prompt, the labels go there too: they depend on
-  // who the guest is, and the system instruction must not.
-  const inPrompt = historyInPrompt(ctx);
-  const labelA = speakerLabel(a.name, b.name);
-  const labelB = speakerLabel(b.name, a.name);
-  const history = inPrompt ? "" : historyBlock(ctx);
-  const historySection = history ? `\n\n${history}\n\n${outdatedNote("this document")}` : "";
+/**
+ * A single system instruction that writes BOTH speakers' lines itself —
+ * see AGENTS.md's migration note: a single writer can't structurally keep
+ * each speaker's knowledge separate; the prompt only asks for it.
+ *
+ * It is the same for every episode of a show, so nothing episode-specific may
+ * go in it: not the history (that leads the prompt, see
+ * `buildScriptGenerationPrompt`), and not the speakers' labels, which depend
+ * on who the guest is. It must not show a placeholder where a label would
+ * go either: the model copies one literally (e.g. "[Penny]: ..." from
+ * "[first label]: ..."), which the script parser doesn't recognise.
+ */
+export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): string {
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
@@ -97,27 +58,19 @@ And episodes follow this structure:
 ${ctx.podcast.structure}
 
 The show host(s) are:
-${hosts}${historySection}
+${hosts}
 
 
-${inPrompt ? FORMAT_WITHOUT_LABELS : `The scripts will be used with a TTS engine, and follow this format:
+The scripts will be used with a TTS engine. Each turn is one line made of the speaker's label, a colon, a space, \
+and the spoken words, with a blank line between turns. A turn can have a second line, "Style: " followed by \
+delivery directions for that turn. Write the label as plain text, with no brackets, asterisks, or other \
+decoration around it, and write the Style line without parentheses.
 
-${labelA}: line
-(Optional) Style: delivery directions for that turn
-
-${labelB}: line
-...`}
-
-${
-    inPrompt
-      ? `Speaker labels must be exactly the two labels given with the episode, character for character — they are matched \
-literally to assign voices.`
-      : `Speaker labels must be exactly "${labelA}" and "${labelB}", character for character — they are matched \
-literally to assign voices.`
-  } Every turn must contain spoken words, and a Style line, when used, goes on its \
+Speaker labels must be exactly the two labels given with the episode, character for character — they are matched \
+literally to assign voices. Every turn must contain spoken words, and a Style line, when used, goes on its \
 own line after the spoken words.
 
-Each "[speaker]: line" pair is a turn. Keep turns short, like in real conversation. One or two sentences \
+Each turn is one speaker's label and line. Keep turns short, like in real conversation. One or two sentences \
 to keep them from becoming monologues. If you need to write longer lines, don't try to hack it by \
 splitting them across multiple sequential turns from the same speaker, or having the other speaker \
 complete those with their own lines. Instead, break longer turns down into multiple ones with comments \
@@ -136,12 +89,11 @@ spoken sounds in the speaker's turn.
 overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
 turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
 intelligibility.
-${inPrompt ? EXAMPLE_WITHOUT_LABELS : `For Example: 
-  ${labelA}: I think the most important part of the story is what they didn't say. |How so?| Because it's not just what's seen. It's what's felt.
-Will be rendered by the TTS engine as:
-  ${labelA}: I think the most important part of the story is what they didn't say. 
-  ${labelB}: How so? 
-  ${labelA}: Because it's not just what's seen. It's what's felt.`}
+For Example, this single turn:
+  I think the most important part of the story is what they didn't say. |How so?| Because it's not just what's seen. It's what's felt.
+Will be rendered by the TTS engine as the active speaker saying "I think the most important part of the story is \
+what they didn't say.", then the other speaker overlapping with "How so?", then the active speaker finishing with \
+"Because it's not just what's seen. It's what's felt."
 
 The following rules must be followed:
 - When citing sources, never invent details like names, places, dates or specific facts to fill in gaps. Translations can be adapted (see below).
@@ -150,7 +102,8 @@ The following rules must be followed:
 sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \
 be used mid-turn to inject speech with the OTHER speaker's voice, and IS NOT meant for adding emphasis to the \
-active speaker's turn.${ctx.podcast.historyTemplateRule ? TEMPLATE_RULE : ""}
+active speaker's turn.
+${HISTORY_IS_NOT_A_TEMPLATE_RULE}
 `;
 }
 
@@ -164,15 +117,20 @@ export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationCon
     }`;
 
   const [a, b] = cast.speakers;
-  const history = historyInPrompt(ctx) ? historyBlock(ctx) : "";
-  const historySection = history ? `${history}\n\n${outdatedNote("the system instructions")}\n\n` : "";
-  const labelsSection = historyInPrompt(ctx)
-    ? `\n\nThe speaker labels for this episode are exactly "${speakerLabel(a.name, b.name)}" and \
-"${speakerLabel(b.name, a.name)}".`
+  const history = buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
+  const historySection = history
+    ? `${history}
+
+The history might have been generated with an earlier version of the show's title, premise, structure or \
+host personas, so prioritize the details in the system instructions above past episode's formulas.
+
+`
     : "";
 
   return `${historySection}Write the script for an episode based on the sources below, following this draft:
-${draft}${guestBlock}${labelsSection}
+${draft}${guestBlock}
+
+The speaker labels for this episode are exactly "${speakerLabel(a.name, b.name)}" and "${speakerLabel(b.name, a.name)}".
 
 The script *must* have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
 

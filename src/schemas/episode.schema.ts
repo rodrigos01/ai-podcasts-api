@@ -88,16 +88,6 @@ export const episodeSchema = z.object({
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),
   ttsChunks: z.array(ttsChunkSchema).nullable(),
-  // The Interactions API id of the call that wrote this episode's script. The
-  // next episode's script call passes it as `previous_interaction_id`, so the
-  // server carries the series' context instead of us re-sending transcripts
-  // (scriptGeneration.service.ts). Null/absent: not generated yet, or written
-  // before this existed.
-  interactionId: z.string().min(1).nullable().optional(),
-  // The "relevant notes from past episodes" the script call was given, for
-  // podcasts whose historyMethod is "notes" (pastNotes.service.ts); kept so a
-  // generation can be inspected afterwards. Null/absent: not used.
-  pastNotes: z.string().min(1).nullable().optional(),
   // Total audio duration generated so far, in seconds — updated in
   // Firestore as chunks finish generating (audio.service.ts), not computed
   // at request time, so polling clients (GET .../status) can build a "how

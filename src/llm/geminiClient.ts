@@ -36,10 +36,8 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 //    is no location env var anymore).
 //  - Interactions are stored server-side for 7 days BY DEFAULT. Every call
 //    here sets `store: false` (stateless / zero data retention): prompts
-//    carry users' source material and the responses are full transcripts.
-//    The one exception is the episode script call, which stores its
-//    interaction so the next episode can chain from it with
-//    `previous_interaction_id` (see scriptGeneration.service.ts).
+//    carry users' source material and the responses are full transcripts,
+//    and nothing here uses `previous_interaction_id` chaining.
 //
 // TTS is a separate concern — see llm/ttsClient.ts, which uses the same
 // platform and credentials but talks to Gemini 3.8 Flash TTS's
@@ -167,20 +165,6 @@ interface GeneratePlainTextOptions {
   prompt: string;
   /** Omitted = the model's default thinking level. */
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
-  /**
-   * Continue the server-side conversation held by an earlier stored
-   * interaction. The system instruction and generation config are NOT carried
-   * over by the API, so they are still sent on every call.
-   */
-  previousInteractionId?: string;
-  /** Keep the interaction server-side so it can be chained from (retained 7 days by default). */
-  store?: boolean;
-}
-
-export interface PlainTextResult {
-  text: string;
-  /** The interaction's id; only usable as `previousInteractionId` if it was stored. */
-  interactionId: string;
 }
 
 /**
@@ -196,7 +180,7 @@ export interface PlainTextResult {
  * validated structured shape (the wizards, voiceResolution),
  * keep using `generateText`.
  */
-export async function generatePlainText(options: GeneratePlainTextOptions): Promise<PlainTextResult> {
+export async function generatePlainText(options: GeneratePlainTextOptions): Promise<string> {
   const client = await getClient();
 
   const interaction = await withRetry(() =>
@@ -204,11 +188,10 @@ export async function generatePlainText(options: GeneratePlainTextOptions): Prom
       model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
-      store: options.store ?? false,
-      ...(options.previousInteractionId ? { previous_interaction_id: options.previousInteractionId } : {}),
+      store: false,
       ...(options.thinkingLevel ? { generation_config: { thinking_level: options.thinkingLevel } } : {}),
     }),
   );
 
-  return { text: readOutputText(interaction), interactionId: interaction.id };
+  return readOutputText(interaction);
 }
