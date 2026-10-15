@@ -128,7 +128,7 @@ async function generateOnce(
   const labelB = speakerLabel(b.name, a.name);
 
   const raw = await generatePlainText({
-    systemInstruction: buildScriptSystemInstruction(cast, ctx),
+    systemInstruction: buildScriptSystemInstruction(ctx),
     prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
   });
 
