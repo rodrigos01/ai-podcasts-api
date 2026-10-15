@@ -6,12 +6,15 @@
  *
  *   npx tsx scripts/ab-test-generate-arm.ts <armPodcastId> <seedPodcastId> [lastEpisode=5]
  */
+import { getPodcast } from "../src/data/podcast.repository";
 import { inSeriesOrder, generate, log, ready, writeEpisode } from "./lib/abTest";
 
 async function main() {
   const [armId, seedId, lastArg] = process.argv.slice(2);
   if (!armId || !seedId) throw new Error("usage: ab-test-generate-arm.ts <armPodcastId> <seedPodcastId> [lastEpisode]");
   const last = Number(lastArg ?? 5);
+  // "Armchair Travel Diaries (Test D)" -> "D", for the log.
+  const arm_ = (await getPodcast(armId))?.title.match(/\(Test (\w+)\)/)?.[1] ?? "arm";
   const [arm, seed] = await Promise.all([inSeriesOrder(armId), inSeriesOrder(seedId)]);
 
   const [first, seedFirst] = [arm[0]!, seed[0]!];
@@ -32,7 +35,7 @@ async function main() {
   for (let i = 1; i < last; i++) {
     const episode = arm[i]!;
     if (episode.transcript) continue;
-    await generate(`C${i + 1}`, armId, episode.id, async (script, patch) => patch(ready(script)));
+    await generate(`${arm_}${i + 1}`, armId, episode.id, async (script, patch) => patch(ready(script)));
   }
   log("all", "complete");
 }

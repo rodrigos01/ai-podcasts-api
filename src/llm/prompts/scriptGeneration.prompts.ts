@@ -56,6 +56,21 @@ function outdatedNote(where: string): string {
 host personas, so prioritize the details in ${where} above past episode's formulas.`;
 }
 
+// The system instruction can't name the episode's labels when it has to be the
+// same for every episode, and it must not show a placeholder in the label's
+// place either: the model copies it literally (e.g. "[Penny]: ..." from
+// "[first label]: ..."), which the script parser doesn't recognise.
+const FORMAT_WITHOUT_LABELS = `The scripts will be used with a TTS engine. Each turn is one line made of the \
+speaker's label, a colon, a space, and the spoken words, with a blank line between turns. A turn can have a second \
+line, "Style: " followed by delivery directions for that turn. Write the label as plain text, with no brackets, \
+asterisks, or other decoration around it, and write the Style line without parentheses.`;
+
+const EXAMPLE_WITHOUT_LABELS = `For Example, this single turn:
+  I think the most important part of the story is what they didn't say. |How so?| Because it's not just what's seen. It's what's felt.
+Will be rendered by the TTS engine as the active speaker saying "I think the most important part of the story is \
+what they didn't say.", then the other speaker overlapping with "How so?", then the active speaker finishing with \
+"Because it's not just what's seen. It's what's felt."`;
+
 const TEMPLATE_RULE = `
 - Earlier episodes of this show are shared history, not a template for new ones. Do not reuse an earlier \
 episode's structure, beats, pacing, jokes, or phrasing to build this episode. The one exception is the show's \
@@ -70,8 +85,8 @@ export function buildScriptSystemInstruction(
   // With the history in the prompt, the labels go there too: they depend on
   // who the guest is, and the system instruction must not.
   const inPrompt = historyInPrompt(ctx);
-  const labelA = inPrompt ? "[first label]" : speakerLabel(a.name, b.name);
-  const labelB = inPrompt ? "[second label]" : speakerLabel(b.name, a.name);
+  const labelA = speakerLabel(a.name, b.name);
+  const labelB = speakerLabel(b.name, a.name);
   const history = inPrompt ? "" : historyBlock(ctx);
   const historySection = history ? `\n\n${history}\n\n${outdatedNote("this document")}` : "";
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
@@ -85,13 +100,13 @@ The show host(s) are:
 ${hosts}${historySection}
 
 
-The scripts will be used with a TTS engine, and follow this format:
+${inPrompt ? FORMAT_WITHOUT_LABELS : `The scripts will be used with a TTS engine, and follow this format:
 
 ${labelA}: line
 (Optional) Style: delivery directions for that turn
 
 ${labelB}: line
-...
+...`}
 
 ${
     inPrompt
@@ -121,12 +136,12 @@ spoken sounds in the speaker's turn.
 overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
 turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
 intelligibility.
-For Example: 
+${inPrompt ? EXAMPLE_WITHOUT_LABELS : `For Example: 
   ${labelA}: I think the most important part of the story is what they didn't say. |How so?| Because it's not just what's seen. It's what's felt.
 Will be rendered by the TTS engine as:
   ${labelA}: I think the most important part of the story is what they didn't say. 
   ${labelB}: How so? 
-  ${labelA}: Because it's not just what's seen. It's what's felt.
+  ${labelA}: Because it's not just what's seen. It's what's felt.`}
 
 The following rules must be followed:
 - When citing sources, never invent details like names, places, dates or specific facts to fill in gaps. Translations can be adapted (see below).

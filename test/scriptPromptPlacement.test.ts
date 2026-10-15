@@ -39,6 +39,10 @@ describe("history placement", () => {
     const b = render(inPrompt, "Sayri Huamán", { pastNotes: "- Episode 1: Penny said X." });
     expect(a.system).toBe(b.system);
     expect(a.system).not.toContain("Previous episodes of this podcast");
+    // No placeholder for the model to copy into its labels.
+    expect(a.system).not.toMatch(/\[(first|second) label\]/);
+    expect(a.system).not.toContain("Penny:");
+    expect(a.system).toContain("no brackets");
     expect(a.prompt).toContain("Previous episodes of this podcast");
     expect(a.prompt).toContain('exactly "Penny" and "Giles"');
     expect(b.prompt).toContain("not a checklist");
