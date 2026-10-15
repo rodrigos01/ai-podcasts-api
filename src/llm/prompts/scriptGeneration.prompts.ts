@@ -39,22 +39,41 @@ const WORDS_PER_MINUTE = 155;
  * see AGENTS.md's migration note: a single writer can't structurally keep
  * each speaker's knowledge separate; the prompt only asks for it.
  */
+/** Whether the history goes in the prompt (leaving the system instruction identical for every episode). */
+function historyInPrompt(ctx: ScriptGenerationContext): boolean {
+  return ctx.podcast.historyPlacement === "prompt";
+}
+
+/** The history block (full transcripts or notes), or "" when the episode has none. */
+function historyBlock(ctx: ScriptGenerationContext): string {
+  return ctx.pastNotes
+    ? buildPastNotesBlock(ctx.pastNotes)
+    : buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast);
+}
+
+function outdatedNote(where: string): string {
+  return `The history might have been generated with an earlier version of the show's title, premise, structure or \
+host personas, so prioritize the details in ${where} above past episode's formulas.`;
+}
+
+const TEMPLATE_RULE = `
+- Earlier episodes of this show are shared history, not a template for new ones. Do not reuse an earlier \
+episode's structure, beats, pacing, jokes, or phrasing to build this episode. The one exception is the show's \
+catchphrases (its recurring signature phrases, such as greetings, sign-offs, and segment names), which can be \
+reused as they were.`;
+
 export function buildScriptSystemInstruction(
   cast: Cast,
   ctx: ScriptGenerationContext,
 ): string {
   const [a, b] = cast.speakers;
-  const labelA = speakerLabel(a.name, b.name);
-  const labelB = speakerLabel(b.name, a.name);
-  const history = ctx.pastNotes
-    ? buildPastNotesBlock(ctx.pastNotes)
-    : buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast);
-  const historySection = history
-    ? `\n\n${history}
-
-The history might have been generated with an earlier version of the show's title, premise, structure or \
-host personas, so prioritize the details in this document above past episode's formulas.`
-    : "";
+  // With the history in the prompt, the labels go there too: they depend on
+  // who the guest is, and the system instruction must not.
+  const inPrompt = historyInPrompt(ctx);
+  const labelA = inPrompt ? "[first label]" : speakerLabel(a.name, b.name);
+  const labelB = inPrompt ? "[second label]" : speakerLabel(b.name, a.name);
+  const history = inPrompt ? "" : historyBlock(ctx);
+  const historySection = history ? `\n\n${history}\n\n${outdatedNote("this document")}` : "";
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
@@ -74,8 +93,13 @@ ${labelA}: line
 ${labelB}: line
 ...
 
-Speaker labels must be exactly "${labelA}" and "${labelB}", character for character — they are matched \
-literally to assign voices. Every turn must contain spoken words, and a Style line, when used, goes on its \
+${
+    inPrompt
+      ? `Speaker labels must be exactly the two labels given with the episode, character for character — they are matched \
+literally to assign voices.`
+      : `Speaker labels must be exactly "${labelA}" and "${labelB}", character for character — they are matched \
+literally to assign voices.`
+  } Every turn must contain spoken words, and a Style line, when used, goes on its \
 own line after the spoken words.
 
 Each "[speaker]: line" pair is a turn. Keep turns short, like in real conversation. One or two sentences \
@@ -111,7 +135,7 @@ The following rules must be followed:
 sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \
 be used mid-turn to inject speech with the OTHER speaker's voice, and IS NOT meant for adding emphasis to the \
-active speaker's turn.
+active speaker's turn.${ctx.podcast.historyTemplateRule ? TEMPLATE_RULE : ""}
 `;
 }
 
@@ -124,8 +148,16 @@ export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationCon
   const draft = `Title: ${ctx.episode.title}\nTopics: ${ctx.episode.topics}${ctx.episode.productionNotes ? `\nProduction notes: ${ctx.episode.productionNotes}` : ""
     }`;
 
-  return `Write the script for an episode based on the sources below, following this draft:
-${draft}${guestBlock}
+  const [a, b] = cast.speakers;
+  const history = historyInPrompt(ctx) ? historyBlock(ctx) : "";
+  const historySection = history ? `${history}\n\n${outdatedNote("the system instructions")}\n\n` : "";
+  const labelsSection = historyInPrompt(ctx)
+    ? `\n\nThe speaker labels for this episode are exactly "${speakerLabel(a.name, b.name)}" and \
+"${speakerLabel(b.name, a.name)}".`
+    : "";
+
+  return `${historySection}Write the script for an episode based on the sources below, following this draft:
+${draft}${guestBlock}${labelsSection}
 
 The script *must* have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
 

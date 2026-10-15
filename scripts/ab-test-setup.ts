@@ -9,16 +9,20 @@
  * `startsAfterEpisodeId` links preserved. Idempotent: an arm that already has
  * episodes is left alone.
  *
- *   npx tsx scripts/ab-test-setup.ts <sourcePodcastId> <templatePodcastId> "<title>" <historyMethod>
+ *   npx tsx scripts/ab-test-setup.ts <sourcePodcastId> <templatePodcastId> "<title>" <historyMethod> ['{"historyPlacement":"prompt",...}']
  */
 import { randomUUID } from "node:crypto";
 import { firestore } from "../src/config/firebase";
-import { historyMethodSchema, type Podcast } from "../src/schemas/podcast.schema";
+import { z } from "zod";
+import { historyMethodSchema, historyPlacementSchema, type Podcast } from "../src/schemas/podcast.schema";
 import type { Episode } from "../src/schemas/episode.schema";
 import type { Source } from "../src/schemas/source.schema";
 import { NO_VOICE } from "../src/utils/voiceDecision";
 
 const podcasts = firestore.collection("podcasts");
+
+// Optional extra podcast settings for the arm, given as JSON.
+const extrasSchema = z.object({ historyPlacement: historyPlacementSchema, historyTemplateRule: z.boolean() }).partial().strict();
 
 function need<T>(value: T | undefined, what: string): T {
   if (value === undefined) throw new Error(`unknown ${what}`);
@@ -26,11 +30,12 @@ function need<T>(value: T | undefined, what: string): T {
 }
 
 async function main() {
-  const [sourceId, templateId, title, methodArg] = process.argv.slice(2);
+  const [sourceId, templateId, title, methodArg, extrasArg] = process.argv.slice(2);
   if (!sourceId || !templateId || !title || !methodArg) {
-    throw new Error('usage: ab-test-setup.ts <sourcePodcastId> <templatePodcastId> "<title>" <historyMethod>');
+    throw new Error('usage: ab-test-setup.ts <sourcePodcastId> <templatePodcastId> "<title>" <historyMethod> [extrasJson]');
   }
   const historyMethod = historyMethodSchema.parse(methodArg);
+  const extras = extrasSchema.parse(extrasArg ? JSON.parse(extrasArg) : {});
 
   const source = (await podcasts.doc(sourceId).get()).data() as Podcast;
   const template = (await podcasts.doc(templateId).get()).data() as Podcast;
@@ -49,6 +54,7 @@ async function main() {
       id: randomUUID(),
       title,
       historyMethod,
+      ...extras,
       hosts: template.hosts.map((h) => ({ ...h, id: randomUUID() })),
       createdAt: now,
       updatedAt: now,

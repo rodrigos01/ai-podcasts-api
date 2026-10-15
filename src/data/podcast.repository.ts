@@ -26,6 +26,8 @@ export async function createPodcast(
     structure: input.structure,
     ...(input.languageCode ? { languageCode: input.languageCode } : {}),
     ...(input.historyMethod ? { historyMethod: input.historyMethod } : {}),
+    ...(input.historyPlacement ? { historyPlacement: input.historyPlacement } : {}),
+    ...(input.historyTemplateRule !== undefined ? { historyTemplateRule: input.historyTemplateRule } : {}),
     hosts: input.hosts.map((host, index) => {
       const { resolvedVoiceId: _clientValue, ...person } = host;
       return { ...person, id: randomUUID(), ...(hostVoices[index] ?? NO_VOICE) };
