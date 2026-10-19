@@ -39,6 +39,9 @@ export async function inSeriesOrder(podcastId: string): Promise<Episode[]> {
   return (await listEpisodes(podcastId)).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
 }
 
+/** "Armchair Travel Diaries (Test D)" -> "Armchair Travel Diaries". */
+export const baseTitle = (title: string) => title.replace(/\s*\(Test \w+\)\s*$/, "");
+
 /** "Armchair Travel Diaries (Test D)" -> "D", for log lines. */
 export async function armLabel(podcastId: string): Promise<string> {
   return (await getPodcast(podcastId))?.title.match(/\(Test (\w+)\)/)?.[1] ?? podcastId.slice(0, 6);
@@ -85,7 +88,10 @@ export async function generate(label: string, podcastId: string, episodeId: stri
   );
   const patch = (f: Partial<Episode>) => patchEpisodeStateAsOwner(podcastId, episodeId, owner, f);
   try {
-    const podcast = (await getPodcast(podcastId))!;
+    const stored = (await getPodcast(podcastId))!;
+    // Arms are told apart by a "(Test X)" suffix on the title, but the system instruction
+    // names the show: generate under the base title so every arm sees the same prompt.
+    const podcast = { ...stored, title: baseTitle(stored.title) };
     const episode = (await getEpisode(podcastId, episodeId))!;
     const cast = selectCast(podcast.hosts.filter((h) => episode.participantHostIds.includes(h.id)), episode.guests);
     const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(podcastId, id)))).filter((s) => s !== null);

@@ -10,13 +10,24 @@
  * episode on which any arm fails.
  *
  *   npx tsx .claude/skills/prompt-ab-test/scripts/generate-arms.ts <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
+ *   npx tsx .../generate-arms.ts --only <n> <seedPodcastId> <armId> [<armId> ...]
+ *
+ * With `--only n`, episodes 1..n-1 are copied from the seed (which must have
+ * their transcripts) so every arm has the same history, and only episode n is
+ * generated — for a costly variant that is tried on one representative episode.
  */
 import { armLabel, generate, inSeriesOrder, log, writeEpisode } from "./lib";
 
 async function main() {
-  const [seedId, lastArg, ...armIds] = process.argv.slice(2);
+  let args = process.argv.slice(2);
+  const onlyAt = args.indexOf("--only");
+  const only = onlyAt >= 0 ? Number(args[onlyAt + 1]) : null;
+  if (onlyAt >= 0) args = args.filter((_, i) => i !== onlyAt && i !== onlyAt + 1);
+  const [seedId, ...rest] = args;
+  const lastArg = only ? String(only) : rest.shift();
+  const armIds = rest;
   if (!seedId || !lastArg || armIds.length === 0) {
-    throw new Error("usage: generate-arms.ts <seedPodcastId> <lastEpisode> <armId> [<armId> ...]");
+    throw new Error("usage: generate-arms.ts <seedPodcastId> <lastEpisode> <armId>...  |  --only <n> <seedPodcastId> <armId>...");
   }
   const last = Number(lastArg);
   const seed = await inSeriesOrder(seedId);
@@ -25,13 +36,32 @@ async function main() {
   );
 
   let seedFirst = seed[0]!;
-  if (!seedFirst.transcript) {
+  if (only) {
+    // Pre-fill episodes 1..n-1 in every arm from the seed, so all arms share the same history.
+    for (let i = 0; i < only - 1; i++) {
+      const from = seed[i];
+      if (!from?.transcript) throw new Error(`--only ${only}: the seed has no transcript for episode ${i + 1}`);
+      for (const arm of arms) {
+        const target = arm.episodes[i]!;
+        if (target.transcript) continue;
+        await writeEpisode(arm.id, target.id, {
+          transcript: from.transcript,
+          ttsChunks: from.ttsChunks,
+          status: "ready",
+          progress: from.progress,
+          error: null,
+        });
+        log(`${arm.label}${i + 1}`, "copied from the seed podcast");
+      }
+    }
+  }
+  if (!only && !seedFirst.transcript) {
     const [firstArm] = arms;
     const first = firstArm!.episodes[0]!;
     if (!first.transcript) await generate(`${firstArm!.label}1`, firstArm!.id, first.id);
     seedFirst = (await inSeriesOrder(firstArm!.id))[0]!;
   }
-  for (const arm of arms) {
+  for (const arm of only ? [] : arms) {
     const first = arm.episodes[0]!;
     if (first.transcript) continue;
     await writeEpisode(arm.id, first.id, {
@@ -44,7 +74,7 @@ async function main() {
     log(`${arm.label}1`, "copied from the seed podcast");
   }
 
-  for (let i = 1; i < last; i++) {
+  for (let i = only ? only - 1 : 1; i < last; i++) {
     const results = await Promise.allSettled(
       arms
         .filter((arm) => !arm.episodes[i]!.transcript)

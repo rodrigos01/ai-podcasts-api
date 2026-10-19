@@ -7,7 +7,11 @@
  * cleared. Idempotent: an arm found by owner + title that already has episodes
  * is left alone.
  *
- *   npx tsx .claude/skills/prompt-ab-test/scripts/setup-arm.ts <sourcePodcastId> <templatePodcastId> "<title>" ['{"someFlag":"x"}']
+ *   npx tsx .claude/skills/prompt-ab-test/scripts/setup-arm.ts [--episodes n] <sourcePodcastId> <templatePodcastId> "<title>" ['{"someFlag":"x"}']
+ *
+ * `--episodes n` copies only the first n episodes (series order). Sources the
+ * copied episodes use but the template lacks (the source show may have grown
+ * since the template was made) are copied from the source podcast.
  *
  * The optional JSON is merged into the arm's podcast doc: the per-arm switches
  * the code under test reads (see SKILL.md). Reuse the template's own title
@@ -28,7 +32,11 @@ function need<T>(value: T | undefined, what: string): T {
 }
 
 async function main() {
-  const [sourceId, templateId, title, extrasArg] = process.argv.slice(2);
+  let args = process.argv.slice(2);
+  const limitAt = args.indexOf("--episodes");
+  const limit = limitAt >= 0 ? Number(args[limitAt + 1]) : Infinity;
+  if (limitAt >= 0) args = args.filter((_, i) => i !== limitAt && i !== limitAt + 1);
+  const [sourceId, templateId, title, extrasArg] = args;
   if (!sourceId || !templateId || !title) {
     throw new Error('usage: setup-arm.ts <sourcePodcastId> <templatePodcastId> "<title>" [extrasJson]');
   }
@@ -39,7 +47,8 @@ async function main() {
   const sourceSources = (await podcasts.doc(sourceId).collection("sources").get()).docs.map((d) => d.data() as Source);
   const sourceEpisodes = (await podcasts.doc(sourceId).collection("episodes").get()).docs
     .map((d) => d.data() as Episode)
-    .sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1));
+    .sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1))
+    .slice(0, limit);
 
   let arm = (await podcasts.where("ownerId", "==", template.ownerId).where("title", "==", title).get()).docs[0]?.data() as
     | Podcast
@@ -71,8 +80,15 @@ async function main() {
   }
   // Sources are matched on title, hosts on index.
   const armSources = (await ref.collection("sources").get()).docs.map((d) => d.data() as Source);
+  const usedSourceIds = new Set(sourceEpisodes.flatMap((e) => e.sourceIds));
+  for (const s of sourceSources.filter((x) => usedSourceIds.has(x.id) && !armSources.some((t) => t.title === x.title))) {
+    const copy = { ...s, id: randomUUID() };
+    await ref.collection("sources").doc(copy.id).set(copy);
+    armSources.push(copy);
+    console.log(`  copied source "${s.title}" from the source podcast`);
+  }
   const sourceIdMap = new Map(
-    sourceSources.map((s) => [s.id, need(armSources.find((t) => t.title === s.title)?.id, `source "${s.title}"`)]),
+    sourceSources.filter((s) => usedSourceIds.has(s.id)).map((s) => [s.id, need(armSources.find((t) => t.title === s.title)?.id, `source "${s.title}"`)]),
   );
   const hostIdMap = new Map(source.hosts.map((h, i) => [h.id, need(arm.hosts[i]?.id, `host ${i}`)]));
   const episodeIdMap = new Map(sourceEpisodes.map((e) => [e.id, randomUUID()]));
