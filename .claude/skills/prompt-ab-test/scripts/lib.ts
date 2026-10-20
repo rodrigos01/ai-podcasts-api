@@ -10,7 +10,8 @@
  * change `buildContext` below the same way — or, better, move that logic into
  * one function in src/ that both call.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { FieldValue } from "firebase-admin/firestore";
 import { MAX_HISTORY_EPISODES } from "../../../../src/constants/episodeHistory";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../../../src/constants/generationLease";
 import { LENGTH_RANGES } from "../../../../src/constants/lengthRanges";
@@ -23,13 +24,16 @@ import {
   patchEpisodeStateAsOwner,
   releaseGenerationLease,
 } from "../../../../src/data/episode.repository";
+import { firestore } from "../../../../src/config/firebase";
 import { getPodcast } from "../../../../src/data/podcast.repository";
 import { getSource } from "../../../../src/data/source.repository";
 import type { Episode } from "../../../../src/schemas/episode.schema";
 import type { Podcast } from "../../../../src/schemas/podcast.schema";
 import type { Source } from "../../../../src/schemas/source.schema";
+import { NO_VOICE } from "../../../../src/utils/voiceDecision";
 import { chunkTranscript } from "../../../../src/services/episodeGeneration/chunker";
 import { generateEpisodeScript, type EpisodeScript } from "../../../../src/services/episodeGeneration/scriptGeneration.service";
+import { generateSuggestions } from "../../../../src/services/episodeWizard.service";
 import { selectCast } from "../../../../src/services/episodeGeneration/speakerSelection";
 
 export const log = (label: string, msg: string) => console.log(`[${new Date().toISOString()}] ${label}: ${msg}`);
@@ -109,5 +113,56 @@ export async function generate(label: string, podcastId: string, episodeId: stri
   } finally {
     clearInterval(heartbeat);
     await releaseGenerationLease(podcastId, episodeId, owner).catch(() => {});
+  }
+}
+
+/**
+ * Re-drafts episode `index` (0-based) of each arm the way the app does, through the
+ * episode wizard's draft call, and writes the draft's title, topics, production
+ * notes and guest onto the arm's episode (sources, length and host stay as they
+ * are: they are inputs to the request). `prompt` is the user's own instruction for
+ * the draft call (the original episode's production notes in the history test), if any.
+ * Arms whose history is identical (same earlier transcripts) get one shared draft;
+ * the others draft separately. Only the first suggestion's first episode is used,
+ * and the shape the wizard chose is logged.
+ */
+export async function redraftEpisode(armIds: string[], index: number, prompt: string | undefined): Promise<void> {
+  const groups = new Map<string, { armId: string; label: string }[]>();
+  for (const armId of armIds) {
+    const episode = (await inSeriesOrder(armId))[index]!;
+    if (episode.transcript) continue; // already generated: leave its draft alone
+    const prior = await getPriorEpisodes(armId, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
+    const key = createHash("sha1").update(prior.map((p) => p.episode.transcript).join("\n---\n")).digest("hex");
+    groups.set(key, [...(groups.get(key) ?? []), { armId, label: await armLabel(armId) }]);
+  }
+  for (const members of groups.values()) {
+    const lead = members[0]!;
+    const stored = (await getPodcast(lead.armId))!;
+    const podcast = { ...stored, title: baseTitle(stored.title) };
+    const episode = (await inSeriesOrder(lead.armId))[index]!;
+    const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(lead.armId, id)))).filter((s) => s !== null);
+    const previousEpisodes = await getPriorEpisodes(lead.armId, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
+    const result = await generateSuggestions(podcast, sources, episode.length, previousEpisodes, prompt);
+    const draft = result.suggestions[0]!.episodes[0]!;
+    const shape = result.suggestions.map((s) => `${s.episodes.length} ep`).join(" + ");
+    log(
+      members.map((m) => `${m.label}${index + 1}`).join("+"),
+      `draft (${previousEpisodes.length} prior; wizard returned ${shape}) ${JSON.stringify({ title: draft.title, topics: draft.topics, productionNotes: draft.productionNotes, guest: draft.guests[0] })}`,
+    );
+    for (const member of members) {
+      const target = (await inSeriesOrder(member.armId))[index]!;
+      await firestore
+        .collection("podcasts")
+        .doc(member.armId)
+        .collection("episodes")
+        .doc(target.id)
+        .update({
+          title: draft.title,
+          topics: draft.topics,
+          productionNotes: draft.productionNotes ?? FieldValue.delete(),
+          guests: draft.guests.map((g) => ({ ...g, id: randomUUID(), ...NO_VOICE })),
+          updatedAt: Date.now(),
+        });
+    }
   }
 }

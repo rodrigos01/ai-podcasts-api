@@ -12,6 +12,9 @@
  *   npx tsx .claude/skills/prompt-ab-test/scripts/generate-arms.ts <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
  *   npx tsx .../generate-arms.ts --only <n> <seedPodcastId> <armId> [<armId> ...]
  *   npx tsx .../generate-arms.ts --from <n> <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
+ *   add `--redraft <notesPodcastId>` to draft each episode from scratch (see lib.ts's redraftEpisode)
+ *   instead of using the stored title/topics/guest; the user prompt of each draft call is the
+ *   production notes of the same-numbered episode in <notesPodcastId> (none if it has none).
  *
  * With `--only n` / `--from n`, episodes 1..n-1 are copied from the seed (which
  * must have their transcripts) so every arm has the same history, and generation
@@ -19,7 +22,7 @@
  * representative episode), `--from` runs on to `lastEpisode`. The seed can be
  * an existing arm whose later episodes already serve as the control.
  */
-import { armLabel, generate, inSeriesOrder, log, writeEpisode } from "./lib";
+import { armLabel, generate, inSeriesOrder, log, redraftEpisode, writeEpisode } from "./lib";
 
 async function main() {
   let args = process.argv.slice(2);
@@ -30,6 +33,9 @@ async function main() {
     args = args.filter((_, i) => i !== at && i !== at + 1);
     return value;
   };
+  const redraftAt = args.indexOf("--redraft");
+  const redraftNotesId = redraftAt >= 0 ? args[redraftAt + 1] : null;
+  if (redraftAt >= 0) args = args.filter((_, i) => i !== redraftAt && i !== redraftAt + 1);
   const onlyFlag = flag("--only");
   const fromFlag = flag("--from");
   const prefillTo = onlyFlag ?? fromFlag; // episodes 1..prefillTo-1 come from the seed
@@ -85,7 +91,9 @@ async function main() {
     log(`${arm.label}1`, "copied from the seed podcast");
   }
 
+  const notesEpisodes = redraftNotesId ? await inSeriesOrder(redraftNotesId) : [];
   for (let i = startAt ? startAt - 1 : 1; i < last; i++) {
+    if (redraftNotesId) await redraftEpisode(armIds, i, notesEpisodes[i]?.productionNotes);
     const results = await Promise.allSettled(
       arms
         .filter((arm) => !arm.episodes[i]!.transcript)
