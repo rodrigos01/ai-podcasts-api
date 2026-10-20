@@ -14,6 +14,9 @@ export const podcastCreateSchema = z.object({
   // A/B test switch: the text model for this podcast's script generation
   // (absent = the default). Not settable through the API; test arms set it directly.
   textModel: z.string().min(1).optional(),
+  // A/B test switch: "skill" replaces the script system instruction with the
+  // adapted podcast-deep-dive skill (llm/prompts/scriptSkill.prompts.ts).
+  promptVariant: z.literal("skill").optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets

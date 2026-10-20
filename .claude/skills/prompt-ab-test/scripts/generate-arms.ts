@@ -11,23 +11,33 @@
  *
  *   npx tsx .claude/skills/prompt-ab-test/scripts/generate-arms.ts <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
  *   npx tsx .../generate-arms.ts --only <n> <seedPodcastId> <armId> [<armId> ...]
+ *   npx tsx .../generate-arms.ts --from <n> <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
  *
- * With `--only n`, episodes 1..n-1 are copied from the seed (which must have
- * their transcripts) so every arm has the same history, and only episode n is
- * generated — for a costly variant that is tried on one representative episode.
+ * With `--only n` / `--from n`, episodes 1..n-1 are copied from the seed (which
+ * must have their transcripts) so every arm has the same history, and generation
+ * starts at episode n: `--only` stops there too (a costly variant tried on one
+ * representative episode), `--from` runs on to `lastEpisode`. The seed can be
+ * an existing arm whose later episodes already serve as the control.
  */
 import { armLabel, generate, inSeriesOrder, log, writeEpisode } from "./lib";
 
 async function main() {
   let args = process.argv.slice(2);
-  const onlyAt = args.indexOf("--only");
-  const only = onlyAt >= 0 ? Number(args[onlyAt + 1]) : null;
-  if (onlyAt >= 0) args = args.filter((_, i) => i !== onlyAt && i !== onlyAt + 1);
+  const flag = (name: string) => {
+    const at = args.indexOf(name);
+    if (at < 0) return null;
+    const value = Number(args[at + 1]);
+    args = args.filter((_, i) => i !== at && i !== at + 1);
+    return value;
+  };
+  const onlyFlag = flag("--only");
+  const fromFlag = flag("--from");
+  const prefillTo = onlyFlag ?? fromFlag; // episodes 1..prefillTo-1 come from the seed
   const [seedId, ...rest] = args;
-  const lastArg = only ? String(only) : rest.shift();
+  const lastArg = onlyFlag ? String(onlyFlag) : rest.shift();
   const armIds = rest;
   if (!seedId || !lastArg || armIds.length === 0) {
-    throw new Error("usage: generate-arms.ts <seedPodcastId> <lastEpisode> <armId>...  |  --only <n> <seedPodcastId> <armId>...");
+    throw new Error("usage: generate-arms.ts [--only n | --from n] <seedPodcastId> [<lastEpisode>] <armId>...");
   }
   const last = Number(lastArg);
   const seed = await inSeriesOrder(seedId);
@@ -36,11 +46,12 @@ async function main() {
   );
 
   let seedFirst = seed[0]!;
-  if (only) {
+  const startAt = prefillTo;
+  if (startAt) {
     // Pre-fill episodes 1..n-1 in every arm from the seed, so all arms share the same history.
-    for (let i = 0; i < only - 1; i++) {
+    for (let i = 0; i < startAt - 1; i++) {
       const from = seed[i];
-      if (!from?.transcript) throw new Error(`--only ${only}: the seed has no transcript for episode ${i + 1}`);
+      if (!from?.transcript) throw new Error(`--only/--from ${startAt}: the seed has no transcript for episode ${i + 1}`);
       for (const arm of arms) {
         const target = arm.episodes[i]!;
         if (target.transcript) continue;
@@ -55,13 +66,13 @@ async function main() {
       }
     }
   }
-  if (!only && !seedFirst.transcript) {
+  if (!startAt && !seedFirst.transcript) {
     const [firstArm] = arms;
     const first = firstArm!.episodes[0]!;
     if (!first.transcript) await generate(`${firstArm!.label}1`, firstArm!.id, first.id);
     seedFirst = (await inSeriesOrder(firstArm!.id))[0]!;
   }
-  for (const arm of only ? [] : arms) {
+  for (const arm of startAt ? [] : arms) {
     const first = arm.episodes[0]!;
     if (first.transcript) continue;
     await writeEpisode(arm.id, first.id, {
@@ -74,7 +85,7 @@ async function main() {
     log(`${arm.label}1`, "copied from the seed podcast");
   }
 
-  for (let i = only ? only - 1 : 1; i < last; i++) {
+  for (let i = startAt ? startAt - 1 : 1; i < last; i++) {
     const results = await Promise.allSettled(
       arms
         .filter((arm) => !arm.episodes[i]!.transcript)

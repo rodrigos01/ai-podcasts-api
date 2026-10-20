@@ -3,6 +3,7 @@ import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
+import { buildSkillSystemInstruction } from "./scriptSkill.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
@@ -50,6 +51,7 @@ reused as they were.`;
  * "[first label]: ..."), which the script parser doesn't recognise.
  */
 export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): string {
+  if (ctx.podcast.promptVariant === "skill") return buildSkillSystemInstruction(ctx);
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
