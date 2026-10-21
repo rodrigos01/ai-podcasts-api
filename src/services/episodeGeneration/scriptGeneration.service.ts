@@ -145,6 +145,27 @@ export function validateSpeakerTurns(turns: ScriptTurn[], labelA: string, labelB
   }
 }
 
+/** The longest an angle-bracket tag can be (in words) before it is taken for spoken text. */
+export const MAX_TAG_WORDS = 8;
+
+/**
+ * The prompt allows only short sound/action tags in angle brackets ("<laughs>").
+ * The model has been seen fusing a delivery direction and the whole spoken line
+ * into one tag ("<softly That is actually very sweet. ...>"), which the TTS would
+ * take for a non-vocal instruction rather than speech. Splitting direction from
+ * speech would be a guess, so — like a wrong speaker label — a script with such a
+ * tag is rejected and the whole generation retried.
+ */
+export function validateTurnTags(turns: ScriptTurn[]): void {
+  for (const turn of turns) {
+    for (const tag of turn.text.match(/<[^>]*>/g) ?? []) {
+      if (tag.trim().split(/\s+/).length > MAX_TAG_WORDS) {
+        throw new Error(`Script put spoken words inside an angle-bracket tag: ${tag.slice(0, 80)}...`);
+      }
+    }
+  }
+}
+
 async function generateOnce(
   cast: Cast,
   ctx: ScriptGenerationContext,
@@ -172,6 +193,7 @@ async function generateOnce(
     throw new Error("Gemini returned a script with no turns containing spoken text");
   }
   validateSpeakerTurns(sanitizedTurns, labelA, labelB);
+  validateTurnTags(sanitizedTurns);
 
   const transcript = buildTranscript(
     sanitizedTurns.map((turn) => ({

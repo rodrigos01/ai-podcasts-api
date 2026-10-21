@@ -105,7 +105,8 @@ new episode from its own sources: only the new material needs fresh reading.
 You can use the following tags to make the conversation more realistic:
 
 - Non vocal bursts: use instructions in angle brackets such as <laughs> or <gasps> to introduce these non \
-spoken sounds in the speaker's turn.
+spoken sounds in the speaker's turn. Keep each tag to a few words naming a sound or action, and never put \
+spoken words inside the brackets. How a whole turn should sound goes in its Style line.
 - Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, \
 overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
 turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
