@@ -79,12 +79,13 @@ describe("script prompts", () => {
     expect(system).toContain("no stage directions");
   });
 
-  it("asks for backchanneling regularly without tying it to how long a turn is", () => {
+  it("offers backchanneling as optional and does not tie it to how long a turn is", () => {
+    // Asking for it ("use it regularly", "whenever a turn runs past a couple of
+    // sentences") made the model stretch turns to have somewhere to put one.
     const { system } = render("Giles", false);
-    expect(system).toContain("Use it regularly");
-    // A length condition made the model stretch turns to have somewhere to put one.
     const section = system.slice(system.indexOf("- Backchanneling:"), system.indexOf("For Example"));
-    expect(section).not.toMatch(/sentence|longer|runs past|long turn/i);
+    expect(section).toContain("if you want the *other* speaker");
+    expect(section).not.toMatch(/regularly|sentence|longer|runs past|long turn/i);
   });
 
   it("puts the history and the episode's speaker labels in the prompt, history first", () => {

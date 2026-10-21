@@ -105,10 +105,10 @@ You can use the following tags to make the conversation more realistic:
 written as one or two words, such as <laughs>, <gasps> or <sighs>. The only other tag that works is <claps>. \
 Anything else is not valid: no stage directions, actions, gestures or descriptions of how something is said, and \
 never spoken words inside the brackets. How a whole turn should sound goes in its Style line.
-- Backchanneling: a quick reaction or interjection from the *other* speaker that overlaps the active speaker, \
-injected using pipes like |hm| or |yes| in the active speaker's turn. Use it regularly, wherever a listener would \
-naturally react, so that it comes up throughout the episode and not just now and then. There's no limit to what \
-can be injected, but it overlaps with the active speaker so keep it brief for intelligibility.
+- Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, \
+overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
+turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
+intelligibility.
 For Example, this single turn:
   I think the most important part of the story is what they didn't say. |How so?| Because it's not just what's seen. It's what's felt.
 Will be rendered by the TTS engine as the active speaker saying "I think the most important part of the story is \
