@@ -56,6 +56,33 @@ export function resolveEmptyTurnText(turn: ScriptTurn): ScriptTurn {
 }
 
 /**
+ * The model can also put a turn's "Style:" line after it in a paragraph of its
+ * own with the speaker's label in front, e.g.
+ *   Penny: <the actual line>
+ *
+ *   Penny: Style: warm
+ * (the format puts it on the line right after the spoken words, with no label).
+ * The parser reads that second paragraph as an empty turn with a style, which
+ * `resolveEmptyTurnText` would turn into a spoken vocal burst. When the turn
+ * before it is the same speaker's and has no style yet, the style belongs to
+ * that turn, so it's attached there and the empty turn dropped. Runs before
+ * `reattachOrphanedStyle`, so a style that follows its turn isn't mistaken
+ * for one that precedes the next.
+ */
+export function attachTrailingStyle(turns: ScriptTurn[]): ScriptTurn[] {
+  const out: ScriptTurn[] = [];
+  for (const turn of turns) {
+    const prev = out[out.length - 1];
+    if (sanitizeTurnText(turn.text).length === 0 && turn.style && prev && prev.speaker === turn.speaker && !prev.style) {
+      out[out.length - 1] = { ...prev, style: turn.style };
+      continue;
+    }
+    out.push(turn);
+  }
+  return out;
+}
+
+/**
  * The model has also been observed splitting a turn's own "Style:" line
  * into a separate, preceding empty turn instead of attaching it to the
  * turn it actually describes — e.g.
@@ -138,7 +165,7 @@ async function generateOnce(
     throw new Error("Gemini returned a script with no recognizable turns");
   }
 
-  const sanitizedTurns = reattachOrphanedStyle(turns)
+  const sanitizedTurns = reattachOrphanedStyle(attachTrailingStyle(turns))
     .map(resolveEmptyTurnText)
     .filter((turn) => turn.text.length > 0);
   if (sanitizedTurns.length === 0) {

@@ -69,7 +69,7 @@ only in shows that explicitly ask for it.
 The scripts will be used with a TTS engine. Each turn is one line made of the speaker's label, a colon, a space, \
 and the spoken words, with a blank line between turns. A turn can have a second line, "Style: " followed by \
 delivery directions for that turn. Write the label as plain text, with no brackets, asterisks, or other \
-decoration around it, and write the Style line without parentheses.
+decoration around it, and write the Style line without parentheses and without a speaker label of its own.
 
 Speaker labels must be exactly the two labels given with the episode, character for character — they are matched \
 literally to assign voices. Every turn must contain spoken words, and a Style line, when used, goes on its \
