@@ -165,8 +165,6 @@ interface GeneratePlainTextOptions {
   prompt: string;
   /** Omitted = the model's default thinking level. */
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
-  /** Omitted = TEXT_MODEL. */
-  model?: string;
 }
 
 /**
@@ -187,7 +185,7 @@ export async function generatePlainText(options: GeneratePlainTextOptions): Prom
 
   const interaction = await withRetry(() =>
     client.interactions.create({
-      model: options.model ?? TEXT_MODEL,
+      model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
       store: false,

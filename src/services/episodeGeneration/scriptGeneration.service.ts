@@ -178,7 +178,6 @@ async function generateOnce(
   const raw = await generatePlainText({
     systemInstruction: buildScriptSystemInstruction(ctx),
     prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
-    ...(ctx.podcast.textModel ? { model: ctx.podcast.textModel } : {}),
   });
 
   const turns = parseScriptTurns(raw);

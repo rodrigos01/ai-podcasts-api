@@ -63,8 +63,24 @@ describe("script prompts", () => {
   it("welcomes callbacks to earlier episodes without recapping or reusing them", () => {
     const { system } = render("Giles", false);
     expect(system).toContain("Callbacks");
-    expect(system).toContain("not recapped");
     expect(system).toContain("not a template");
+  });
+
+  it("avoids recaps of the episode, its segments and past episodes unless the structure asks", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("Avoid recaps");
+    expect(system).toContain("unless the podcast structure asks for one");
+  });
+
+  it("limits angle-bracket tags to short mouth sounds, with claps as the one exception", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("one or two words");
+    expect(system).toContain("<claps>");
+    expect(system).toContain("no stage directions");
+  });
+
+  it("asks for backchanneling regularly", () => {
+    expect(render("Giles", false).system).toContain("use it regularly, not occasionally");
   });
 
   it("puts the history and the episode's speaker labels in the prompt, history first", () => {

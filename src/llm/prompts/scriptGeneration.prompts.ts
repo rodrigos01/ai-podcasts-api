@@ -3,7 +3,6 @@ import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
-import { buildSkillSystemInstruction } from "./scriptSkill.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
@@ -51,7 +50,6 @@ reused as they were.`;
  * "[first label]: ..."), which the script parser doesn't recognise.
  */
 export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): string {
-  if (ctx.podcast.promptVariant === "skill") return buildSkillSystemInstruction(ctx);
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
@@ -99,18 +97,19 @@ The show is an ongoing series, and when you are given earlier episodes they are 
 to them are welcome where they come up naturally, such as a brief nod to the last episode in the opening, a \
 running joke, or a follow-up on something left open, and the speakers, tone and format should stay as \
 established. A callback is a deliberate reference, not a reuse of an earlier episode's structure or phrasing \
-(see the rules below), and earlier episodes are not recapped unless the show's structure asks for it. Write the \
-new episode from its own sources: only the new material needs fresh reading.
+(see the rules below). Write the new episode from its own sources: only the new material needs fresh reading.
 
 You can use the following tags to make the conversation more realistic:
 
-- Non vocal bursts: use instructions in angle brackets such as <laughs> or <gasps> to introduce these non \
-spoken sounds in the speaker's turn. Keep each tag to a few words naming a sound or action, and never put \
-spoken words inside the brackets. How a whole turn should sound goes in its Style line.
-- Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, \
-overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
-turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
-intelligibility.
+- Non vocal bursts: angle brackets are only for simple non verbal sounds a speaker can make with their mouth, \
+written as one or two words, such as <laughs>, <gasps> or <sighs>. The only other tag that works is <claps>. \
+Anything else is not valid: no stage directions, actions, gestures or descriptions of how something is said, and \
+never spoken words inside the brackets. How a whole turn should sound goes in its Style line.
+- Backchanneling: use it regularly, not occasionally. It is what makes a longer turn sound like a conversation \
+instead of one person talking while the other waits. Whenever a turn runs past a couple of sentences, the other \
+speaker would normally react at least once somewhere in the middle of it, with a quick reaction or interjection \
+that overlaps the active speaker, injected using pipes like |hm| or |yes| in the active speaker's turn. There's \
+no limit to what can be injected, but it overlaps with the active speaker so keep it brief for intelligibility.
 For Example, this single turn:
   I think the most important part of the story is what they didn't say. |How so?| Because it's not just what's seen. It's what's felt.
 Will be rendered by the TTS engine as the active speaker saying "I think the most important part of the story is \
@@ -122,6 +121,8 @@ The following rules must be followed:
 - Always write numbers as words, so that it can be pronounced correctly.
 - If citing sources in a different language from the script, make a best effort to adapt them so that they \
 sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.
+- Avoid recaps: don't summarize the episode so far, the segment that just ended, or past episodes, unless the \
+podcast structure asks for one.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \
 be used mid-turn to inject speech with the OTHER speaker's voice, and IS NOT meant for adding emphasis to the \
 active speaker's turn.
