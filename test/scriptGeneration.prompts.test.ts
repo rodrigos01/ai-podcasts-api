@@ -45,6 +45,28 @@ describe("script prompts", () => {
     expect(render("Giles", false).system).toContain("catchphrases");
   });
 
+  it("sets a light, conversational default tone and no per-turn sentence limit", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("light and conversational");
+    expect(system).toContain("only in shows that explicitly ask for it");
+    expect(system).toContain("no set length for a turn");
+    expect(system).not.toMatch(/one or two sentences/i);
+  });
+
+  it("keeps each speaker's knowledge to what their persona would plausibly give them", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("texture");
+    expect(system).toContain("plausibly have");
+    expect(system).toContain("it shouldn't be said");
+  });
+
+  it("welcomes callbacks to earlier episodes without recapping or reusing them", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("Callbacks");
+    expect(system).toContain("not recapped");
+    expect(system).toContain("not a template");
+  });
+
   it("puts the history and the episode's speaker labels in the prompt, history first", () => {
     const { prompt } = render("Giles Thorne", true);
     expect(prompt.startsWith("Previous episodes of this podcast")).toBe(true);

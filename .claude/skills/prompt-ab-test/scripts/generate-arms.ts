@@ -12,7 +12,7 @@
  *   npx tsx .claude/skills/prompt-ab-test/scripts/generate-arms.ts <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
  *   npx tsx .../generate-arms.ts --only <n> <seedPodcastId> <armId> [<armId> ...]
  *   npx tsx .../generate-arms.ts --from <n> <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
- *   add `--redraft <notesPodcastId>` to draft each episode from scratch (see lib.ts's redraftEpisode)
+ *   add `--redraft <notesPodcastId>` to draft each episode from episode 2 on from scratch (episode 1 keeps its stored draft) (see lib.ts's redraftEpisode)
  *   instead of using the stored title/topics/guest; the user prompt of each draft call is the
  *   production notes of the same-numbered episode in <notesPodcastId> (none if it has none).
  *
@@ -93,7 +93,7 @@ async function main() {
 
   const notesEpisodes = redraftNotesId ? await inSeriesOrder(redraftNotesId) : [];
   for (let i = startAt ? startAt - 1 : 1; i < last; i++) {
-    if (redraftNotesId) await redraftEpisode(armIds, i, notesEpisodes[i]?.productionNotes);
+    if (redraftNotesId && i >= 1) await redraftEpisode(armIds, i, notesEpisodes[i]?.productionNotes);
     const results = await Promise.allSettled(
       arms
         .filter((arm) => !arm.episodes[i]!.transcript)
