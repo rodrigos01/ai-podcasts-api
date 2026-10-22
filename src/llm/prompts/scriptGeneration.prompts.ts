@@ -60,31 +60,51 @@ ${ctx.podcast.structure}
 The show host(s) are:
 ${hosts}
 
+Unless the podcast description or structure above says otherwise, the tone is light and conversational, with \
+banter and chemistry between the speakers. Don't turn an episode into a lecture: educational exposition belongs \
+only in shows that explicitly ask for it.
 
 The scripts will be used with a TTS engine. Each turn is one line made of the speaker's label, a colon, a space, \
 and the spoken words, with a blank line between turns. A turn can have a second line, "Style: " followed by \
 delivery directions for that turn. Write the label as plain text, with no brackets, asterisks, or other \
-decoration around it, and write the Style line without parentheses.
+decoration around it, and write the Style line without parentheses and without a speaker label of its own.
 
 Speaker labels must be exactly the two labels given with the episode, character for character — they are matched \
 literally to assign voices. Every turn must contain spoken words, and a Style line, when used, goes on its \
 own line after the spoken words.
 
-Each turn is one speaker's label and line. Keep turns short, like in real conversation. One or two sentences \
-to keep them from becoming monologues. If you need to write longer lines, don't try to hack it by \
-splitting them across multiple sequential turns from the same speaker, or having the other speaker \
-complete those with their own lines. Instead, break longer turns down into multiple ones with comments \
-and reactions from the other speaker in between. Very short reaction turns work best as backchanneling (see below).
+Each turn is one speaker's label and line. Keep the conversation natural and dynamic, the way real people \
+talk. There is no set length for a turn: quick reactions, interjections and one-line replies mix with longer \
+stretches when someone is telling a story or making a point, and the other speaker reacts, interrupts or adds \
+their own take along the way instead of waiting politely for their turn. Don't pad a turn to make it longer, and \
+don't split one speaker's continuous stretch into several turns in a row or have the other speaker finish \
+their sentences. Very short reactions work best as backchanneling (see below).
 
 Keep the different speakers as their own individuals, avoiding them sounding like a single entity speaking in \
 turn or completing each other's sentences. If it makes sense for the speakers personas to disagree, they should. \
 If the speakers have explicitly different roles, such as host and guest, make sure they stick to their roles, unless \
 breaking character is a key part of the conversation.
 
+Make each speaker believable. Give them texture: the habits, opinions, ways of talking and small personal \
+details their persona or bio suggests, showing up naturally in how they react and what they bring up, never \
+announced as a list, and consistent for the whole episode. Keep what they know aligned with who they are: a \
+speaker only explains what their persona, bio and experience would plausibly give them, such as their own craft, \
+their home ground and what they have lived through. When the material calls for expertise neither speaker would \
+plausibly have, don't have anyone explain it. They can relay what the source says as the source's account, say \
+they don't know, wonder about it, or move on. If neither speaker would plausibly say it, it shouldn't be said.
+
+The show is an ongoing series, and when you are given earlier episodes they are its shared history. Callbacks \
+to them are welcome where they come up naturally, such as a brief nod to the last episode in the opening, a \
+running joke, or a follow-up on something left open, and the speakers, tone and format should stay as \
+established. A callback is a deliberate reference, not a reuse of an earlier episode's structure or phrasing \
+(see the rules below). Write the new episode from its own sources: only the new material needs fresh reading.
+
 You can use the following tags to make the conversation more realistic:
 
-- Non vocal bursts: use instructions in angle brackets such as <laughs> or <gasps> to introduce these non \
-spoken sounds in the speaker's turn.
+- Non vocal bursts: angle brackets are only for simple non verbal sounds a speaker can make with their mouth, \
+written as one or two words, such as <laughs>, <gasps> or <sighs>. The only other tag that works is <claps>. \
+Anything else is not valid: no stage directions, actions, gestures or descriptions of how something is said, and \
+never spoken words inside the brackets. How a whole turn should sound goes in its Style line.
 - Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, \
 overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
 turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
@@ -100,6 +120,8 @@ The following rules must be followed:
 - Always write numbers as words, so that it can be pronounced correctly.
 - If citing sources in a different language from the script, make a best effort to adapt them so that they \
 sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.
+- Avoid recaps: don't summarize the episode so far, the segment that just ended, or past episodes, unless the \
+podcast structure asks for one.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \
 be used mid-turn to inject speech with the OTHER speaker's voice, and IS NOT meant for adding emphasis to the \
 active speaker's turn.

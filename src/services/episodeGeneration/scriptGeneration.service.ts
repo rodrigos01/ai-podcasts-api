@@ -56,6 +56,33 @@ export function resolveEmptyTurnText(turn: ScriptTurn): ScriptTurn {
 }
 
 /**
+ * The model can also put a turn's "Style:" line after it in a paragraph of its
+ * own with the speaker's label in front, e.g.
+ *   Penny: <the actual line>
+ *
+ *   Penny: Style: warm
+ * (the format puts it on the line right after the spoken words, with no label).
+ * The parser reads that second paragraph as an empty turn with a style, which
+ * `resolveEmptyTurnText` would turn into a spoken vocal burst. When the turn
+ * before it is the same speaker's and has no style yet, the style belongs to
+ * that turn, so it's attached there and the empty turn dropped. Runs before
+ * `reattachOrphanedStyle`, so a style that follows its turn isn't mistaken
+ * for one that precedes the next.
+ */
+export function attachTrailingStyle(turns: ScriptTurn[]): ScriptTurn[] {
+  const out: ScriptTurn[] = [];
+  for (const turn of turns) {
+    const prev = out[out.length - 1];
+    if (sanitizeTurnText(turn.text).length === 0 && turn.style && prev && prev.speaker === turn.speaker && !prev.style) {
+      out[out.length - 1] = { ...prev, style: turn.style };
+      continue;
+    }
+    out.push(turn);
+  }
+  return out;
+}
+
+/**
  * The model has also been observed splitting a turn's own "Style:" line
  * into a separate, preceding empty turn instead of attaching it to the
  * turn it actually describes — e.g.
@@ -118,6 +145,27 @@ export function validateSpeakerTurns(turns: ScriptTurn[], labelA: string, labelB
   }
 }
 
+/** The longest an angle-bracket tag can be (in words) before it is taken for spoken text. */
+export const MAX_TAG_WORDS = 8;
+
+/**
+ * The prompt allows only short sound/action tags in angle brackets ("<laughs>").
+ * The model has been seen fusing a delivery direction and the whole spoken line
+ * into one tag ("<softly That is actually very sweet. ...>"), which the TTS would
+ * take for a non-vocal instruction rather than speech. Splitting direction from
+ * speech would be a guess, so — like a wrong speaker label — a script with such a
+ * tag is rejected and the whole generation retried.
+ */
+export function validateTurnTags(turns: ScriptTurn[]): void {
+  for (const turn of turns) {
+    for (const tag of turn.text.match(/<[^>]*>/g) ?? []) {
+      if (tag.trim().split(/\s+/).length > MAX_TAG_WORDS) {
+        throw new Error(`Script put spoken words inside an angle-bracket tag: ${tag.slice(0, 80)}...`);
+      }
+    }
+  }
+}
+
 async function generateOnce(
   cast: Cast,
   ctx: ScriptGenerationContext,
@@ -137,13 +185,14 @@ async function generateOnce(
     throw new Error("Gemini returned a script with no recognizable turns");
   }
 
-  const sanitizedTurns = reattachOrphanedStyle(turns)
+  const sanitizedTurns = reattachOrphanedStyle(attachTrailingStyle(turns))
     .map(resolveEmptyTurnText)
     .filter((turn) => turn.text.length > 0);
   if (sanitizedTurns.length === 0) {
     throw new Error("Gemini returned a script with no turns containing spoken text");
   }
   validateSpeakerTurns(sanitizedTurns, labelA, labelB);
+  validateTurnTags(sanitizedTurns);
 
   const transcript = buildTranscript(
     sanitizedTurns.map((turn) => ({

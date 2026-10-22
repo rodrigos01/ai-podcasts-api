@@ -111,6 +111,15 @@ Sofia: Es impresionante.`;
     ]);
   });
 
+  it("reads a labelled 'Style:' line as a delivery direction, not as spoken text", () => {
+    const turns = parseScriptTurns("Penny: That is wild!\n\nPenny: Style: warm, curious\n\nMateo: Right?");
+    expect(turns).toEqual([
+      { speaker: "Penny", text: "That is wild!" },
+      { speaker: "Penny", text: "", style: "warm, curious" },
+      { speaker: "Mateo", text: "Right?" },
+    ]);
+  });
+
   it("parses a turn labeled with an accented/non-ASCII name", () => {
     const script = "Chloé: Bonjour!\n\nMarcus: Hey.";
     expect(parseScriptTurns(script)).toEqual([
