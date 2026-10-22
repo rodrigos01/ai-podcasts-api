@@ -24,7 +24,9 @@ Real, billed API usage: an episode is ~1.5-2.5 min and one Gemini call (more if 
 4. **Inspect before spending.** Render the prompt for a real episode in each arm and read it (system instruction and prompt). Then run **one** episode in the riskiest arm and read the raw output before launching everything. See the placeholder trap below.
 5. **Run arms in lockstep, episodes in order.** `generate-arms.ts` generates episode N in all arms in parallel, then moves to N+1.
 6. **Judge on more than length** (below), with the same metrics for every arm.
-7. **Say what the sample is.** One run per arm is one sample of a non-deterministic process. Report differences as observations, flag anything that could flip on a rerun, and rerun the interesting case before shipping a claim.
+7. **Say what the sample is.** One run per arm is one sample of a non-deterministic process. Report differences as observations, flag anything that could flip on a rerun, and rerun the interesting case before shipping a claim. Episode 1 alone ranged from 121 to 182 turns across prompt versions that differed very little, so a single-episode difference of that size means nothing; take about three samples before attributing an effect to a wording.
+8. **One change at a time when you want to know why.** A round that bundles several prompt edits can only say "the round changed X". The 2026-10-21 revision bundled a tone rule, a recap rule, a tag rule and a backchannel line; turns got longer, the backchannel line was blamed and reverted, and the turns stayed long. If an effect needs explaining, ablate: one edit reverted per arm.
+9. **Start from the real show.** Test podcasts are copies, and copies drift: the template here had "in short, episodic beats" where the real show says "line by line", which by itself made the host read 3-5 diary beats per turn. Diff the arm podcast's `description`, `structure` and host personas against the original before generating anything.
 
 ## Steps
 
@@ -36,6 +38,14 @@ npx tsx $K/setup-arm.ts <sourcePodcastId> <templatePodcastId> "Show Name (Test B
 # 2+3. generate: episode 1 once (copied to every arm; if the seed podcast has no episode 1 transcript yet it is generated
 #    in the first arm), then episodes 2..N in lockstep across arms. Background it and log to the scratchpad.
 nohup npx tsx $K/generate-arms.ts <seedPodcastId, or armAId> 5 <armAId> <armBId> > $SCRATCH/gen.log 2>&1 &
+#    Variations (flags go first):
+#      --only 3   copy episodes 1-2 from the seed into every arm and generate just episode 3 (a costly model, one representative episode)
+#      --from 6 <seed> 7 <arms...>   copy 1-5 from the seed (e.g. an existing arm that is the control) and generate 6-7
+#      --redraft <originalPodcastId>  draft each episode from episode 2 on through the episode wizard (the real
+#                 pipeline: title, topics, guest and production notes come from the draft call, given the sources, the
+#                 length, this arm's transcripts so far, and the original episode's production notes as the user prompt).
+#                 Use it when the stored outlines could be leaking structure. Arms with identical history share one draft.
+#                 Episode 1 keeps its stored draft. setup-arm.ts --episodes 5 copies only the first 5 episodes.
 # 4. export and analyze
 npx tsx $K/export.ts <armAId> A $SCRATCH/transcripts 5
 python3 $K/analyze.py stats $SCRATCH/transcripts/A*.md
@@ -54,12 +64,16 @@ Watch progress with the Monitor tool on the log (grep `done|rror`), not sleep lo
 - **Firestore rejects `undefined`.** Omit optional fields instead of setting them (this bit `progress.targetWordRange`).
 - **`pkill -f <script name>` kills your own shell** when the name is in the command line (exit 144), and `pgrep -af` matches itself. Kill by PID or use a pattern the command itself doesn't contain.
 - **The arm's title reaches the prompt.** The system instruction names the show, so arms titled "(Test A)" / "(Test B)" would see different system instructions. `lib.ts` generates under the title minus the `(Test X)` suffix (`baseTitle`). When you render prompts to compare arms (step 4), strip the suffix the same way and check the strings are equal. (The 2026-10 history test did not strip it, so each arm's system instruction named it "(Test X)": equal across episodes within an arm, different between arms, and unlikely to matter, but unintended.)
+- **A rule that is both a preference and a condition gets obeyed through its condition.** "Use backchanneling regularly, whenever a turn runs past a couple of sentences" was suspected of making the model stretch turns to have somewhere to put one; with the condition removed it used none at all. Models take a concrete cue over a stated preference. When you want more of a behavior, give it a cue that doesn't change something else you care about, and measure both.
+- **The GitHub Actions run listing lags.** After pushing to `staging` the new deploy run did not appear in `list_workflow_runs` for several minutes, though it had started within seconds of the push; I wrongly told the user it hadn't. Don't report "no deploy" from one listing; say you couldn't confirm yet.
+- **Slow episodes** (10+ minutes against ~2) happen. Retries after a failed validation are silent, so a slow run could be one; throttling is the other candidate. If it matters, log each failed attempt in `generateEpisodeScript`.
 - **Log labels** come from the podcast title's `(Test X)` suffix; keep that pattern or logs say `ab1234`.
 - **Arm podcasts share the template's host voice ids**, so deleting one deletes a voice its siblings use. Don't delete arms without asking, and say what you left behind when you finish.
 
 ## What to look at
 
-- **Format validity first** (`analyze.py stats`): `unparsed_paragraphs` is 0, `labels` has exactly the two expected names and is balanced, no bracketed labels, `backchannel_at_turn_edge` 0, `turns_with_digits` ~0 (numbers should be words).
+- **Format validity first** (`analyze.py stats`, `analyze.py checks`): `unparsed_paragraphs` is 0, `labels` has exactly the two expected names and is balanced, no bracketed labels, `backchannel_at_turn_edge` 0, `turns_with_digits` ~0 (numbers should be words; identifiers like "H1-B" are fine), `tags_not_1_2_words` 0, and `Label: Style:` paragraphs absent. A new prompt can open new failure modes, so scan for them even when the change looks unrelated: the 2026-10-21 revision produced spoken lines fused into one angle-bracket tag and `Penny: Style: warm` paragraphs that the TTS would have read aloud. Fix those in code (parser, validation + retry), not only in the prompt.
+- **Source readings** (`analyze.py quotes`): for shows that read a source out, how long each quoted passage is (median/90th percentile/longest). It caught the "short, episodic beats" structure wording making the host read 3-5 beats at a time.
 - **Conversational shape** (the density lesson in AGENTS.md): `words_per_turn` (~22-28 on the reference show), `question_ending_%` (~9-16%), `same_speaker_back_to_back` ~0.
 - **Length vs target** (`lengthRanges.ts`). It varies a lot by arm *and* by episode; an episode short in every arm (the history test's episode 5, a second part with little source left) is the source's scope, not the variant. Compare each arm to the others on the same episode.
 - **Reuse of earlier episodes**: `analyze.py overlap` (verbatim 8-grams; ~0.5-1% on the reference show), plus whether structure, beats and jokes are being rebuilt from earlier episodes (read two or three stretches of a transcript against an earlier one).
@@ -69,4 +83,4 @@ Watch progress with the Monitor tool on the log (grep `done|rror`), not sleep lo
 
 ## Closing out
 
-Decide with the user which arm ships. Then make the shipped behavior the **only** behavior: delete the other variants, the per-podcast fields and the flag plumbing (restore touched files with `git checkout origin/main -- <paths>` and re-apply only what ships — the diff against main should be just the winner), keep the unit tests for the shipped behavior (prompt rendering is pure and testable; the live calls are verified by running episodes, per the repo's testing philosophy), add a short "what was tested and why this shape" note to AGENTS.md without the transcripts, and run two or three more real episodes with the **final** code (not an arm's) to confirm nothing regressed when the flags came out. Open the PR with the numbers, the confounds and the follow-ups you noticed but left alone. Leftover test podcasts: list them in the PR and let the user decide.
+Decide with the user which arm ships. Pushing a branch to `staging` (documented in AGENTS.md) triggers its deploy automatically; use it to get the change in front of the user. Then make the shipped behavior the **only** behavior: delete the other variants, the per-podcast fields and the flag plumbing (restore touched files with `git checkout origin/main -- <paths>` and re-apply only what ships — the diff against main should be just the winner), keep the unit tests for the shipped behavior (prompt rendering is pure and testable; the live calls are verified by running episodes, per the repo's testing philosophy), add a short "what was tested and why this shape" note to AGENTS.md without the transcripts, and run two or three more real episodes with the **final** code (not an arm's) to confirm nothing regressed when the flags came out. Open the PR with the numbers, the confounds and the follow-ups you noticed but left alone. Leftover test podcasts: list them in the PR and let the user decide.

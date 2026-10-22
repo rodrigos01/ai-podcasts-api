@@ -2,12 +2,15 @@
 """Cheap, repeatable checks on exported transcripts (see ../SKILL.md).
 
   analyze.py stats   FILE...            per-file format and conversation-shape stats
+  analyze.py checks  FILE...            angle-bracket tags, backchannels (|..|) and recap phrases
+  analyze.py quotes  FILE...            length of quoted source passages read out (diary readings, citations)
   analyze.py overlap TARGET EARLIER...  8-word sequences TARGET shares verbatim with earlier episodes
 
 Files are the "Name: line" transcripts export.ts writes (a leading "# title"
 line is ignored). Stats are heuristics for spotting a regression, not a quality score.
 """
 import re
+import statistics
 import sys
 from collections import Counter
 
@@ -46,17 +49,62 @@ def stats(path):
     }
 
 
+RECAP = re.compile(
+    r"\b(to recap|let'?s recap|recap(ping)?|in summary|to sum (it )?up|to summari[sz]e|so far today|"
+    r"we'?ve (covered|seen|talked)|what we'?ve (covered|seen)|last time|previous episode|last episode|"
+    r"earlier today|as we (said|saw|covered))\b",
+    re.I,
+)
+
+
+def checks(path):
+    """Format rules the prompt states: tags are 1-2 words (or <claps>), pipes never open or close a turn.
+    Recap-phrase hits are only candidates: read them, since a brief callback is fine and a recap is not."""
+    text = read(path)
+    tags = re.findall(r"<[^>]*>", text)
+    bad = [t for t in tags if len(t.strip("<>").split()) > 2 and t.lower() != "<claps>"]
+    spoken = [t[1] for t in turns(text) if t[0]]
+    long_turns = [t for t in spoken if len(t.split()) > 40]
+    return {
+        "tags": len(tags),
+        "tags_not_1_2_words": len(bad),
+        "invalid_tag_examples": [b[:60] for b in bad[:4]],
+        "common_tags": dict(Counter(t.lower() for t in tags).most_common(6)),
+        "backchannels": len(re.findall(r"\|[^|]{1,60}\|", text)),
+        "turns_with_backchannel": sum(bool(re.search(r"\|[^|]+\|", t)) for t in spoken),
+        "long_turns_(40+_words)": len(long_turns),
+        "long_turns_with_backchannel": sum("|" in t for t in long_turns),
+        "recap_phrase_hits": [m[0] for m in RECAP.findall(text)][:6],
+    }
+
+
+def quotes(path, min_words=12):
+    """How much source text is read out at a time: quoted passages of min_words+ words."""
+    spans = []
+    for _, spoken, _ in (t for t in turns(read(path)) if t[0]):
+        spans += [n for n in (len(m.group(1).split()) for m in re.finditer(r"[\"“]([^\"”]{12,}?)[\"”]", spoken)) if n >= min_words]
+    spans.sort()
+    return {
+        "readings": len(spans),
+        "median_words": statistics.median(spans) if spans else 0,
+        "p90_words": spans[int(0.9 * len(spans))] if spans else 0,
+        "longest": spans[-1] if spans else 0,
+        "over_60_words": sum(n > 60 for n in spans),
+    }
+
+
 def grams(text, n=8):
     words = re.findall(r"[\w']+", text.lower())
     return {" ".join(words[i : i + n]) for i in range(len(words) - n + 1)}
 
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in ("stats", "overlap"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("stats", "checks", "quotes", "overlap"):
         sys.exit(__doc__)
-    if sys.argv[1] == "stats":
+    if sys.argv[1] in ("stats", "checks", "quotes"):
+        fn = {"stats": stats, "checks": checks, "quotes": quotes}[sys.argv[1]]
         for path in sys.argv[2:]:
-            print(path.rsplit("/", 1)[-1], stats(path))
+            print(path.rsplit("/", 1)[-1], fn(path))
     else:
         target, earlier = sys.argv[2], sys.argv[3:]
         mine = grams(read(target))
