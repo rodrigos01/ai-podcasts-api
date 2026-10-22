@@ -14,7 +14,7 @@ Real, billed API usage: an episode is ~1.5-2.5 min and one Gemini call (more if 
 - Needs deps (`npm ci`) and these env vars for anything that touches Firestore (cloud sessions have no `.env`; `config/env.ts` exits without them, and so do two of the vitest suites):
   `FIREBASE_PROJECT_ID=ai-audio-book FIREBASE_SERVICE_ACCOUNT_PATH=/root/credentials/service-account.json FIREBASE_STORAGE_BUCKET=ai-audio-book-podcast-audio AUDIO_URL_SECRET=<any 32+ chars>`
 - Scripts live in `.claude/skills/prompt-ab-test/scripts/` and run in place: `npx tsx .claude/skills/prompt-ab-test/scripts/<name>.ts`. Put scratch output (transcripts, logs) in the session scratchpad, not the repo.
-- Find the show to test on by listing `podcasts` (a quick `firestore.collection("podcasts").get()` script). Test podcasts from earlier runs ("Armchair Travel Diaries (Test A…F)") may still exist under one user; reuse one as the **template** (owner, hosts, sources) or the original as the episode **source**, but don't delete or reuse them as arms without asking.
+- Find the show to test on by listing `podcasts` (a quick `firestore.collection("podcasts").get()` script). Test podcasts from earlier runs may still exist (as of 2026-10-22 only "Armchair Travel Diaries (Test New)" is left, under one test user; the others were deleted). Reuse one as the **template** (owner, hosts, sources) or the original show as the episode **source**, but don't delete or reuse them as arms without asking. Deleting a test podcast: use `deletePodcast` from `data/podcast.repository.ts` (Firestore + audio), not the app's delete endpoint, which also deletes the hosts' designed voices that sibling arms share.
 
 ## Method
 
