@@ -45,6 +45,49 @@ describe("script prompts", () => {
     expect(render("Giles", false).system).toContain("catchphrases");
   });
 
+  it("sets a light, conversational default tone and no per-turn sentence limit", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("light and conversational");
+    expect(system).toContain("only in shows that explicitly ask for it");
+    expect(system).toContain("no set length for a turn");
+    expect(system).not.toMatch(/one or two sentences/i);
+  });
+
+  it("keeps each speaker's knowledge to what their persona would plausibly give them", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("texture");
+    expect(system).toContain("plausibly have");
+    expect(system).toContain("it shouldn't be said");
+  });
+
+  it("welcomes callbacks to earlier episodes without recapping or reusing them", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("Callbacks");
+    expect(system).toContain("not a template");
+  });
+
+  it("avoids recaps of the episode, its segments and past episodes unless the structure asks", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("Avoid recaps");
+    expect(system).toContain("unless the podcast structure asks for one");
+  });
+
+  it("limits angle-bracket tags to short mouth sounds, with claps as the one exception", () => {
+    const { system } = render("Giles", false);
+    expect(system).toContain("one or two words");
+    expect(system).toContain("<claps>");
+    expect(system).toContain("no stage directions");
+  });
+
+  it("offers backchanneling as optional and does not tie it to how long a turn is", () => {
+    // Asking for it ("use it regularly", "whenever a turn runs past a couple of
+    // sentences") made the model stretch turns to have somewhere to put one.
+    const { system } = render("Giles", false);
+    const section = system.slice(system.indexOf("- Backchanneling:"), system.indexOf("For Example"));
+    expect(section).toContain("if you want the *other* speaker");
+    expect(section).not.toMatch(/regularly|sentence|longer|runs past|long turn/i);
+  });
+
   it("puts the history and the episode's speaker labels in the prompt, history first", () => {
     const { prompt } = render("Giles Thorne", true);
     expect(prompt.startsWith("Previous episodes of this podcast")).toBe(true);

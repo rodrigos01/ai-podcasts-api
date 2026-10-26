@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachTrailingStyle,
+  validateTurnTags,
   reattachOrphanedStyle,
   resolveEmptyTurnText,
   validateSpeakerTurns,
@@ -140,5 +142,37 @@ describe("reattachOrphanedStyle", () => {
       { speaker: "Marcus", text: "Hi." },
     ];
     expect(reattachOrphanedStyle(turns)).toEqual(turns);
+  });
+});
+
+describe("attachTrailingStyle", () => {
+  it("attaches a labelled style-only turn to the same speaker's turn before it", () => {
+    const turns = [
+      { speaker: "Penny", text: "That is wild!" },
+      { speaker: "Penny", text: "", style: "warm, curious" },
+      { speaker: "Mateo", text: "Right?" },
+    ];
+    expect(attachTrailingStyle(turns)).toEqual([
+      { speaker: "Penny", text: "That is wild!", style: "warm, curious" },
+      { speaker: "Mateo", text: "Right?" },
+    ]);
+  });
+
+  it("leaves a style-only turn alone when the turn before it is someone else's or already styled", () => {
+    const otherSpeaker = [{ speaker: "Mateo", text: "Right?" }, { speaker: "Penny", text: "", style: "warm" }];
+    expect(attachTrailingStyle(otherSpeaker)).toEqual(otherSpeaker);
+    const alreadyStyled = [{ speaker: "Penny", text: "Hi", style: "bright" }, { speaker: "Penny", text: "", style: "warm" }];
+    expect(attachTrailingStyle(alreadyStyled)).toEqual(alreadyStyled);
+  });
+});
+
+describe("validateTurnTags", () => {
+  it("accepts short sound and action tags", () => {
+    expect(() => validateTurnTags([{ speaker: "Penny", text: "<laughs> Oh no. <covers face with hands> Really?" }])).not.toThrow();
+  });
+
+  it("rejects a tag that holds a delivery direction and the whole spoken line", () => {
+    const text = "<softly That is actually very sweet. The airport snack photo is the universal badge of the first-time traveler.>";
+    expect(() => validateTurnTags([{ speaker: "Mateo", text }])).toThrow(/spoken words inside an angle-bracket tag/);
   });
 });
