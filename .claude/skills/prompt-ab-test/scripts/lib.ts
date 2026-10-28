@@ -130,7 +130,7 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     const episode = (await inSeriesOrder(armId))[index]!;
     if (episode.transcript) continue; // already generated: leave its draft alone
     const prior = await getPriorEpisodes(armId, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
-    const mode = (await getPodcast(armId))?.useInteractionContext ? `chain:${prior[prior.length - 1]?.episode.interactionId}` : "transcripts";
+    const mode = (await getPodcast(armId))?.useInteractionContext !== false ? `chain:${prior[prior.length - 1]?.episode.interactionId}` : "transcripts";
     const key = createHash("sha1").update(mode + prior.map((p) => p.episode.transcript).join("\n---\n")).digest("hex");
     groups.set(key, [...(groups.get(key) ?? []), { armId, label: await armLabel(armId) }]);
   }

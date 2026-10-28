@@ -56,7 +56,7 @@ npx tsx $K/reset-arm.ts <armPodcastId> 2
 
 Watch progress with the Monitor tool on the log (grep `done|rror`), not sleep loops. Monitors expire after 30 min; the background processes don't, and survive an interrupted turn. As each episode finishes, export it and send the transcripts to the user (as files: they are 40-70k characters each).
 
-**Testing interaction chaining**: give the chain arm `{"useInteractionContext":true}` in `setup-arm.ts`'s extras JSON; the other arm is the control. Generate episode 1 in the chain arm (it stores its interaction id) and seed the other arms from it. `generate`/`redraftEpisode` go through `withContinuity`, so a chain arm's scripts and drafts continue from the previous episode's id, and drafts are only shared between arms that have the same mode and the same head.
+**Testing interaction chaining**: chaining is on by default, so give the control arm `{"useInteractionContext":false}` in `setup-arm.ts`'s extras JSON. Generate episode 1 in the chain arm (it stores its interaction id) and seed the other arms from it. `generate`/`redraftEpisode` go through `withContinuity`, so a chain arm's scripts and drafts continue from the previous episode's id, and drafts are only shared between arms that have the same mode and the same head.
 
 ## Things that went wrong (and how to spot them)
 

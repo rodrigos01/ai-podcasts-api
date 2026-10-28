@@ -5,11 +5,11 @@ import type { PriorEpisode } from "../../utils/episodeHistory";
 /**
  * How a call (an episode's script, or a draft of the next episode) learns the
  * series so far. Exactly one of the two is ever set:
- *  - `previousEpisodes`: the earlier transcripts go in the prompt (the default);
+ *  - `previousEpisodes`: the earlier transcripts go in the prompt (the fallback);
  *  - `previousInteractionId`: the call continues the stored Interactions API
  *    interaction of the previous episode, which already holds the series so
- *    far, so nothing is sent a second time ("interaction context", enabled
- *    per podcast by `useInteractionContext`).
+ *    far, so nothing is sent a second time ("interaction context", on by
+ *    default, turned off per podcast by `useInteractionContext: false`).
  */
 export interface Continuity {
   previousEpisodes: PriorEpisode[];
@@ -17,7 +17,7 @@ export interface Continuity {
 }
 
 export function usesInteractionContext(podcast: Pick<Podcast, "useInteractionContext">): boolean {
-  return podcast.useInteractionContext === true;
+  return podcast.useInteractionContext !== false;
 }
 
 /**

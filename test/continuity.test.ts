@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { chooseContinuity, withContinuity } from "../src/services/episodeGeneration/continuity";
+import { chooseContinuity, usesInteractionContext, withContinuity } from "../src/services/episodeGeneration/continuity";
 import { PreviousInteractionNotFoundError } from "../src/llm/geminiClient";
 import { selectPriorEpisodes } from "../src/utils/episodeHistory";
 
@@ -17,6 +17,14 @@ describe("chooseContinuity", () => {
   it("uses transcripts when the head has no interaction id", () => {
     const prior = [ep("a"), ep(null)];
     expect(chooseContinuity(true, prior)).toEqual({ previousEpisodes: prior });
+  });
+});
+
+describe("usesInteractionContext", () => {
+  it("is on unless the podcast turns it off", () => {
+    expect(usesInteractionContext({})).toBe(true);
+    expect(usesInteractionContext({ useInteractionContext: true })).toBe(true);
+    expect(usesInteractionContext({ useInteractionContext: false })).toBe(false);
   });
 });
 
