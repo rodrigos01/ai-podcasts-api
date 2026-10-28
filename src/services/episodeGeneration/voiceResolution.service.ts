@@ -74,16 +74,14 @@ export async function designHostVoicesNow(podcastId: string, hosts: Person[], la
  * reused across episodes, so there's no cache to check. Guests always get
  * a bespoke Voice Design voice designed from their persona and accent.
  *
- * Called once per generation attempt (episode creation or `/regenerate`)
- * from orchestrator.ts, in parallel with script generation — not lazily at
- * stream time — so the resolved id is already persisted on the episode
- * doc's guest entry by the time a listener's first `/stream` request needs
- * it (audio.service.ts's resolveCastVoices just reads it). A `/regenerate`
- * re-running this for a guest that already has a previously-resolved
- * Voice-Design voice mints a fresh one and cleans up the stale one
+ * Called lazily, from audio.service.ts's resolveCastVoices, the first time
+ * a listener's `/stream` needs a not-yet-cached chunk and the guest has no
+ * current voice — not at generation, so an episode nobody plays never costs
+ * a Voice Design call. The resolved id is persisted on the episode doc's
+ * guest entry. Replacing a guest that still holds an older Voice-Design
+ * voice (e.g. a stale hash) mints a fresh one and cleans up the old one
  * afterward — `deleteVoice` is best-effort, so this is safe even if the
- * stale voice was already deleted by cleanupGuestVoice (e.g. a prior
- * attempt's audio fully finished generating before this regenerate ran).
+ * stale voice was already deleted by cleanupGuestVoice.
  */
 export async function resolveGuestVoice(
   podcastId: string,

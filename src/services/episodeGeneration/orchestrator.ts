@@ -30,7 +30,7 @@ import { redraftEpisode } from "../episodeWizard.service";
 import { deletePeopleVoices } from "../voiceSelection.service";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
-import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
+import { resolveHostVoice } from "./voiceResolution.service";
 import { chunkTranscript } from "./chunker";
 
 /** The episode fields a (re)generation starts from: nothing generated yet. */
@@ -178,17 +178,19 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       wordTarget,
     );
 
-    // Voice resolution (host Voice Design cache hit/miss, guest Voice
-    // Design/Library mint) runs in parallel with script generation rather
-    // than lazily at first `/stream` request — see AGENTS.md and
-    // audio.service.ts's resolveCastVoices, which now just reads the ids
-    // this persists. A failure here doesn't fail episode generation itself:
-    // audio.service.ts still falls back to resolving lazily (and
-    // persisting) if a cast member's resolvedVoiceId ends up missing.
-    const voiceResolutionPromise = Promise.all([
-      ...hosts.map((host) => resolveHostVoice(podcastId, host, podcast.languageCode)),
-      ...guests.map((guest) => resolveGuestVoice(podcastId, episodeId, guest, podcast.languageCode)),
-    ]).catch((err) => {
+    // Host voices are resolved in parallel with script generation (a Voice
+    // Design cache hit after the first episode, so this costs nothing once a
+    // podcast has been generated). Guest voices are deliberately NOT designed
+    // here: a guest's voice is per-episode and is deleted once the episode's
+    // audio is complete, so designing it now would bill a Voice Design call for
+    // every generated episode, including ones nobody plays. audio.service.ts's
+    // resolveCastVoices designs it at the first live synthesis instead (a
+    // user-picked guest voice is stored on the guest and used as is). A
+    // failure here doesn't fail episode generation itself: audio.service.ts
+    // also falls back to resolving a missing host voice lazily.
+    const voiceResolutionPromise = Promise.all(
+      hosts.map((host) => resolveHostVoice(podcastId, host, podcast.languageCode)),
+    ).catch((err) => {
       console.error(
         `Voice resolution failed for episode ${podcastId}/${episodeId} (will resolve lazily at stream time instead):`,
         err,
