@@ -53,6 +53,18 @@ export async function listPodcasts(ownerId: string): Promise<Podcast[]> {
     .filter((podcast) => podcast.ownerId === ownerId);
 }
 
+/** Hands a podcast to another user. False if the podcast doesn't exist. */
+export async function setPodcastOwner(podcastId: string, ownerId: string): Promise<boolean> {
+  const ref = podcastsCollection.doc(podcastId);
+  try {
+    await ref.update({ ownerId, updatedAt: Date.now() });
+    return true;
+  } catch (err) {
+    if ((err as { code?: number }).code === 5) return false; // NOT_FOUND
+    throw err;
+  }
+}
+
 export async function updatePodcast(
   podcastId: string,
   input: PodcastUpdateInput,

@@ -31,6 +31,9 @@ export interface Episode {
   guests: Person[];
   status: EpisodeStatus;
   transcript: string | null;
+  progress?: { stage: string } | null;
+  startsAfterEpisodeId?: string;
+  redraftPending?: boolean;
   error: string | null;
   audioComplete?: boolean;
   audioDurationSeconds?: number | null;

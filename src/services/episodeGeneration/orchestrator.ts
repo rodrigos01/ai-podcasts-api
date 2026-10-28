@@ -11,17 +11,72 @@ import {
   patchEpisodeState,
   patchEpisodeStateAsOwner,
   releaseGenerationLease,
+  updateEpisode,
 } from "../../data/episode.repository";
 import { getPodcast } from "../../data/podcast.repository";
 import { getSource } from "../../data/source.repository";
 import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
-import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
+import type { Podcast } from "../../schemas/podcast.schema";
+import {
+  GenerationSupersededError,
+  dependencyAction,
+  isGenerationSuperseded,
+  needsGenerationRestart,
+} from "../../utils/generationLease";
+import { redraftToUpdate } from "../../utils/redraft";
+import { redraftEpisode } from "../episodeWizard.service";
+import { deletePeopleVoices } from "../voiceSelection.service";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
 import { chunkTranscript } from "./chunker";
+
+/** The episode fields a (re)generation starts from: nothing generated yet. */
+export const CLEAN_GENERATION_STATE: Partial<Episode> = {
+  status: "generating",
+  transcript: null,
+  ttsChunks: null,
+  generatedAudioSeconds: 0,
+  audioComplete: false,
+  audioDurationSeconds: null,
+  progress: null,
+  error: null,
+};
+
+/**
+ * Drafts the episode again and stores the result (see episodeWizard.service.ts's
+ * redraftEpisode), then clears `redraftPending`. The flag is cleared only after
+ * the draft is stored, so a run lost in between redrafts again on restart
+ * rather than silently skipping it. Replaced guests' picked voices are cleaned up.
+ */
+async function redraftStoredEpisode(
+  podcastId: string,
+  podcast: Podcast,
+  episode: Episode,
+  owner: string,
+): Promise<Episode> {
+  const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(podcastId, id)))).filter(
+    (s): s is NonNullable<typeof s> => s !== null,
+  );
+  const previousEpisodes = await getPriorEpisodes(
+    podcastId,
+    { id: episode.id, createdAt: episode.createdAt },
+    MAX_HISTORY_EPISODES,
+  );
+  const draft = await redraftEpisode(podcast, episode, sources, previousEpisodes);
+
+  // The call above can take a while: don't write a draft over an episode this run no longer owns.
+  if (!(await heartbeatGenerationLease(podcastId, episode.id, owner))) throw new GenerationSupersededError();
+
+  const { update, replacedGuests } = redraftToUpdate(episode, draft);
+  const updated = await updateEpisode(podcastId, episode.id, update);
+  if (!updated) throw new Error(`Episode ${episode.id} not found`);
+  await patchEpisodeStateAsOwner(podcastId, episode.id, owner, { redraftPending: false });
+  void deletePeopleVoices(replacedGuests, "guest");
+  return { ...updated, redraftPending: false };
+}
 
 /**
  * Generates an episode's script, and starts the next part of its suggestion
@@ -55,7 +110,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
   try {
     const podcast = await getPodcast(podcastId);
     if (!podcast) throw new Error(`Podcast ${podcastId} not found`);
-    const episode = await getEpisode(podcastId, episodeId);
+    let episode = await getEpisode(podcastId, episodeId);
     if (!episode) throw new Error(`Episode ${episodeId} not found`);
 
     // Wipe any previous attempt's transcript/chunks/cached audio before
@@ -74,22 +129,20 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // generation attempt's chunk boundaries/count won't line up with the
     // old ones, so a stale chunk left behind at the same index could get
     // served (or mistaken for "already cached") against all-new content.
-    await patch({
-      status: "generating",
-      transcript: null,
-      ttsChunks: null,
-      generatedAudioSeconds: 0,
-      audioComplete: false,
-      audioDurationSeconds: null,
-      progress: null,
-      error: null,
-    });
+    await patch(CLEAN_GENERATION_STATE);
     await deleteEpisodeAudio(podcastId, episodeId).catch((err) => {
       console.error(
         `Failed to clear cached audio for episode ${podcastId}/${episodeId} before (re)generating:`,
         err,
       );
     });
+
+    // An admin's bulk regenerate can ask for the episode to be drafted again
+    // first (new title/topics/notes/guest): done here, after the wipe and
+    // before the cast is read, so everything below sees the new draft.
+    if (episode.redraftPending) {
+      episode = await redraftStoredEpisode(podcastId, podcast, episode, owner);
+    }
 
     const hosts = podcast.hosts.filter((h) => episode.participantHostIds.includes(h.id));
     const guests: Person[] = episode.guests;

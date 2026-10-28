@@ -1,6 +1,6 @@
 import { auth } from "./firebase";
 
-const BASE = "/admin/api/podcasts";
+const ADMIN_API = "/admin/api";
 
 export class ApiError extends Error {
   constructor(
@@ -11,10 +11,17 @@ export class ApiError extends Error {
   }
 }
 
-/** Calls the admin API with the signed-in user's ID token. */
-export async function api<T = void>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+/** Calls the podcast routes (`/admin/api/podcasts`) with the signed-in user's ID token. */
+export const api = <T = void>(path: string, init: RequestInit0 = {}) => request<T>(`${ADMIN_API}/podcasts${path}`, init);
+
+/** Calls the admin-only bulk operations (`/admin/api/bulk`). */
+export const bulkApi = <T = void>(path: string, init: RequestInit0 = {}) => request<T>(`${ADMIN_API}/bulk${path}`, init);
+
+type RequestInit0 = { method?: string; body?: unknown };
+
+async function request<T>(url: string, init: RequestInit0): Promise<T> {
   const token = await auth.currentUser?.getIdToken();
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(url, {
     method: init.method ?? "GET",
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

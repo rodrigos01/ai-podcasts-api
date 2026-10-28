@@ -113,6 +113,11 @@ export const episodeSchema = z.object({
   // picks it up if that chain was lost). A scheduling dependency, not a
   // "series"/"partOf" relationship — nothing else reads it.
   startsAfterEpisodeId: z.string().min(1).optional(),
+  // Set by an admin's bulk regenerate with "re-draft": the run re-drafts the
+  // episode's title/topics/notes/guest before writing the script, and clears
+  // this once that's stored. Kept on the doc (not a run parameter) so a run
+  // that is lost and restarted still honours it.
+  redraftPending: z.boolean().optional(),
   // The run currently generating this script, if any (see
   // utils/generationLease.ts). Null/absent: nobody is — which, for an episode
   // that's meant to be generating, means it stalled and can be resumed.

@@ -1,8 +1,10 @@
-import { Alert, Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Paper, Stack, Typography } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, bulkApi } from "../api";
+import { RegenerateDialog } from "../RegenerateDialog";
+import { StatusChip } from "../StatusChip";
 import { ConfirmButton } from "../ConfirmButton";
 import { EditDialog } from "../EditDialog";
 import { useEpisode } from "../firestore";
@@ -13,6 +15,7 @@ export function EpisodePage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
 
   const episode = useEpisode(podcastId, episodeId);
 
@@ -25,7 +28,12 @@ export function EpisodePage() {
 
   const refreshAudio = () => void qc.invalidateQueries({ queryKey: ["episodeAudioUrl", episodeId] });
   const update = useMutation({ mutationFn: (body: Record<string, string>) => api(base, { method: "PATCH", body }), });
-  const regenerate = useMutation({ mutationFn: () => api(`${base}/regenerate`, { method: "POST" }), onSuccess: refreshAudio });
+  // Through the bulk route (a queue of one) so the re-draft option is available.
+  const regenerate = useMutation({
+    mutationFn: (redraft: boolean) =>
+      bulkApi("/episodes/regenerate", { method: "POST", body: { podcastId, episodeIds: [episodeId], redraft } }),
+    onSuccess: refreshAudio,
+  });
   const clearAudio = useMutation({ mutationFn: () => api(`${base}/audio`, { method: "DELETE" }), onSuccess: refreshAudio });
   // Generation runs in this API process and is picked back up by whoever asks about it
   // (see ensureGenerationRunning); this does that for an episode that looks stuck.
@@ -37,7 +45,6 @@ export function EpisodePage() {
 
   const e = episode.data ?? undefined;
   const error = episode.error ?? update.error ?? regenerate.error ?? clearAudio.error ?? remove.error ?? nudge.error;
-  const shownStatus = e?.status;
 
   return (
     <Stack spacing={3}>
@@ -49,7 +56,7 @@ export function EpisodePage() {
             <Box>
               <Typography variant="h5">{e.title}</Typography>
               <Stack direction="row" spacing={1} alignItems="center">
-                {shownStatus && <Chip size="small" label={shownStatus} color={shownStatus === "failed" ? "error" : shownStatus === "generating" ? "warning" : "success"} />}
+                <StatusChip episode={e} />
                 <Typography color="text.secondary">{e.length}</Typography>
               </Stack>
             </Box>
@@ -57,14 +64,9 @@ export function EpisodePage() {
               <Button variant="outlined" onClick={() => setEditing(true)}>
                 Edit
               </Button>
-              <ConfirmButton
-                variant="outlined"
-                title="Regenerate episode?"
-                message="Throws away the transcript and cached audio and writes a new script. This spends Gemini quota."
-                onConfirm={() => regenerate.mutate()}
-              >
+              <Button variant="outlined" onClick={() => setRegenerating(true)}>
                 Regenerate
-              </ConfirmButton>
+              </Button>
               <ConfirmButton
                 variant="outlined"
                 title="Regenerate audio?"
@@ -118,6 +120,9 @@ export function EpisodePage() {
             <Box sx={{ mt: 2 }}>
               <audio controls preload="none" src={audio.data.url} style={{ width: "100%" }} />
             </Box>
+          )}
+          {regenerating && (
+            <RegenerateDialog count={1} onConfirm={(redraft) => regenerate.mutate(redraft)} onClose={() => setRegenerating(false)} />
           )}
           {editing && (
             <EditDialog

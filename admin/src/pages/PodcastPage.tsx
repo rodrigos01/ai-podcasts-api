@@ -1,8 +1,12 @@
-import { Alert, Box, Button, Chip, Link as MuiLink, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Checkbox, Link as MuiLink, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from "@mui/material";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, bulkApi } from "../api";
+import { BulkResult } from "../BulkResult";
+import { runAll, useSelection, type BulkOutcome } from "../bulk";
+import { RegenerateDialog } from "../RegenerateDialog";
+import { StatusChip } from "../StatusChip";
 import { ConfirmButton } from "../ConfirmButton";
 import { EditDialog } from "../EditDialog";
 import { useEpisodes, usePodcast, useSources } from "../firestore";
@@ -17,6 +21,35 @@ export function PodcastPage() {
   const podcast = usePodcast(podcastId);
   const episodes = useEpisodes(podcastId);
   const sources = useSources(podcastId);
+  const selection = useSelection(episodes.data?.map((e) => e.id));
+  const allSelected = !!episodes.data?.length && selection.ids.length === episodes.data.length;
+  const [regenerating, setRegenerating] = useState(false);
+  const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const runBulk = async (action: () => Promise<BulkOutcome>) => {
+    setBusy(true);
+    try {
+      setOutcome(await action());
+      selection.clear();
+    } catch (err) {
+      setOutcome({ label: "Failed", done: 0, failures: [{ id: "request", message: err instanceof Error ? err.message : String(err) }] });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const episodeBase = (id: string) => `/${podcastId}/episodes/${id}`;
+  const deleteEpisodes = () => runBulk(() => runAll("Deleted", selection.ids, (id) => api(episodeBase(id), { method: "DELETE" })));
+  const regenerateAudio = () =>
+    runBulk(() => runAll("Audio reset", selection.ids, (id) => api(`${episodeBase(id)}/audio`, { method: "DELETE" })));
+  const regenerateEpisodes = (redraft: boolean) =>
+    runBulk(async () => {
+      const { order } = await bulkApi<{ order: string[] }>("/episodes/regenerate", {
+        method: "POST",
+        body: { podcastId, episodeIds: selection.ids, redraft },
+      });
+      return { label: `Queued ${redraft ? "(with re-draft) " : ""}in series order`, done: order.length, failures: [] };
+    });
 
   const update = useMutation({
     mutationFn: (body: Record<string, string>) => api(`/${podcastId}`, { method: "PATCH", body }),
@@ -97,13 +130,55 @@ export function PodcastPage() {
       )}
 
       <Box>
-        <Typography variant="h6" gutterBottom>
-          Episodes
-        </Typography>
+        <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
+          <Typography variant="h6">Episodes</Typography>
+          {selection.ids.length > 0 && (
+            <>
+              <Typography color="text.secondary">{selection.ids.length} selected</Typography>
+              <Button variant="outlined" disabled={busy} onClick={() => setRegenerating(true)}>
+                Regenerate
+              </Button>
+              <ConfirmButton
+                variant="outlined"
+                disabled={busy}
+                title="Regenerate audio?"
+                message="Deletes the cached audio of the selected episodes; it is synthesized again the next time each is played. This spends TTS quota."
+                onConfirm={() => void regenerateAudio()}
+              >
+                Regenerate audio
+              </ConfirmButton>
+              <ConfirmButton
+                color="error"
+                variant="outlined"
+                disabled={busy}
+                title={`Delete ${selection.ids.length} episode${selection.ids.length === 1 ? "" : "s"}?`}
+                message="Deletes the selected episodes and their audio. This can't be undone."
+                onConfirm={() => void deleteEpisodes()}
+              >
+                Delete
+              </ConfirmButton>
+            </>
+          )}
+        </Stack>
+        <BulkResult outcome={outcome} onClose={() => setOutcome(null)} />
+        {regenerating && (
+          <RegenerateDialog
+            count={selection.ids.length}
+            onConfirm={(redraft) => void regenerateEpisodes(redraft)}
+            onClose={() => setRegenerating(false)}
+          />
+        )}
         <Paper>
           <Table size="small">
             <TableHead>
               <TableRow>
+                <TableCell padding="checkbox">
+                  <Checkbox
+                    checked={allSelected}
+                    indeterminate={selection.ids.length > 0 && !allSelected}
+                    onChange={(e) => selection.setAll(e.target.checked)}
+                  />
+                </TableCell>
                 <TableCell>Title</TableCell>
                 <TableCell>Length</TableCell>
                 <TableCell>Status</TableCell>
@@ -112,7 +187,10 @@ export function PodcastPage() {
             </TableHead>
             <TableBody>
               {episodes.data?.map((e) => (
-                <TableRow key={e.id} hover>
+                <TableRow key={e.id} hover selected={selection.selected.has(e.id)}>
+                  <TableCell padding="checkbox">
+                    <Checkbox checked={selection.selected.has(e.id)} onChange={() => selection.toggle(e.id)} />
+                  </TableCell>
                   <TableCell>
                     <MuiLink component={Link} to={`/podcasts/${podcastId}/episodes/${e.id}`}>
                       {e.title}
@@ -120,7 +198,7 @@ export function PodcastPage() {
                   </TableCell>
                   <TableCell>{e.length}</TableCell>
                   <TableCell>
-                    <Chip size="small" label={e.status} color={e.status === "failed" ? "error" : e.status === "generating" ? "warning" : "success"} />
+                    <StatusChip episode={e} />
                   </TableCell>
                   <TableCell>{new Date(e.createdAt).toLocaleString()}</TableCell>
                 </TableRow>

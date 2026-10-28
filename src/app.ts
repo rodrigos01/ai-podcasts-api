@@ -7,6 +7,7 @@ import * as audioController from "./controllers/audio.controller";
 import { castCors } from "./middleware/castCors";
 import { requireAdmin } from "./middleware/requireAdmin";
 import { requireAuth } from "./middleware/requireAuth";
+import { adminBulkRouter } from "./routes/adminBulk.routes";
 import { healthRouter } from "./routes/health.routes";
 import { podcastsRouter } from "./routes/podcasts.routes";
 import { voicesRouter } from "./routes/voices.routes";
@@ -31,6 +32,7 @@ export function createApp() {
   // (services/podcastAccess.ts's requireAccessiblePodcast) and the list
   // returns every user's podcasts.
   app.use("/admin/api/podcasts", asyncHandler(requireAuth), requireAdmin, podcastsRouter);
+  app.use("/admin/api/bulk", asyncHandler(requireAuth), requireAdmin, adminBulkRouter);
 
   // The admin SPA (admin/, built by the Dockerfile), served at /admin. Public
   // files with nothing in them: all data comes through /admin/api above, which
