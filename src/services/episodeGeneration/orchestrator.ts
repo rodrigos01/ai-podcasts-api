@@ -18,6 +18,7 @@ import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
 import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
+import { withContinuity } from "./continuity";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
@@ -78,6 +79,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       status: "generating",
       transcript: null,
       ttsChunks: null,
+      interactionId: null,
       generatedAudioSeconds: 0,
       audioComplete: false,
       audioDurationSeconds: null,
@@ -103,10 +105,12 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity: the transcripts of the episodes that come *before* this one
-    // in series order (not merely the newest ones), so regenerating an old
-    // episode never sees episodes that were written after it.
-    const previousEpisodes = await getPriorEpisodes(
+    // Continuity: the episodes that come *before* this one in series order
+    // (not merely the newest ones), so regenerating an old episode never sees
+    // episodes that were written after it. Their transcripts go in the prompt,
+    // or, for a podcast on interaction context, the call continues the previous
+    // episode's stored interaction (see continuity.ts).
+    const priorEpisodes = await getPriorEpisodes(
       podcastId,
       { id: episode.id, createdAt: episode.createdAt },
       MAX_HISTORY_EPISODES,
@@ -119,10 +123,8 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // per-turn, two-independent-agent conversation loop. Nothing is written
     // until the whole script comes back, so a run lost mid-call is simply
     // started over (see ensureGenerationRunning).
-    const scriptPromise = generateEpisodeScript(
-      cast,
-      { podcast, episode, sources, previousEpisodes },
-      wordTarget,
+    const scriptPromise = withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
+      generateEpisodeScript(cast, { podcast, episode, sources, previousEpisodes }, wordTarget, previousInteractionId),
     );
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
@@ -149,6 +151,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     await patch({
       transcript: script.transcript,
       ttsChunks,
+      interactionId: script.interactionId,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,
