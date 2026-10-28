@@ -19,6 +19,7 @@ import {
 } from "../schemas/wizard.schema";
 import { ensureGenerationRunning, runEpisodeGeneration } from "../services/episodeGeneration/orchestrator";
 import * as episodeWizardService from "../services/episodeWizard.service";
+import { withContinuity } from "../services/episodeGeneration/continuity";
 import { prepareHostsForUpdate, withVoicePrompt } from "../utils/voicePrompt";
 import { requireOwnedPodcast } from "../services/podcastAccess";
 import { HttpError } from "../utils/HttpError";
@@ -49,13 +50,16 @@ export async function wizardOptions(req: Request, res: Response) {
     await Promise.all(input.sourceIds.map((sourceId) => getSource(podcastId, sourceId)))
   ).filter((s): s is NonNullable<typeof s> => s !== null);
 
-  const previousEpisodes = await getPriorEpisodes(podcastId, undefined, MAX_HISTORY_EPISODES);
-  const result = await episodeWizardService.generateSuggestions(
-    podcast,
-    sources,
-    input.length,
-    previousEpisodes,
-    input.prompt,
+  const priorEpisodes = await getPriorEpisodes(podcastId, undefined, MAX_HISTORY_EPISODES);
+  const result = await withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
+    episodeWizardService.generateSuggestions(
+      podcast,
+      sources,
+      input.length,
+      previousEpisodes,
+      input.prompt,
+      previousInteractionId,
+    ),
   );
   // Voice-design session for this wizard run — see voiceDesign.service.ts.
   res.json({
@@ -69,15 +73,18 @@ export async function wizardRevise(req: Request, res: Response) {
   const podcastId = requireParam(req.params, "podcastId");
   const podcast = await requireOwnedPodcast(podcastId, requireUserId(req));
   const input = episodeWizardReviseRequestSchema.parse(req.body);
-  const previousEpisodes = await getPriorEpisodes(podcastId, undefined, MAX_HISTORY_EPISODES);
-  const result = await episodeWizardService.reviseSuggestions(
-    podcast,
-    input.suggestions,
-    input.length,
-    previousEpisodes,
-    input.targetSuggestionIndex,
-    input.targetEpisodeIndex,
-    input.instruction,
+  const priorEpisodes = await getPriorEpisodes(podcastId, undefined, MAX_HISTORY_EPISODES);
+  const result = await withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
+    episodeWizardService.reviseSuggestions(
+      podcast,
+      input.suggestions,
+      input.length,
+      previousEpisodes,
+      input.targetSuggestionIndex,
+      input.targetEpisodeIndex,
+      input.instruction,
+      previousInteractionId,
+    ),
   );
   res.json({
     sessionId: input.sessionId ?? randomUUID(),

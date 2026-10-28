@@ -26,11 +26,15 @@ export async function generateSuggestions(
   length: EpisodeLength,
   previousEpisodes: PriorEpisode[],
   prompt?: string,
+  // Continue the series' stored interaction instead of sending the transcripts
+  // (podcasts on interaction context; see services/episodeGeneration/continuity.ts).
+  previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
     systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
     schema: episodeWizardOptionsResponseSchema,
+    ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 }
 
@@ -42,10 +46,12 @@ export async function reviseSuggestions(
   targetSuggestionIndex: number,
   targetEpisodeIndex: number | undefined,
   instruction: string,
+  previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
     systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
     prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
     schema: episodeWizardOptionsResponseSchema,
+    ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 }
