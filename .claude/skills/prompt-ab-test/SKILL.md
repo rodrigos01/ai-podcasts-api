@@ -56,6 +56,8 @@ npx tsx $K/reset-arm.ts <armPodcastId> 2
 
 Watch progress with the Monitor tool on the log (grep `done|rror`), not sleep loops. Monitors expire after 30 min; the background processes don't, and survive an interrupted turn. As each episode finishes, export it and send the transcripts to the user (as files: they are 40-70k characters each).
 
+**Testing interaction chaining**: give the chain arm `{"useInteractionContext":true}` in `setup-arm.ts`'s extras JSON; the other arm is the control. Generate episode 1 in the chain arm (it stores its interaction id) and seed the other arms from it. `generate`/`redraftEpisode` go through `withContinuity`, so a chain arm's scripts and drafts continue from the previous episode's id, and drafts are only shared between arms that have the same mode and the same head.
+
 ## Things that went wrong (and how to spot them)
 
 - **A placeholder in the prompt gets copied literally.** A format line `[first label]: line` made the model write `[Penny]: ...`, which `scriptText.ts` doesn't parse → `"Gemini returned a script with no recognizable turns"` after 3 retries. Never show a stand-in where the model must write real text; describe it in words. The symptom is an arm that is much slower than its siblings (retries) and then fails. When one arm lags, check the log and reproduce that single call, saving the raw output.

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { chooseContinuity, withContinuity } from "../src/services/episodeGeneration/continuity";
 import { PreviousInteractionNotFoundError } from "../src/llm/geminiClient";
+import { selectPriorEpisodes } from "../src/utils/episodeHistory";
 
 const ep = (interactionId?: string | null) => ({ episode: { interactionId } }) as never;
 
@@ -34,5 +35,27 @@ describe("withContinuity", () => {
   it("rethrows other errors", async () => {
     const run = vi.fn().mockRejectedValue(new Error("boom"));
     await expect(withContinuity(podcast, [ep("x")], run)).rejects.toThrow("boom");
+  });
+});
+
+describe("regenerating an earlier episode", () => {
+  const episode = (id: string, createdAt: number) =>
+    ({ id, createdAt, transcript: "t", interactionId: `interaction-${id}` }) as never;
+  const series = [episode("e1", 1), episode("e2", 2), episode("e3", 3), episode("e4", 4)];
+
+  it("chains from the episode right before it and never sees later ones", () => {
+    const prior = selectPriorEpisodes(series, { id: "e2", createdAt: 2 }, 15).map((episode, i) => ({
+      number: i + 1,
+      episode,
+    }));
+    expect(chooseContinuity(true, prior).previousInteractionId).toBe("interaction-e1");
+  });
+
+  it("the first episode has no chain to continue", () => {
+    const prior = selectPriorEpisodes(series, { id: "e1", createdAt: 1 }, 15).map((episode, i) => ({
+      number: i + 1,
+      episode,
+    }));
+    expect(chooseContinuity(true, prior)).toEqual({ previousEpisodes: [] });
   });
 });
