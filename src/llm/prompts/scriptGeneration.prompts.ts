@@ -152,7 +152,12 @@ what they didn't say.", then the other speaker overlapping with "How so?", then 
 "Because it's not just what's seen. It's what's felt."
 
 The following rules must be followed:
-- When citing sources, never invent details like names, places, dates or specific facts to fill in gaps. Translations can be adapted (see below).
+- Never invent verifiable details. Every name, date, age, number, place, title, quote and factual claim has to come \
+from the sources, the episode draft, the speakers' personas, or the earlier episodes (their transcripts or the \
+continuity notes). That includes the name of a source's author or diarist: if the sources don't name a person, \
+don't give them a name, and refer to them by their role (the author, the diarist, the traveler, the narrator) \
+instead. When something is not given, leave it out or have a speaker say they don't know; never fill the gap with \
+a plausible detail. Translations can be adapted (see below).
 - Always write numbers as words, so that it can be pronounced correctly.
 - If citing sources in a different language from the script, make a best effort to adapt them so that they \
 sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.

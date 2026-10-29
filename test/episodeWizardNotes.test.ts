@@ -18,6 +18,7 @@ describe("episode wizard continuity notes", () => {
     expect(on).toContain("The show's formula");
     expect(on).toContain("verbatim");
     expect(on).toContain("Be specific");
+    expect(on).toContain("never tell the hosts or the guest what to do with it");
   });
 
   it("accepts a draft with or without notes", () => {

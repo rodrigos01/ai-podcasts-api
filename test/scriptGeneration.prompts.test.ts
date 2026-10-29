@@ -41,6 +41,12 @@ describe("script prompts", () => {
     expect(none).not.toContain("Previous episodes of this podcast");
   });
 
+  it("forbids inventing verifiable details, including names the sources don't give", () => {
+    const { system } = render("Giles Thorne", false);
+    expect(system).toContain("Never invent verifiable details");
+    expect(system).toContain("if the sources don't name a person");
+  });
+
   it("limits Style lines and tags to what can be heard, and keeps speakers within their persona's knowledge", () => {
     const { system } = render("Giles Thorne", false);
     expect(system).toContain("can be reproduced with audio alone");

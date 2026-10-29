@@ -21,9 +21,11 @@ episode you draft, write "continuityNotes": the continuation points for THIS epi
 from the earlier episodes that this episode should pick up, build on, stay consistent with, or avoid \
 repeating, chosen because of this episode's topics, sources and guest. Write each point on its own line with \
 three parts: what was said or done, exactly, and by whom; which episode it comes from (for example \
-"Episode 2"); and why it matters for this episode, meaning how it can be used here (a callback that fits one of \
-its topics, a thread to resolve, a fact it must not contradict, ground it should not re-cover). A point with no \
-concrete link to this episode does not belong. Do not summarize the earlier episodes, do not list what happened \
+"Episode 2"); and why it matters for this episode, stated as the link between the two (which of this episode's \
+topics or moments it connects to, an open thread it leaves, a fact this episode touches, ground this episode \
+overlaps). State why it matters and nothing more: never tell the hosts or the guest what to do with it, and \
+never predict or script what they will say or do in this episode ("should call back", "will react", "can use \
+it" are all out). A point with no concrete link to this episode does not belong. Do not summarize the earlier episodes, do not list what happened \
 in them, and do not add general background on the characters or the show: a few points tied to this episode \
 beat a complete record. If no earlier moment bears on the episode, leave "continuityNotes" unset (apart from the \
 show's formula, below).
