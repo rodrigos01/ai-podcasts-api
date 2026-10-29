@@ -4,6 +4,7 @@ import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLease";
 import {
   acquireGenerationLease,
+  clearInteractionIdsAfter,
   getEpisode,
   getPriorEpisodes,
   heartbeatGenerationLease,
@@ -86,6 +87,9 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       progress: null,
       error: null,
     });
+    // The episodes after this one hold the version being thrown away in their
+    // interactions; they'll rebuild from transcripts when next needed.
+    await clearInteractionIdsAfter(podcastId, { id: episodeId, createdAt: episode.createdAt });
     await deleteEpisodeAudio(podcastId, episodeId).catch((err) => {
       console.error(
         `Failed to clear cached audio for episode ${podcastId}/${episodeId} before (re)generating:`,
