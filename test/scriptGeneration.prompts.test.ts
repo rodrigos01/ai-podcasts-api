@@ -25,6 +25,13 @@ function render(guest: string, withHistory: boolean) {
 }
 
 describe("script prompts", () => {
+  it("limits Style lines and tags to what can be heard, and keeps speakers within their persona's knowledge", () => {
+    const { system } = render("Giles Thorne", false);
+    expect(system).toContain("can be reproduced with audio alone");
+    expect(system).toContain("nodding");
+    expect(system).toContain("only explains what their persona, bio and experience would plausibly give them");
+  });
+
   it("adds the natural speech rules only for podcasts that opt in", () => {
     const ep = episode("Giles Thorne");
     const ctx = (p: Podcast) => ({ podcast: p, episode: ep, sources: [], previousEpisodes: [] });

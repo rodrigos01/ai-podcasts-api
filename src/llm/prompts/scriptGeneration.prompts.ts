@@ -142,6 +142,11 @@ You can use the following tags to make the conversation more realistic:
 written as one or two words, such as <laughs>, <gasps> or <sighs>. The only other tag that works is <claps>. \
 Anything else is not valid: no stage directions, actions, gestures or descriptions of how something is said, and \
 never spoken words inside the brackets. How a whole turn should sound goes in its Style line.
+- Style lines: strictly limited to how the voice sounds, such as tone, emotion, pace, volume, energy or accent. \
+A Style line and an angle-bracket tag may only describe something that can be reproduced with audio alone. \
+Never put physical actions, gestures, facial expressions, body language, or anything that is only seen (nodding, \
+smiling, shrugging, pointing, looking away) in either one, because the TTS engine would voice it or it would be \
+meaningless to a listener. If something can't be heard, leave it out or say it in words.
 - Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, \
 overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
 turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
