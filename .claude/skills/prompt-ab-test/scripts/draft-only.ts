@@ -6,8 +6,8 @@
  * of <historyPodcastId> (their stored transcripts), the sources, length and
  * podcast definition are the history podcast's, and the user prompt is the same
  * numbered episode's production notes in <notesPodcastId> (as --redraft does).
- * The draft is made as a podcast on continuity notes (transcripts go in the
- * wizard's system instruction, no chain), whatever the podcast's own flags.
+ * The transcripts go in the
+ * wizard's system instruction).
  *
  *   npx tsx .claude/skills/prompt-ab-test/scripts/draft-only.ts <historyPodcastId> <notesPodcastId> <episodeNumber> <outFile>
  */
@@ -24,7 +24,7 @@ async function main() {
   if (!historyId || !notesId || !numberArg || !outFile) throw new Error("usage: draft-only.ts <historyPodcastId> <notesPodcastId> <episodeNumber> <outFile>");
   const n = Number(numberArg);
   const stored = (await firestore.collection("podcasts").doc(historyId).get()).data() as Podcast;
-  const podcast: Podcast = { ...stored, title: stored.title.replace(/\s*\(Test [^)]*\)\s*$/, ""), continuityNotes: true };
+  const podcast: Podcast = { ...stored, title: stored.title.replace(/\s*\(Test [^)]*\)\s*$/, "") };
   const episodes = await inSeriesOrder(historyId);
   const target = episodes[n - 1]!;
   const previous: PriorEpisode[] = episodes

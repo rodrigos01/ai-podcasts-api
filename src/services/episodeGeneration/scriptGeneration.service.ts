@@ -1,4 +1,4 @@
-import { generatePlainTextWithId, PreviousInteractionNotFoundError } from "../../llm/geminiClient";
+import { generatePlainText } from "../../llm/geminiClient";
 import {
   buildScriptGenerationPrompt,
   buildScriptSystemInstruction,
@@ -8,7 +8,6 @@ import {
 import { countWords } from "../../utils/wordCount";
 import { parseScriptTurns, type ScriptTurn } from "../../utils/scriptText";
 import { buildTranscript } from "./transcriptBuilder";
-import { usesInteractionContext } from "./continuity";
 import { speakerLabel, type Cast } from "./speakerSelection";
 
 const MAX_GENERATION_ATTEMPTS = 3;
@@ -16,11 +15,6 @@ const MAX_GENERATION_ATTEMPTS = 3;
 export interface EpisodeScript {
   transcript: string;
   wordCount: number;
-  /**
-   * The stored interaction that wrote it, which the next episode's script and
-   * drafts continue from. Null unless the podcast uses interaction context.
-   */
-  interactionId: string | null;
 }
 
 /**
@@ -176,21 +170,15 @@ async function generateOnce(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
-  previousInteractionId: string | undefined,
 ): Promise<EpisodeScript> {
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
-  // A podcast on interaction context stores every script, so the next episode
-  // can continue from it; any other podcast keeps the zero-retention default.
-  const store = usesInteractionContext(ctx.podcast);
 
-  const { text: raw, interactionId } = await generatePlainTextWithId({
+  const raw = await generatePlainText({
     systemInstruction: buildScriptSystemInstruction(ctx),
-    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget, previousInteractionId !== undefined),
-    store,
+    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
     thinkingLevel: "high",
-    ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 
   const turns = parseScriptTurns(raw);
@@ -215,7 +203,7 @@ async function generateOnce(
     })),
   );
 
-  return { transcript, wordCount: countWords(transcript), interactionId: store ? interactionId : null };
+  return { transcript, wordCount: countWords(transcript) };
 }
 
 /**
@@ -227,24 +215,17 @@ async function generateOnce(
  * outright: a fresh generation is cheap relative to what it protects
  * against (wrong TTS voice attribution). Each failed attempt is logged, since
  * a retry is otherwise invisible (it just makes the episode slow).
- *
- * `previousInteractionId` continues the previous episode's stored interaction
- * (see continuity.ts); the caller then leaves `ctx.previousEpisodes` empty. If
- * the API no longer has that interaction the error is rethrown at once for the
- * caller to fall back on, not retried.
  */
 export async function generateEpisodeScript(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
-  previousInteractionId?: string,
 ): Promise<EpisodeScript> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
     try {
-      return await generateOnce(cast, ctx, wordTarget, previousInteractionId);
+      return await generateOnce(cast, ctx, wordTarget);
     } catch (err) {
-      if (err instanceof PreviousInteractionNotFoundError) throw err;
       lastError = err;
       console.warn(
         `Script attempt ${attempt}/${MAX_GENERATION_ATTEMPTS} for "${ctx.episode.title}" failed: ${err instanceof Error ? err.message : err}`,

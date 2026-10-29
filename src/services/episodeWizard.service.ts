@@ -20,39 +20,18 @@ import {
 // shape is fully described by its own `episodes.length`, which Gemini's
 // structured-output schema already grammar-constrains directly.
 
-// Only podcasts on continuity notes are asked for them; if any other draft
-// comes back with some, they are dropped.
-function withoutUnaskedNotes(
-  podcast: Podcast,
-  result: EpisodeWizardSuggestionsResponse,
-): EpisodeWizardSuggestionsResponse {
-  if (podcast.continuityNotes) return result;
-  return {
-    suggestions: result.suggestions.map((suggestion) => ({
-      episodes: suggestion.episodes.map(({ continuityNotes: _dropped, ...draft }) => draft),
-    })),
-  };
-}
-
 export async function generateSuggestions(
   podcast: Podcast,
   sources: Source[],
   length: EpisodeLength,
   previousEpisodes: PriorEpisode[],
   prompt?: string,
-  // Continue the series' stored interaction instead of sending the transcripts
-  // (podcasts on interaction context; see services/episodeGeneration/continuity.ts).
-  previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
-  return withoutUnaskedNotes(
-    podcast,
-    await generateText({
-      systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
-      prompt: buildEpisodeDraftPrompt(sources, prompt),
-      schema: episodeWizardOptionsResponseSchema,
-      ...(previousInteractionId ? { previousInteractionId } : {}),
-    }),
-  );
+  return generateText({
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
+    prompt: buildEpisodeDraftPrompt(sources, prompt),
+    schema: episodeWizardOptionsResponseSchema,
+  });
 }
 
 export async function reviseSuggestions(
@@ -63,15 +42,10 @@ export async function reviseSuggestions(
   targetSuggestionIndex: number,
   targetEpisodeIndex: number | undefined,
   instruction: string,
-  previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
-  return withoutUnaskedNotes(
-    podcast,
-    await generateText({
-      systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
-      prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
-      schema: episodeWizardOptionsResponseSchema,
-      ...(previousInteractionId ? { previousInteractionId } : {}),
-    }),
-  );
+  return generateText({
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
+    prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
+    schema: episodeWizardOptionsResponseSchema,
+  });
 }

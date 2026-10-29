@@ -25,8 +25,6 @@ export async function createPodcast(
     description: input.description,
     structure: input.structure,
     ...(input.languageCode ? { languageCode: input.languageCode } : {}),
-    ...(input.useInteractionContext !== undefined ? { useInteractionContext: input.useInteractionContext } : {}),
-    ...(input.continuityNotes !== undefined ? { continuityNotes: input.continuityNotes } : {}),
     hosts: input.hosts.map((host, index) => {
       const { resolvedVoiceId: _clientValue, ...person } = host;
       return { ...person, id: randomUUID(), ...(hostVoices[index] ?? NO_VOICE) };

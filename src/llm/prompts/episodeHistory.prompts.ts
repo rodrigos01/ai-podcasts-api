@@ -59,29 +59,3 @@ Treat the details in these notes as exact: they are what the earlier episodes es
 them. Where the notes give the show's formula (opening and closing lines, sign-offs, segment names, rituals), \
 follow it as written. Use these notes${CONTINUITY_GUIDANCE}`;
 }
-
-/**
- * The message of a catch-up call: it carries the earlier transcripts into the
- * conversation (so a chain can be rebuilt after an episode changed) and asks
- * for nothing but an acknowledgement. The guidance on how to use them comes
- * with the real call that continues from it (`buildChainedHistoryNote`).
- */
-export function buildCatchUpPrompt(previousEpisodes: PriorEpisode[], podcast: Podcast): string {
-  return `Previous episodes of this podcast, oldest first, with their full transcripts:
-
-${formatTranscripts(previousEpisodes, podcast)}
-
-These episodes are the history of the show so far; the next messages build on them. Reply with just "Understood."`;
-}
-
-/**
- * What stands in for the history block when the earlier episodes reach the
- * model through the conversation it continues (interaction context — see
- * services/episodeGeneration/continuity.ts) instead of being pasted into the
- * prompt. The guidance is the same text the block carries, so a chained call
- * is told how to use the history exactly as an unchained one is.
- */
-export function buildChainedHistoryNote(): string {
-  return `The earlier episodes of this podcast, oldest first, are already in this conversation, with the full \
-script of each. Use them${CONTINUITY_GUIDANCE}`;
-}

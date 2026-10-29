@@ -1,12 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { LENGTH_RANGES } from "../../constants/lengthRanges";
-import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLease";
 import {
   acquireGenerationLease,
-  clearInteractionIdsAfter,
   getEpisode,
-  getPriorEpisodes,
   heartbeatGenerationLease,
   listDependentEpisodes,
   patchEpisodeState,
@@ -19,7 +16,6 @@ import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
 import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
-import { withContinuity } from "./continuity";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
@@ -80,16 +76,12 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       status: "generating",
       transcript: null,
       ttsChunks: null,
-      interactionId: null,
       generatedAudioSeconds: 0,
       audioComplete: false,
       audioDurationSeconds: null,
       progress: null,
       error: null,
     });
-    // The episodes after this one hold the version being thrown away in their
-    // interactions; they'll rebuild from transcripts when next needed.
-    await clearInteractionIdsAfter(podcastId, { id: episodeId, createdAt: episode.createdAt });
     await deleteEpisodeAudio(podcastId, episodeId).catch((err) => {
       console.error(
         `Failed to clear cached audio for episode ${podcastId}/${episodeId} before (re)generating:`,
@@ -109,17 +101,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity: the episodes that come *before* this one in series order
-    // (not merely the newest ones), so regenerating an old episode never sees
-    // episodes that were written after it. Their transcripts go in the prompt,
-    // or, for a podcast on interaction context, the call continues the previous
-    // episode's stored interaction (see continuity.ts).
-    const priorEpisodes = await getPriorEpisodes(
-      podcastId,
-      { id: episode.id, createdAt: episode.createdAt },
-      MAX_HISTORY_EPISODES,
-    );
-
     await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
 
     // A single, non-streaming LLM call writes the whole episode's script
@@ -127,9 +108,10 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // per-turn, two-independent-agent conversation loop. Nothing is written
     // until the whole script comes back, so a run lost mid-call is simply
     // started over (see ensureGenerationRunning).
-    const scriptPromise = withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
-      generateEpisodeScript(cast, { podcast, episode, sources, previousEpisodes }, wordTarget, previousInteractionId),
-    );
+    // Continuity comes from the episode's own continuity notes, written by the
+    // draft call (see episodeWizard.prompts.ts); the earlier episodes
+    // themselves are never sent.
+    const scriptPromise = generateEpisodeScript(cast, { podcast, episode, sources }, wordTarget);
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
     // Design/Library mint) runs in parallel with script generation rather
@@ -155,7 +137,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     await patch({
       transcript: script.transcript,
       ttsChunks,
-      interactionId: script.interactionId,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,
