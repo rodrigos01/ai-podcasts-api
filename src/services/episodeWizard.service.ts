@@ -31,7 +31,7 @@ export async function generateSuggestions(
   previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
     schema: episodeWizardOptionsResponseSchema,
     ...(previousInteractionId ? { previousInteractionId } : {}),
@@ -49,7 +49,7 @@ export async function reviseSuggestions(
   previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
     prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
     schema: episodeWizardOptionsResponseSchema,
     ...(previousInteractionId ? { previousInteractionId } : {}),

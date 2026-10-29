@@ -187,7 +187,7 @@ async function generateOnce(
 
   const { text: raw, interactionId } = await generatePlainTextWithId({
     systemInstruction: buildScriptSystemInstruction(ctx),
-    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
+    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget, previousInteractionId !== undefined),
     store,
     ...(previousInteractionId ? { previousInteractionId } : {}),
   });

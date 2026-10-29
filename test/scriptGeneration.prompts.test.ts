@@ -101,3 +101,29 @@ describe("script prompts", () => {
     expect(prompt).toContain('exactly "Penny" and "Giles"');
   });
 });
+
+describe("script prompt history", () => {
+  const ep = episode("Sayri Huamán");
+  const cast = selectCast(podcast.hosts, ep.guests);
+  const prior = [{ number: 1, episode: episode("Old", { transcript: "Penny: OLD-TRANSCRIPT" }) }];
+
+  it("pastes the transcripts when the call is not chained", () => {
+    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [], previousEpisodes: prior }, target);
+    expect(prompt).toContain("OLD-TRANSCRIPT");
+    expect(prompt).toContain("Use these for continuity: the show is an ongoing series");
+    expect(prompt).not.toContain("already in this conversation");
+  });
+
+  it("points at the conversation instead when chained, with the same guidance", () => {
+    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [], previousEpisodes: [] }, target, true);
+    expect(prompt).toContain("already in this conversation");
+    expect(prompt).toContain("Use them for continuity: the show is an ongoing series");
+    expect(prompt).toContain("prioritize the details in the system instructions");
+    expect(prompt).not.toContain("Previous episodes of this podcast");
+  });
+
+  it("says nothing about history for a show's first episode", () => {
+    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [], previousEpisodes: [] }, target);
+    expect(prompt).not.toContain("continuity");
+  });
+});
