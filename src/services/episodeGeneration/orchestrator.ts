@@ -4,6 +4,7 @@ import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLease";
 import {
   acquireGenerationLease,
+  clearInteractionIdsAfter,
   getEpisode,
   getPriorEpisodes,
   heartbeatGenerationLease,
@@ -25,25 +26,15 @@ import {
   isGenerationSuperseded,
   needsGenerationRestart,
 } from "../../utils/generationLease";
+import { CLEAN_GENERATION_STATE } from "../../utils/generationState";
 import { redraftToUpdate } from "../../utils/redraft";
 import { redraftEpisode } from "../episodeWizard.service";
 import { deletePeopleVoices } from "../voiceSelection.service";
+import { withContinuity } from "./continuity";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
 import { resolveHostVoice } from "./voiceResolution.service";
 import { chunkTranscript } from "./chunker";
-
-/** The episode fields a (re)generation starts from: nothing generated yet. */
-export const CLEAN_GENERATION_STATE: Partial<Episode> = {
-  status: "generating",
-  transcript: null,
-  ttsChunks: null,
-  generatedAudioSeconds: 0,
-  audioComplete: false,
-  audioDurationSeconds: null,
-  progress: null,
-  error: null,
-};
 
 /**
  * Drafts the episode again and stores the result (see episodeWizard.service.ts's
@@ -60,12 +51,17 @@ async function redraftStoredEpisode(
   const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(podcastId, id)))).filter(
     (s): s is NonNullable<typeof s> => s !== null,
   );
-  const previousEpisodes = await getPriorEpisodes(
+  const priorEpisodes = await getPriorEpisodes(
     podcastId,
     { id: episode.id, createdAt: episode.createdAt },
     MAX_HISTORY_EPISODES,
   );
-  const draft = await redraftEpisode(podcast, episode, sources, previousEpisodes);
+  // The same continuity as the script call and the wizard's drafts: continue
+  // the previous episode's interaction (rebuilt by a catch-up call if it's
+  // gone) or, for a podcast that has it off, the transcripts in the prompt.
+  const draft = await withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
+    redraftEpisode(podcast, episode, sources, previousEpisodes, previousInteractionId),
+  );
 
   // The call above can take a while: don't write a draft over an episode this run no longer owns.
   if (!(await heartbeatGenerationLease(podcastId, episode.id, owner))) throw new GenerationSupersededError();
@@ -130,6 +126,9 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // old ones, so a stale chunk left behind at the same index could get
     // served (or mistaken for "already cached") against all-new content.
     await patch(CLEAN_GENERATION_STATE);
+    // The episodes after this one hold the version being thrown away in their
+    // interactions; they'll rebuild from transcripts when next needed.
+    await clearInteractionIdsAfter(podcastId, { id: episodeId, createdAt: episode.createdAt });
     await deleteEpisodeAudio(podcastId, episodeId).catch((err) => {
       console.error(
         `Failed to clear cached audio for episode ${podcastId}/${episodeId} before (re)generating:`,
@@ -156,10 +155,12 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity: the transcripts of the episodes that come *before* this one
-    // in series order (not merely the newest ones), so regenerating an old
-    // episode never sees episodes that were written after it.
-    const previousEpisodes = await getPriorEpisodes(
+    // Continuity: the episodes that come *before* this one in series order
+    // (not merely the newest ones), so regenerating an old episode never sees
+    // episodes that were written after it. Their transcripts go in the prompt,
+    // or, for a podcast on interaction context, the call continues the previous
+    // episode's stored interaction (see continuity.ts).
+    const priorEpisodes = await getPriorEpisodes(
       podcastId,
       { id: episode.id, createdAt: episode.createdAt },
       MAX_HISTORY_EPISODES,
@@ -172,10 +173,8 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // per-turn, two-independent-agent conversation loop. Nothing is written
     // until the whole script comes back, so a run lost mid-call is simply
     // started over (see ensureGenerationRunning).
-    const scriptPromise = generateEpisodeScript(
-      cast,
-      { podcast, episode, sources, previousEpisodes },
-      wordTarget,
+    const scriptPromise = withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
+      generateEpisodeScript(cast, { podcast, episode, sources, previousEpisodes }, wordTarget, previousInteractionId),
     );
 
     // Host voices are resolved in parallel with script generation (a Voice
@@ -204,6 +203,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     await patch({
       transcript: script.transcript,
       ttsChunks,
+      interactionId: script.interactionId,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,

@@ -455,6 +455,10 @@ export async function streamEpisodeAudio(
     stopped = true;
   });
 
+  // Chunks whose TTS failed and were left out of the stream (see the catch below).
+  let skippedChunks = 0;
+  let lastSkipError: unknown;
+
   // Calculate cumulative audio seconds up to startChunkIndex
   let runningAudioSeconds = 0;
   for (let i = 0; i < startChunkIndex; i++) {
@@ -535,9 +539,22 @@ export async function streamEpisodeAudio(
         res.destroy();
         return;
       }
-      console.error(`Chunk ${index} generation failed for ${podcastId}/${episodeId}:`, err);
-      throw err;
+      // Recovery: a TTS failure on one chunk must not take the rest of the episode down. Skip the
+      // chunk and carry on with the next. Nothing was cached for it (the lock is released), so the
+      // episode stays incomplete and the next /stream request tries that chunk again.
+      console.error(
+        `Chunk ${index} generation failed for ${podcastId}/${episodeId}, skipping it:`,
+        err,
+      );
+      skippedChunks += 1;
+      lastSkipError = err;
     }
+  }
+
+  // Nothing at all reached the client (every chunk failed, or the failures came before any audio):
+  // report the error instead of answering 200 with an empty body.
+  if (skippedChunks > 0 && !res.headersSent && !stopped) {
+    throw lastSkipError;
   }
 
   // If that was the last chunk, flag completion *before* ending the response, so

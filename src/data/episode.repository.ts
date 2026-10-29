@@ -9,6 +9,7 @@ import { GenerationSupersededError, isGenerationLeaseLive } from "../utils/gener
 import { NO_VOICE } from "../utils/voiceDecision";
 import {
   compareBySeriesOrder,
+  episodesAfter,
   selectPriorEpisodes,
   type EpisodeAnchor,
   type PriorEpisode,
@@ -141,9 +142,48 @@ export async function deleteEpisode(podcastId: string, episodeId: string): Promi
   const ref = episodesCollection(podcastId).doc(episodeId);
   const existing = await ref.get();
   if (!existing.exists) return false;
+  const anchor = { id: episodeId, createdAt: existing.data()?.createdAt as number };
   await ref.delete();
   await deleteEpisodeAudio(podcastId, episodeId);
+  // Later episodes' interactions still hold the deleted one.
+  await clearInteractionIdsAfter(podcastId, anchor);
   return true;
+}
+
+/**
+ * Forgets the stored interaction of every episode after `anchor`: their
+ * interactions were built on the version of `anchor` that has just been
+ * replaced (regenerated) or removed, so continuing from one would hand the
+ * model an episode that no longer exists. An episode without an id makes
+ * the next call rebuild the series state from the transcripts
+ * (episodeGeneration/continuity.ts); the transcripts themselves are kept.
+ */
+export async function clearInteractionIdsAfter(podcastId: string, anchor: EpisodeAnchor): Promise<void> {
+  const stale = episodesAfter(await listEpisodes(podcastId), anchor).filter((episode) => episode.interactionId);
+  if (stale.length === 0) return;
+  const batch = firestore.batch();
+  for (const episode of stale) batch.update(episodesCollection(podcastId).doc(episode.id), { interactionId: null });
+  await batch.commit();
+}
+
+/**
+ * Records `interactionId` as the series state through this episode, unless the
+ * episode's transcript has changed since the interaction was built from it
+ * (it was regenerated in the meantime, so the interaction describes a version
+ * that is gone).
+ */
+export async function setInteractionIdIfCurrent(
+  podcastId: string,
+  episodeId: string,
+  transcript: string,
+  interactionId: string,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists || snap.data()?.transcript !== transcript) return;
+    tx.update(ref, { interactionId });
+  });
 }
 
 // Filtered in memory (rather than a Firestore range query on createdAt) to

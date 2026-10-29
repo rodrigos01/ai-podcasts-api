@@ -1,10 +1,11 @@
 import { getAuth } from "firebase-admin/auth";
 import { firebaseApp } from "../config/firebase";
-import { getEpisode, patchEpisodeState } from "../data/episode.repository";
+import { clearInteractionIdsAfter, getEpisode, patchEpisodeState } from "../data/episode.repository";
 import { getPodcast, setPodcastOwner } from "../data/podcast.repository";
 import { HttpError } from "../utils/HttpError";
 import { planRegeneration } from "../utils/regenerationPlan";
-import { CLEAN_GENERATION_STATE, runEpisodeGeneration } from "./episodeGeneration/orchestrator";
+import { CLEAN_GENERATION_STATE } from "../utils/generationState";
+import { runEpisodeGeneration } from "./episodeGeneration/orchestrator";
 
 /**
  * Gives each podcast to `ownerId`, who must be an existing Firebase user (a
@@ -59,7 +60,14 @@ export async function enqueueEpisodeRegeneration(
     });
   }
 
+  // Everything after the earliest selected episode is about to be replaced (or
+  // sits on a version about to be), so the stored interactions after it are
+  // forgotten now. Each run's own wipe does this too, but a later episode can
+  // wait a long time in the queue, and meanwhile a draft in the wizard would
+  // continue from a chain holding the old version.
   const [first] = plan;
+  const firstEpisode = found.find((episode) => episode?.id === first!.id);
+  await clearInteractionIdsAfter(podcastId, { id: first!.id, createdAt: firstEpisode!.createdAt });
   void runEpisodeGeneration(podcastId, first!.id).catch((err: unknown) => {
     console.error(`Bulk regeneration of ${podcastId}/${first!.id} failed:`, err);
   });

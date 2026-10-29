@@ -114,7 +114,12 @@ export function parseScriptTurns(script: string): ScriptTurn[] {
         const speakerMatch = trimmedLine.match(speakerRe);
         if (speakerMatch) {
           speaker = speakerMatch[1]!;
-          if (speakerMatch[2]) {
+          // "Maya: Style: warm" is a delivery direction that got a label of its
+          // own, not words for Maya to say.
+          const labelledStyle = speakerMatch[2]?.match(styleRe);
+          if (labelledStyle) {
+            style = labelledStyle[1]!.trim();
+          } else if (speakerMatch[2]) {
             textLines.push(speakerMatch[2].trim());
           }
           continue;

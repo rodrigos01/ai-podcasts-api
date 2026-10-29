@@ -88,6 +88,11 @@ export const episodeSchema = z.object({
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),
   ttsChunks: z.array(ttsChunkSchema).nullable(),
+  // The Interactions API id of the call that wrote this episode's script, kept
+  // only for podcasts that use interaction context: the next episode's script
+  // call and episode drafts continue from it (continuity.ts). Null/absent: not
+  // generated yet, or the podcast doesn't use it.
+  interactionId: z.string().min(1).nullable().optional(),
   // Total audio duration generated so far, in seconds — updated in
   // Firestore as chunks finish generating (audio.service.ts), not computed
   // at request time, so polling clients (GET .../status) can build a "how
