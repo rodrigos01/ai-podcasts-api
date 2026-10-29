@@ -16,6 +16,9 @@ export const podcastCreateSchema = z.object({
   // chains each call from the previous episode's stored Interactions API
   // interaction instead (services/episodeGeneration/continuity.ts).
   useInteractionContext: z.boolean().optional(),
+  // A/B switch: true adds the mandatory natural-speech section to the script
+  // system instruction (llm/prompts/scriptGeneration.prompts.ts).
+  naturalSpeech: z.boolean().optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -39,6 +42,7 @@ export const podcastUpdateSchema = z.object({
   hosts: z.array(hostUpdateInputSchema).min(1).optional(),
   languageCode: languageCodeSchema,
   useInteractionContext: z.boolean().optional(),
+  naturalSpeech: z.boolean().optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({

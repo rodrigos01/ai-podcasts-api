@@ -38,6 +38,42 @@ catchphrases (its recurring signature phrases, such as greetings, sign-offs, and
 reused as they were.`;
 
 /**
+ * Mandatory spoken-register rules, for podcasts with `naturalSpeech: true`
+ * (an A/B arm; absent renders the system instruction exactly as before).
+ * Fillers are plain spoken words, not angle-bracket tags, so the TTS says them.
+ */
+export function usesNaturalSpeech(podcast: Pick<Podcast, "naturalSpeech">): boolean {
+  return podcast.naturalSpeech === true;
+}
+
+const NATURAL_SPEECH_SECTION = `
+Natural speech (mandatory): this is a script for two people talking, not for someone reading a text aloud. \
+Every line must sound like it was said spontaneously, in each speaker's own voice, as their persona would really \
+talk. This is required in every turn, not an occasional flourish:
+- Write for the ear, not the page. Use contractions, sentence fragments, run-ons and everyday words. Avoid \
+polished, essay-like, balanced or tidily structured sentences, and avoid formal or "written" vocabulary a real \
+person wouldn't use out loud.
+- Speakers think while they talk. Include natural disfluencies and filler, written as plain spoken words so the \
+TTS voices them: interjections and hesitation sounds such as hm, ah, oh, uh, um, mm, well, so, I mean, you know, \
+and also false starts, self-corrections, trailing off, restarting a thought, searching for a word, and \
+repeating a word while thinking. Place them where a real person would, such as before an answer they have to \
+think about, while recalling a detail, or when changing their mind. Most turns of more than a sentence or two \
+should have at least one, and they should not be spread evenly or follow a pattern.
+- Let each persona decide how they sound. Their background, age, temperament, humor, vocabulary and regional \
+or professional speech habits shape how formal they are, how much they hedge, how fast they ramble, and which \
+fillers and expressions they favor. Two speakers must never share the same speech patterns, and neither should \
+sound like a neutral assistant.
+- Reactions are spoken, not described. Surprise, doubt, amusement and agreement come out as sounds and half \
+sentences ("oh", "wait, really?", "hm, right") rather than as complete, articulate statements about the feeling.
+- Don't open turns with a neat acknowledgement of what the other person said and then a prepared answer. People \
+jump in, answer sideways, or answer a different part of the question.
+- Don't make information sound organized in advance: no lists of "first, second, third", no mini-lectures with \
+a thesis and a conclusion, no summarizing sentence closing each turn.
+- Keep filler believable and readable: never so dense that the content is lost, and never inside the angle-bracket \
+tags, which stay limited to the mouth sounds listed below.
+`;
+
+/**
  * A single system instruction that writes BOTH speakers' lines itself —
  * see AGENTS.md's migration note: a single writer can't structurally keep
  * each speaker's knowledge separate; the prompt only asks for it.
@@ -51,6 +87,7 @@ reused as they were.`;
  */
 export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): string {
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
+  const naturalSpeech = usesNaturalSpeech(ctx.podcast);
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
 "${ctx.podcast.description}"
@@ -79,7 +116,7 @@ stretches when someone is telling a story or making a point, and the other speak
 their own take along the way instead of waiting politely for their turn. Don't pad a turn to make it longer, and \
 don't split one speaker's continuous stretch into several turns in a row or have the other speaker finish \
 their sentences. Very short reactions work best as backchanneling (see below).
-
+${naturalSpeech ? NATURAL_SPEECH_SECTION : ""}
 Keep the different speakers as their own individuals, avoiding them sounding like a single entity speaking in \
 turn or completing each other's sentences. If it makes sense for the speakers personas to disagree, they should. \
 If the speakers have explicitly different roles, such as host and guest, make sure they stick to their roles, unless \
@@ -125,7 +162,7 @@ podcast structure asks for one.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \
 be used mid-turn to inject speech with the OTHER speaker's voice, and IS NOT meant for adding emphasis to the \
 active speaker's turn.
-${HISTORY_IS_NOT_A_TEMPLATE_RULE}
+${HISTORY_IS_NOT_A_TEMPLATE_RULE}${naturalSpeech ? "\n- Follow the natural speech requirements above in every turn: no turn may read like written text spoken aloud." : ""}
 `;
 }
 

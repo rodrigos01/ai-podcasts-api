@@ -25,6 +25,17 @@ function render(guest: string, withHistory: boolean) {
 }
 
 describe("script prompts", () => {
+  it("adds the natural speech rules only for podcasts that opt in", () => {
+    const ep = episode("Giles Thorne");
+    const ctx = (p: Podcast) => ({ podcast: p, episode: ep, sources: [], previousEpisodes: [] });
+    const off = buildScriptSystemInstruction(ctx(podcast));
+    const on = buildScriptSystemInstruction(ctx({ ...podcast, naturalSpeech: true }));
+    expect(off).not.toContain("Natural speech");
+    expect(on).toContain("Natural speech (mandatory)");
+    expect(on).toContain("Follow the natural speech requirements");
+    expect(buildScriptSystemInstruction(ctx({ ...podcast, naturalSpeech: false }))).toBe(off);
+  });
+
   it("builds the same system instruction for every episode, whoever the guest is and whatever came before", () => {
     const first = render("Giles Thorne", false);
     const later = render("Sayri Huamán", true);
