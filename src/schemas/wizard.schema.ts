@@ -48,6 +48,9 @@ export const episodeDraftSchema = z.object({
   // Only set when there is something specific for the hosts to focus on that
   // the topics and sources don't already imply (e.g. the user supplied notes).
   productionNotes: optionalText,
+  // Facts from earlier episodes that bear on this one. Only asked for by
+  // podcasts on continuity notes; dropped from every other draft.
+  continuityNotes: optionalText,
   guests: z.array(personInputSchema).max(1),
   predictedChanges: z.array(z.string().min(1)).length(3),
 });

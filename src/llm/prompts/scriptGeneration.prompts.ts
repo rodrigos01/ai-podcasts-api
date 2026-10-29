@@ -2,7 +2,7 @@ import type { PriorEpisode } from "../../utils/episodeHistory";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import { buildChainedHistoryNote, buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
+import { buildChainedHistoryNote, buildContinuityNotesBlock, buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
@@ -186,7 +186,13 @@ export function buildScriptGenerationPrompt(
     }`;
 
   const [a, b] = cast.speakers;
-  const history = chained ? buildChainedHistoryNote() : buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
+  // A podcast on continuity notes never shows the writer the earlier episodes,
+  // only the notes the draft call wrote for this one.
+  const history = ctx.podcast.continuityNotes
+    ? buildContinuityNotesBlock(ctx.episode.continuityNotes)
+    : chained
+      ? buildChainedHistoryNote()
+      : buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
   const historySection = history
     ? `${history}
 

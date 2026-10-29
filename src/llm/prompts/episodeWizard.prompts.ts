@@ -12,6 +12,23 @@ const lengthCatalog = (Object.keys(LENGTH_RANGES) as EpisodeLength[])
   .map((length) => `${length} (${LENGTH_RANGES[length].min}-${LENGTH_RANGES[length].max} words)`)
   .join(", ");
 
+// Podcasts on continuity notes: the script writer never sees the earlier
+// episodes, so this draft is the only thing that carries them over.
+const CONTINUITY_NOTES_SECTION = `
+
+Continuity notes: the script writer will NOT see the earlier episodes above, only your draft. For every \
+episode you draft, write "continuityNotes": plain short lines carrying over just what from the earlier \
+episodes bears on THIS episode, picked by its topics, sources and guest, such as: things the hosts or a \
+returning guest said or established that must not be contradicted; running jokes, bits or catchphrases \
+worth calling back to here; promises, bets, questions or threads left open that this episode could pick up; \
+how the hosts' dynamic currently stands if it matters; and ground an earlier episode already covered in \
+depth that this episode's topics overlap, so it isn't re-covered. Name the episode each point comes from \
+(for example "Episode 2: ..."). Include nothing that is not relevant to this episode: if an earlier episode \
+has no bearing on it, leave it out entirely, and if none does, leave "continuityNotes" unset. Do not recap \
+episodes, do not describe their structure, pacing, beats or phrasing for reuse, and do not script what \
+the hosts should say. When revising, keep the notes unless the changed topics or guest make other earlier \
+material relevant or irrelevant.`;
+
 export function episodeWizardSystemInstruction(
   podcast: Podcast,
   length: EpisodeLength,
@@ -27,6 +44,8 @@ export function episodeWizardSystemInstruction(
 build on it in the topics where a callback or follow-up would help (a guest appearing again is fine \
 when it fits, but don't reuse a past guest just because they existed).`
     : "";
+
+  const notesSection = podcast.continuityNotes && previousEpisodes.length > 0 ? CONTINUITY_NOTES_SECTION : "";
 
   return `You are the producer for the podcast "${podcast.title}".
 
@@ -92,7 +111,7 @@ Whenever any suggestion contains a 2-episode split: give each part its own title
 titles) that could each individually fit the ${length} target; keep the same guest across both parts \
 unless the material genuinely calls for a different one; and give each part production notes making it aware it's \
 one half of a two-part episode (e.g. what the other part covers) so the eventual recording reads as a \
-coherent pair, not two unrelated episodes.`;
+coherent pair, not two unrelated episodes.${notesSection}`;
 }
 
 function sourceBlock(sources: Source[]): string {

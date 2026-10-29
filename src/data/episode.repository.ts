@@ -41,6 +41,7 @@ export async function createEpisode(
       return { ...person, id: randomUUID(), ...(guestVoices[index] ?? NO_VOICE) };
     }),
     ...(input.productionNotes ? { productionNotes: input.productionNotes } : {}),
+    ...(input.continuityNotes ? { continuityNotes: input.continuityNotes } : {}),
     status: "generating",
     progress: null,
     transcript: null,

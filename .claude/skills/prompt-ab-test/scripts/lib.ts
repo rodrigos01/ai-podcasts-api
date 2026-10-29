@@ -148,7 +148,7 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     const shape = result.suggestions.map((s) => `${s.episodes.length} ep`).join(" + ");
     log(
       members.map((m) => `${m.label}${index + 1}`).join("+"),
-      `draft (${previousEpisodes.length} prior; wizard returned ${shape}) ${JSON.stringify({ title: draft.title, topics: draft.topics, productionNotes: draft.productionNotes, guest: draft.guests[0] })}`,
+      `draft (${previousEpisodes.length} prior; wizard returned ${shape}) ${JSON.stringify({ title: draft.title, topics: draft.topics, productionNotes: draft.productionNotes, continuityNotes: draft.continuityNotes, guest: draft.guests[0] })}`,
     );
     for (const member of members) {
       const target = (await inSeriesOrder(member.armId))[index]!;
@@ -161,6 +161,7 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
           title: draft.title,
           topics: draft.topics,
           productionNotes: draft.productionNotes ?? FieldValue.delete(),
+          continuityNotes: draft.continuityNotes ?? FieldValue.delete(),
           guests: draft.guests.map((g) => ({ ...g, id: randomUUID(), ...NO_VOICE })),
           updatedAt: Date.now(),
         });

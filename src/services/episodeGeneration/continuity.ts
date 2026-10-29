@@ -19,8 +19,10 @@ export interface Continuity {
   previousInteractionId?: string;
 }
 
-export function usesInteractionContext(podcast: Pick<Podcast, "useInteractionContext">): boolean {
-  return podcast.useInteractionContext !== false;
+export function usesInteractionContext(podcast: Pick<Podcast, "useInteractionContext" | "continuityNotes">): boolean {
+  // A show on continuity notes gets its history from the notes the draft call
+  // writes, so nothing chains and the wizard is given the transcripts.
+  return podcast.useInteractionContext !== false && podcast.continuityNotes !== true;
 }
 
 /**

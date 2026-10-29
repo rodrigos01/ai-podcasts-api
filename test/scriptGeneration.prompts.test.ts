@@ -25,6 +25,21 @@ function render(guest: string, withHistory: boolean) {
 }
 
 describe("script prompts", () => {
+  it("shows a continuity-notes podcast only the draft's notes, never the earlier episodes", () => {
+    const withNotes = { ...podcast, continuityNotes: true };
+    const ep = episode("Giles Thorne", { continuityNotes: "Episode 1: Penny promised a rematch." });
+    const cast = selectCast(podcast.hosts, ep.guests);
+    const ctx = { podcast: withNotes, episode: ep, sources: [], previousEpisodes: [{ number: 1, episode: episode("Old") }] };
+    const prompt = buildScriptGenerationPrompt(cast, ctx, target);
+    expect(prompt).toContain("Continuity notes from the earlier episodes");
+    expect(prompt).toContain("Penny promised a rematch");
+    expect(prompt).not.toContain("Previous episodes of this podcast");
+    expect(prompt).not.toContain("With Old");
+    const none = buildScriptGenerationPrompt(cast, { ...ctx, episode: episode("Giles Thorne") }, target);
+    expect(none).not.toContain("Continuity notes");
+    expect(none).not.toContain("Previous episodes of this podcast");
+  });
+
   it("limits Style lines and tags to what can be heard, and keeps speakers within their persona's knowledge", () => {
     const { system } = render("Giles Thorne", false);
     expect(system).toContain("can be reproduced with audio alone");

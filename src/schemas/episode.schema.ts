@@ -27,6 +27,8 @@ export const episodeCreateSchema = z
     participantHostIds: z.array(z.string().min(1)).max(2),
     guests: z.array(personSaveSchema).max(1),
     productionNotes: optionalText,
+    // Written by the episode wizard's draft call for podcasts on continuity notes.
+    continuityNotes: optionalText,
   })
   .check(twoVoiceCast);
 
@@ -80,6 +82,9 @@ export const episodeSchema = z.object({
   participantHostIds: z.array(z.string().min(1)),
   guests: z.array(personSchema),
   productionNotes: z.string().min(1).optional(),
+  // What the script writer is told of the earlier episodes, for podcasts on
+  // continuity notes: only what bears on this episode (see episodeWizard.prompts.ts).
+  continuityNotes: z.string().min(1).optional(),
   // "streamable" is no longer set by generation itself (the script is written,
   // chunked, and marked "ready" in one step now that there's no condensation
   // pass after it) but stays in the enum: clients treat both "streamable" and

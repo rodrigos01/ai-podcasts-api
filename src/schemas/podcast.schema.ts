@@ -16,6 +16,10 @@ export const podcastCreateSchema = z.object({
   // chains each call from the previous episode's stored Interactions API
   // interaction instead (services/episodeGeneration/continuity.ts).
   useInteractionContext: z.boolean().optional(),
+  // A/B switch: true replaces the history in script generation (transcripts or
+  // chained interaction) with the continuity notes the episode wizard's draft
+  // call writes into each episode (Episode.continuityNotes).
+  continuityNotes: z.boolean().optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -39,6 +43,7 @@ export const podcastUpdateSchema = z.object({
   hosts: z.array(hostUpdateInputSchema).min(1).optional(),
   languageCode: languageCodeSchema,
   useInteractionContext: z.boolean().optional(),
+  continuityNotes: z.boolean().optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({

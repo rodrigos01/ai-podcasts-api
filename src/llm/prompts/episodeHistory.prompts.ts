@@ -43,6 +43,22 @@ Use these${CONTINUITY_GUIDANCE}`;
 }
 
 /**
+ * The continuity notes that stand in for the history in a script call of a
+ * podcast on continuity notes: the draft call already picked what from the
+ * earlier episodes bears on this one, so that is all the writer sees. "" when
+ * the draft had nothing to carry over.
+ */
+export function buildContinuityNotesBlock(notes: string | undefined): string {
+  if (!notes) return "";
+  return `Continuity notes from the earlier episodes of this podcast (the episodes themselves are not shown; \
+these notes hold only what bears on this episode):
+
+${notes}
+
+Use these notes${CONTINUITY_GUIDANCE}`;
+}
+
+/**
  * The message of a catch-up call: it carries the earlier transcripts into the
  * conversation (so a chain can be rebuilt after an episode changed) and asks
  * for nothing but an acknowledgement. The guidance on how to use them comes
