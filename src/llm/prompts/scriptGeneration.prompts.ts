@@ -2,7 +2,7 @@ import type { PriorEpisode } from "../../utils/episodeHistory";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
+import { buildChainedHistoryNote, buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
@@ -129,7 +129,17 @@ ${HISTORY_IS_NOT_A_TEMPLATE_RULE}
 `;
 }
 
-export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationContext, wordTarget: WordTarget): string {
+/**
+ * `chained`: the call continues the series' stored interaction, so the earlier
+ * episodes are already in the conversation and `ctx.previousEpisodes` is empty;
+ * a note says so instead of the transcripts being pasted in.
+ */
+export function buildScriptGenerationPrompt(
+  cast: Cast,
+  ctx: ScriptGenerationContext,
+  wordTarget: WordTarget,
+  chained = false,
+): string {
   const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
   const guest = cast.speakers.find((s) => !s.isHost);
   const guestBlock = guest
@@ -139,7 +149,7 @@ export function buildScriptGenerationPrompt(cast: Cast, ctx: ScriptGenerationCon
     }`;
 
   const [a, b] = cast.speakers;
-  const history = buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
+  const history = chained ? buildChainedHistoryNote() : buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
   const historySection = history
     ? `${history}
 

@@ -16,6 +16,12 @@ function castNames(podcast: Podcast, { episode }: PriorEpisode): string {
  * unconditionally. Numbers are positions in the whole series, so a window of
  * the latest 15 out of 40 episodes still reads "Episode 26" … "Episode 40".
  */
+const CONTINUITY_GUIDANCE = ` for continuity: the show is an ongoing series, so what was said, established, joked about, or \
+left unresolved in earlier episodes is shared history for the hosts. Let it show naturally — a callback, a \
+running joke, a follow-up on something promised, a consistent take on a recurring topic — but never contradict \
+what an earlier episode established, and don't re-cover ground those episodes already covered in depth unless \
+this episode's topics call for it. Don't recap earlier episodes unless the show's structure asks for it.`;
+
 export function buildEpisodeHistoryBlock(previousEpisodes: PriorEpisode[], podcast: Podcast): string {
   if (previousEpisodes.length === 0) return "";
 
@@ -31,9 +37,17 @@ export function buildEpisodeHistoryBlock(previousEpisodes: PriorEpisode[], podca
 
 ${transcripts}
 
-Use these for continuity: the show is an ongoing series, so what was said, established, joked about, or \
-left unresolved in earlier episodes is shared history for the hosts. Let it show naturally — a callback, a \
-running joke, a follow-up on something promised, a consistent take on a recurring topic — but never contradict \
-what an earlier episode established, and don't re-cover ground those episodes already covered in depth unless \
-this episode's topics call for it. Don't recap earlier episodes unless the show's structure asks for it.`;
+Use these${CONTINUITY_GUIDANCE}`;
+}
+
+/**
+ * What stands in for the history block when the earlier episodes reach the
+ * model through the conversation it continues (interaction context — see
+ * services/episodeGeneration/continuity.ts) instead of being pasted into the
+ * prompt. The guidance is the same text the block carries, so a chained call
+ * is told how to use the history exactly as an unchained one is.
+ */
+export function buildChainedHistoryNote(): string {
+  return `The earlier episodes of this podcast, oldest first, are already in this conversation: what was asked \
+for and the full script written for each. Use them${CONTINUITY_GUIDANCE}`;
 }
