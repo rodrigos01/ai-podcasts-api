@@ -35,12 +35,23 @@ certain time of day, say that time of day, not another and not a generic "regula
 episodes' facts into one. When the exact wording matters for a joke, a promise or a callback, quote the \
 original line verbatim in quotation marks.
 
-The show's formula: if the earlier episodes settled into one, put it in the notes under its own "Show formula" \
-heading, whatever the episode's topics: opening and closing lines, sign-offs, how segments are introduced and \
-named, recurring rituals and bits, how the hosts address the listeners. Include only patterns that repeat \
-across episodes or are clearly meant to become a ritual, and write the lines verbatim, exactly as they appear \
-in the transcripts, so the writer can follow them as the show has them. A one-off phrasing is not a formula. \
-Don't script what the hosts should say in this episode otherwise.
+The show's formula: under its own "Show formula" heading, whatever the episode's topics, list the structural \
+habits the earlier episodes established that the podcast description and structure above do NOT already say. \
+The writer already has that description and structure, so never restate it: no list of segments, no summary of \
+the format, no description of what the show is or does. Look instead for the concrete things the episodes \
+themselves settled into, such as the exact words the episodes open and close with, a recurring sign-off, a \
+recurring prop, drink or setting the hosts always have, how a segment is actually introduced or named in \
+practice, a recurring bit or ritual, a running way the hosts address the listeners or each other, a habit in \
+how the guest is welcomed or sent off. Include only what repeats across episodes or is clearly meant to become \
+a ritual, state each as a short line. Test every line before writing it: if the podcast description or structure \
+above already says it (a segment existing, the order of segments, the kind of scoring, that the host reads the \
+source, that there is a sign-off), drop it; keep it only if it adds a concrete detail the episodes themselves \
+established, such as the actual words used, the specific drink or place, or the name of a recurring bit. Write \
+any line the hosts say verbatim, exactly as it appears in the transcripts, in quotation marks, and when you \
+cannot quote it exactly, leave it out instead of paraphrasing it (when the wording varies between episodes, \
+give the latest version and say what varies). A one-off phrasing is not a formula. If nothing the episodes \
+settled into goes beyond the structure above, leave the heading out. Don't script what the hosts should say in \
+this episode otherwise.
 
 When revising, keep the notes unless the changed topics or guest make other earlier material relevant or \
 irrelevant.`;
