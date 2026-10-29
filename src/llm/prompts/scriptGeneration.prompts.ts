@@ -38,23 +38,9 @@ catchphrases (its recurring signature phrases, such as greetings, sign-offs, and
 reused as they were.`;
 
 /**
- * Mandatory spoken-register rules, for podcasts with `naturalSpeech: true`
- * (an A/B arm; absent renders the system instruction exactly as before).
- * Fillers are plain spoken words, not angle-bracket tags, so the TTS says them.
+ * Mandatory spoken-register rules. Fillers are plain spoken words, not
+ * angle-bracket tags, so the TTS says them.
  */
-export function usesNaturalSpeech(podcast: Pick<Podcast, "naturalSpeech">): boolean {
-  return podcast.naturalSpeech === true;
-}
-
-/**
- * A/B switch (`transcriptFraming: true`): frames the task as writing the
- * transcript of a recorded conversation instead of a script to be read.
- * Absent renders the prompts exactly as before.
- */
-export function usesTranscriptFraming(podcast: Pick<Podcast, "transcriptFraming">): boolean {
-  return podcast.transcriptFraming === true;
-}
-
 const NATURAL_SPEECH_SECTION = `
 Natural speech (mandatory): this is a script for two people talking, not for someone reading a text aloud. \
 Every line must sound like it was said spontaneously, in each speaker's own voice, as their persona would really \
@@ -96,19 +82,8 @@ tags, which stay limited to the mouth sounds listed below.
  */
 export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): string {
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
-  const naturalSpeech = usesNaturalSpeech(ctx.podcast);
-  const transcript = usesTranscriptFraming(ctx.podcast);
 
-  const role = transcript
-    ? `You are producing the transcript of an episode of a podcast called "${ctx.podcast.title}", as if the episode had \
-been recorded live and transcribed word for word. Nobody is reading from a prepared script: the speakers are \
-talking, and the transcript captures exactly what came out of their mouths, as they said it. The podcast premise is \
-as follows:`
-    : `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:`;
-  const usage = transcript
-    ? "The transcript will be voiced by a TTS engine exactly as written, so it contains only what is said out loud."
-    : "The scripts will be used with a TTS engine.";
-  return `${role}
+  return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
 "${ctx.podcast.description}"
 And episodes follow this structure:
 ${ctx.podcast.structure}
@@ -120,7 +95,7 @@ Unless the podcast description or structure above says otherwise, the tone is li
 banter and chemistry between the speakers. Don't turn an episode into a lecture: educational exposition belongs \
 only in shows that explicitly ask for it.
 
-${usage} Each turn is one line made of the speaker's label, a colon, a space, \
+The scripts will be used with a TTS engine. Each turn is one line made of the speaker's label, a colon, a space, \
 and the spoken words, with a blank line between turns. A turn can have a second line, "Style: " followed by \
 delivery directions for that turn. Write the label as plain text, with no brackets, asterisks, or other \
 decoration around it, and write the Style line without parentheses and without a speaker label of its own.
@@ -135,7 +110,7 @@ stretches when someone is telling a story or making a point, and the other speak
 their own take along the way instead of waiting politely for their turn. Don't pad a turn to make it longer, and \
 don't split one speaker's continuous stretch into several turns in a row or have the other speaker finish \
 their sentences. Very short reactions work best as backchanneling (see below).
-${naturalSpeech ? NATURAL_SPEECH_SECTION : ""}
+${NATURAL_SPEECH_SECTION}
 Keep the different speakers as their own individuals, avoiding them sounding like a single entity speaking in \
 turn or completing each other's sentences. If it makes sense for the speakers personas to disagree, they should. \
 If the speakers have explicitly different roles, such as host and guest, make sure they stick to their roles, unless \
@@ -186,7 +161,8 @@ podcast structure asks for one.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \
 be used mid-turn to inject speech with the OTHER speaker's voice, and IS NOT meant for adding emphasis to the \
 active speaker's turn.
-${HISTORY_IS_NOT_A_TEMPLATE_RULE}${naturalSpeech ? "\n- Follow the natural speech requirements above in every turn: no turn may read like written text spoken aloud." : ""}
+${HISTORY_IS_NOT_A_TEMPLATE_RULE}
+- Follow the natural speech requirements above in every turn: no turn may read like written text spoken aloud.
 `;
 }
 
@@ -220,13 +196,12 @@ host personas, so prioritize the details in the system instructions above past e
 `
     : "";
 
-  const transcript = usesTranscriptFraming(ctx.podcast);
-  return `${historySection}${transcript ? "Write the transcript of the recorded episode" : "Write the script for an episode"} based on the sources below, following this draft:
+  return `${historySection}Write the script for an episode based on the sources below, following this draft:
 ${draft}${guestBlock}
 
 The speaker labels for this episode are exactly "${speakerLabel(a.name, b.name)}" and "${speakerLabel(b.name, a.name)}".
 
-The ${transcript ? "transcript" : "script"} *must* have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
+The script *must* have between ${wordTarget.min}-${wordTarget.max} words (for a ~${minutes}m episode).
 
 Sources:
 ${sourceBlock(ctx.sources)}`;

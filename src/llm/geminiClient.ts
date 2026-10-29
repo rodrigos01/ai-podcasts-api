@@ -102,8 +102,6 @@ interface InteractionChainOptions {
   previousInteractionId?: string;
   /** Keep the interaction server-side so a later call can chain from it. Implied by previousInteractionId. */
   store?: boolean;
-  /** Overrides `TEXT_MODEL` (an A/B arm's `textModel`). */
-  model?: string;
 }
 
 interface GenerateTextOptions<T> extends InteractionChainOptions {
@@ -196,7 +194,7 @@ export async function generateTextWithId<T>(
 
   const interaction = await withRetry(() =>
     client.interactions.create({
-      model: options.model ?? TEXT_MODEL,
+      model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
       response_format: responseSchema,
@@ -250,7 +248,7 @@ export async function generatePlainTextWithId(
 
   const interaction = await withRetry(() =>
     client.interactions.create({
-      model: options.model ?? TEXT_MODEL,
+      model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
       ...chainParams(options),

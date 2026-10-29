@@ -189,8 +189,7 @@ async function generateOnce(
     systemInstruction: buildScriptSystemInstruction(ctx),
     prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget, previousInteractionId !== undefined),
     store,
-    ...(ctx.podcast.textModel ? { model: ctx.podcast.textModel } : {}),
-    ...(ctx.podcast.thinkingLevel ? { thinkingLevel: ctx.podcast.thinkingLevel } : {}),
+    thinkingLevel: "high",
     ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 

@@ -16,16 +16,6 @@ export const podcastCreateSchema = z.object({
   // chains each call from the previous episode's stored Interactions API
   // interaction instead (services/episodeGeneration/continuity.ts).
   useInteractionContext: z.boolean().optional(),
-  // A/B switch: true adds the mandatory natural-speech section to the script
-  // system instruction (llm/prompts/scriptGeneration.prompts.ts).
-  naturalSpeech: z.boolean().optional(),
-  // A/B switch: true frames script generation as writing the transcript of a
-  // recorded conversation rather than a script to be read.
-  transcriptFraming: z.boolean().optional(),
-  // A/B switch: overrides the text model for this podcast's script generation.
-  textModel: z.string().min(1).optional(),
-  // A/B switch: thinking level for this podcast's script generation calls.
-  thinkingLevel: z.enum(["minimal", "low", "medium", "high"]).optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -49,10 +39,6 @@ export const podcastUpdateSchema = z.object({
   hosts: z.array(hostUpdateInputSchema).min(1).optional(),
   languageCode: languageCodeSchema,
   useInteractionContext: z.boolean().optional(),
-  naturalSpeech: z.boolean().optional(),
-  transcriptFraming: z.boolean().optional(),
-  textModel: z.string().min(1).optional(),
-  thinkingLevel: z.enum(["minimal", "low", "medium", "high"]).optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({

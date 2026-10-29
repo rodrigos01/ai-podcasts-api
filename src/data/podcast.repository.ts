@@ -26,10 +26,6 @@ export async function createPodcast(
     structure: input.structure,
     ...(input.languageCode ? { languageCode: input.languageCode } : {}),
     ...(input.useInteractionContext !== undefined ? { useInteractionContext: input.useInteractionContext } : {}),
-    ...(input.naturalSpeech !== undefined ? { naturalSpeech: input.naturalSpeech } : {}),
-    ...(input.transcriptFraming !== undefined ? { transcriptFraming: input.transcriptFraming } : {}),
-    ...(input.textModel !== undefined ? { textModel: input.textModel } : {}),
-    ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}),
     hosts: input.hosts.map((host, index) => {
       const { resolvedVoiceId: _clientValue, ...person } = host;
       return { ...person, id: randomUUID(), ...(hostVoices[index] ?? NO_VOICE) };
