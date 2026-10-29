@@ -24,6 +24,7 @@ export async function createPodcast(
     title: input.title,
     description: input.description,
     structure: input.structure,
+    ...(input.extraInstructions?.trim() ? { extraInstructions: input.extraInstructions.trim() } : {}),
     ...(input.languageCode ? { languageCode: input.languageCode } : {}),
     ...(input.useInteractionContext !== undefined ? { useInteractionContext: input.useInteractionContext } : {}),
     hosts: input.hosts.map((host, index) => {
@@ -69,6 +70,8 @@ export async function updatePodcast(
   // An unrecognisable language code parses to an explicit undefined, which
   // Firestore rejects: leave the stored one alone instead.
   if (patch.languageCode === undefined) delete patch.languageCode;
+  if (input.extraInstructions === undefined) delete patch.extraInstructions;
+  else patch.extraInstructions = input.extraInstructions.trim();
   if (input.hosts) {
     const currentHosts = new Map((existing.data() as Podcast).hosts.map((host) => [host.id, host]));
     patch.hosts = input.hosts.map((host, index) => {

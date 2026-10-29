@@ -32,6 +32,21 @@ function formatTranscripts(previousEpisodes: PriorEpisode[], podcast: Podcast): 
  * unconditionally. Numbers are positions in the whole series, so a window of
  * the latest 15 out of 40 episodes still reads "Episode 26" … "Episode 40".
  */
+/**
+ * The podcast's user-written extra instructions as a prompt section (blank
+ * lines around it), or "" when unset. Shared by the script writer and the
+ * episode wizard so both read them the same way.
+ */
+export function extraInstructionsSection(extraInstructions: string | undefined): string {
+  const text = extraInstructions?.trim();
+  if (!text) return "";
+  return `
+Extra instructions from the show's creator, to follow on top of the description and structure above when \
+writing or drafting episodes (where they conflict, these win):
+${text}
+`;
+}
+
 export function buildEpisodeHistoryBlock(previousEpisodes: PriorEpisode[], podcast: Podcast): string {
   if (previousEpisodes.length === 0) return "";
 
