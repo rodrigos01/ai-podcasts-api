@@ -22,6 +22,8 @@ export const podcastCreateSchema = z.object({
   // A/B switch: true frames script generation as writing the transcript of a
   // recorded conversation rather than a script to be read.
   transcriptFraming: z.boolean().optional(),
+  // A/B switch: overrides the text model for this podcast's script generation.
+  textModel: z.string().min(1).optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -47,6 +49,7 @@ export const podcastUpdateSchema = z.object({
   useInteractionContext: z.boolean().optional(),
   naturalSpeech: z.boolean().optional(),
   transcriptFraming: z.boolean().optional(),
+  textModel: z.string().min(1).optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({
