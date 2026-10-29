@@ -19,6 +19,9 @@ export const podcastCreateSchema = z.object({
   // A/B switch: true adds the mandatory natural-speech section to the script
   // system instruction (llm/prompts/scriptGeneration.prompts.ts).
   naturalSpeech: z.boolean().optional(),
+  // A/B switch: true frames script generation as writing the transcript of a
+  // recorded conversation rather than a script to be read.
+  transcriptFraming: z.boolean().optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -43,6 +46,7 @@ export const podcastUpdateSchema = z.object({
   languageCode: languageCodeSchema,
   useInteractionContext: z.boolean().optional(),
   naturalSpeech: z.boolean().optional(),
+  transcriptFraming: z.boolean().optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({

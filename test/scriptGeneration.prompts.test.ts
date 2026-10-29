@@ -32,6 +32,24 @@ describe("script prompts", () => {
     expect(system).toContain("only explains what their persona, bio and experience would plausibly give them");
   });
 
+  it("frames the task as a recorded transcript only for podcasts that opt in", () => {
+    const ep = episode("Giles Thorne");
+    const cast = selectCast(podcast.hosts, ep.guests);
+    const render1 = (p: Podcast) => {
+      const ctx = { podcast: p, episode: ep, sources: [], previousEpisodes: [] };
+      return { system: buildScriptSystemInstruction(ctx), prompt: buildScriptGenerationPrompt(cast, ctx, target) };
+    };
+    const off = render1(podcast);
+    const on = render1({ ...podcast, transcriptFraming: true });
+    expect(off.system).toContain("You are a script writer");
+    expect(off.prompt).toContain("Write the script for an episode");
+    expect(on.system).toContain("producing the transcript");
+    expect(on.system).not.toContain("script writer");
+    expect(on.prompt).toContain("Write the transcript of the recorded episode");
+    expect(on.prompt).toContain("The transcript *must* have between");
+    expect(render1({ ...podcast, transcriptFraming: false })).toEqual(off);
+  });
+
   it("adds the natural speech rules only for podcasts that opt in", () => {
     const ep = episode("Giles Thorne");
     const ctx = (p: Podcast) => ({ podcast: p, episode: ep, sources: [], previousEpisodes: [] });
