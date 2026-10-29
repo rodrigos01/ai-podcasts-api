@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { selectPriorEpisodes } from "../src/utils/episodeHistory";
-import { buildEpisodeHistoryBlock } from "../src/llm/prompts/episodeHistory.prompts";
+import { buildCatchUpPrompt, buildEpisodeHistoryBlock } from "../src/llm/prompts/episodeHistory.prompts";
 import type { Episode } from "../src/schemas/episode.schema";
 import type { Podcast } from "../src/schemas/podcast.schema";
 
@@ -78,5 +78,22 @@ describe("buildEpisodeHistoryBlock", () => {
     );
     expect(block).toContain("### Episode 26: Title e26 (with Maya Cruz, Dr. Lee (guest))");
     expect(block).toContain("transcript e26");
+  });
+});
+
+describe("buildCatchUpPrompt", () => {
+  const show = { id: "p", title: "Show", hosts: [{ id: "h1", name: "Penny" }] } as unknown as Podcast;
+  const prior = [{ number: 3, episode: episode("e3", 3) }];
+
+  it("carries the transcripts and asks only for an acknowledgement", () => {
+    const text = buildCatchUpPrompt(prior, show);
+    expect(text).toContain("### Episode 3: Title e3 (with Penny)");
+    expect(text).toContain("transcript e3");
+    expect(text).toContain('Reply with just "Understood."');
+  });
+
+  it("leaves the how-to-use-it guidance to the call that continues from it", () => {
+    expect(buildCatchUpPrompt(prior, show)).not.toContain("for continuity");
+    expect(buildEpisodeHistoryBlock(prior, show)).toContain("for continuity");
   });
 });

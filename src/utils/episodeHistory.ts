@@ -35,6 +35,11 @@ export function selectPriorEpisodes(
     .slice(-limit);
 }
 
+/** The episodes that come strictly after `anchor` in series order. */
+export function episodesAfter(episodes: Episode[], anchor: EpisodeAnchor): Episode[] {
+  return episodes.filter((episode) => compareBySeriesOrder(episode, anchor) > 0);
+}
+
 export interface PriorEpisode {
   /** 1-based position in the whole series (including episodes without a transcript). */
   number: number;
