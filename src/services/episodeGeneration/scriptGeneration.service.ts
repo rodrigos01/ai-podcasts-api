@@ -190,6 +190,7 @@ async function generateOnce(
     prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget, previousInteractionId !== undefined),
     store,
     ...(ctx.podcast.textModel ? { model: ctx.podcast.textModel } : {}),
+    ...(ctx.podcast.thinkingLevel ? { thinkingLevel: ctx.podcast.thinkingLevel } : {}),
     ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 

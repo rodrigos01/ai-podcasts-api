@@ -24,6 +24,8 @@ export const podcastCreateSchema = z.object({
   transcriptFraming: z.boolean().optional(),
   // A/B switch: overrides the text model for this podcast's script generation.
   textModel: z.string().min(1).optional(),
+  // A/B switch: thinking level for this podcast's script generation calls.
+  thinkingLevel: z.enum(["minimal", "low", "medium", "high"]).optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets
@@ -50,6 +52,7 @@ export const podcastUpdateSchema = z.object({
   naturalSpeech: z.boolean().optional(),
   transcriptFraming: z.boolean().optional(),
   textModel: z.string().min(1).optional(),
+  thinkingLevel: z.enum(["minimal", "low", "medium", "high"]).optional(),
 });
 
 export const podcastSchema = podcastCreateSchema.extend({
