@@ -33,6 +33,7 @@ describe("script prompts", () => {
     const prompt = buildScriptGenerationPrompt(cast, ctx, target);
     expect(prompt).toContain("Continuity notes from the earlier episodes");
     expect(prompt).toContain("Penny promised a rematch");
+    expect(prompt).toContain("follow it as written");
     expect(prompt).not.toContain("Previous episodes of this podcast");
     expect(prompt).not.toContain("With Old");
     const none = buildScriptGenerationPrompt(cast, { ...ctx, episode: episode("Giles Thorne") }, target);

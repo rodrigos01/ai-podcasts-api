@@ -17,17 +17,32 @@ const lengthCatalog = (Object.keys(LENGTH_RANGES) as EpisodeLength[])
 const CONTINUITY_NOTES_SECTION = `
 
 Continuity notes: the script writer will NOT see the earlier episodes above, only your draft. For every \
-episode you draft, write "continuityNotes": plain short lines carrying over just what from the earlier \
-episodes bears on THIS episode, picked by its topics, sources and guest, such as: things the hosts or a \
-returning guest said or established that must not be contradicted; running jokes, bits or catchphrases \
-worth calling back to here; promises, bets, questions or threads left open that this episode could pick up; \
-how the hosts' dynamic currently stands if it matters; and ground an earlier episode already covered in \
-depth that this episode's topics overlap, so it isn't re-covered. Name the episode each point comes from \
-(for example "Episode 2: ..."). Include nothing that is not relevant to this episode: if an earlier episode \
-has no bearing on it, leave it out entirely, and if none does, leave "continuityNotes" unset. Do not recap \
-episodes, do not describe their structure, pacing, beats or phrasing for reuse, and do not script what \
-the hosts should say. When revising, keep the notes unless the changed topics or guest make other earlier \
-material relevant or irrelevant.`;
+episode you draft, write "continuityNotes": short plain lines carrying over what from the earlier episodes \
+bears on THIS episode, picked by its topics, sources and guest. Each line names the episode it comes from \
+(for example "Episode 2: ..."). Include:
+- Things the hosts or a returning guest said or established that must not be contradicted, running jokes, bits \
+and catchphrases worth calling back to here, promises, bets, questions or threads left open that this \
+episode could pick up, how the hosts' dynamic currently stands if it matters, and ground an earlier episode \
+already covered in depth that this episode's topics overlap, so it isn't re-covered.
+- The show's formula, if the earlier episodes settled into one: opening and closing lines, sign-offs, how \
+segments are introduced and named, recurring rituals and bits, how the hosts address the listeners. Include \
+only patterns that repeat across episodes or are clearly meant to become a ritual, and write the lines \
+verbatim, exactly as they appear in the transcripts, marked as the show's formula, so the writer can follow \
+them as the show has them. A one-off phrasing is not a formula.
+
+Be specific. The writer cannot check anything, so a note must carry the details exactly as the earlier episode \
+gave them: names, numbers, places, when and how often something happens, who said what, and how it was \
+resolved. Never restate a detail more vaguely or differently than it was told (if something happens at a \
+certain time of day, say that time of day, not another and not a generic "regularly"), and never merge two \
+episodes' facts into one. When the exact wording matters for a joke, a promise or a callback, quote the \
+original line verbatim in quotation marks. Do not shorten a note at the cost of a detail the writer would \
+otherwise have to invent.
+
+Include nothing that is not relevant to this episode: if an earlier episode has no bearing on it, leave it \
+out, and if none does, leave "continuityNotes" unset. Don't retell earlier episodes as a recap or a plot \
+summary, and don't script what the hosts should say in this episode (the formula lines above are the one \
+exception). When revising, keep the notes unless the changed topics or guest make other earlier material \
+relevant or irrelevant.`;
 
 export function episodeWizardSystemInstruction(
   podcast: Podcast,

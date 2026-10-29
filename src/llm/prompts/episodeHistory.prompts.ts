@@ -55,7 +55,9 @@ these notes hold only what bears on this episode):
 
 ${notes}
 
-Use these notes${CONTINUITY_GUIDANCE}`;
+Treat the details in these notes as exact: they are what the earlier episodes established, so don't change \
+them. Where the notes give the show's formula (opening and closing lines, sign-offs, segment names, rituals), \
+follow it as written. Use these notes${CONTINUITY_GUIDANCE}`;
 }
 
 /**

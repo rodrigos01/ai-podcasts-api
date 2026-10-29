@@ -15,6 +15,9 @@ describe("episode wizard continuity notes", () => {
     expect(off).not.toContain("continuityNotes");
     expect(on).toContain('"continuityNotes"');
     expect(noHistory).not.toContain('"continuityNotes"');
+    expect(on).toContain("The show's formula");
+    expect(on).toContain("verbatim");
+    expect(on).toContain("Be specific");
   });
 
   it("accepts a draft with or without notes", () => {
