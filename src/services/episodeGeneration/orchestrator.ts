@@ -24,7 +24,7 @@ import { writeContinuityNotes } from "./continuityNotes.service";
 import { needsContinuityNotes } from "../../utils/continuityNotes";
 import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { selectCast } from "./speakerSelection";
-import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
+import { otherSplitParts, resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
 import { chunkTranscript } from "./chunker";
 
 /**
@@ -131,10 +131,15 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // this persists. A failure here doesn't fail episode generation itself:
     // audio.service.ts still falls back to resolving lazily (and
     // persisting) if a cast member's resolvedVoiceId ends up missing.
-    const voiceResolutionPromise = Promise.all([
-      ...hosts.map((host) => resolveHostVoice(podcastId, host, podcast.languageCode)),
-      ...guests.map((guest) => resolveGuestVoice(podcastId, episodeId, guest, podcast.languageCode)),
-    ]).catch((err) => {
+    const voiceResolutionPromise = otherSplitParts(podcastId, episode)
+      .then((otherParts) =>
+        Promise.all([
+          ...hosts.map((host) => resolveHostVoice(podcastId, host, podcast.languageCode)),
+          ...guests.map((guest) =>
+            resolveGuestVoice(podcastId, episodeId, guest, podcast.languageCode, otherParts),
+          ),
+        ]),
+      ).catch((err) => {
       console.error(
         `Voice resolution failed for episode ${podcastId}/${episodeId} (will resolve lazily at stream time instead):`,
         err,

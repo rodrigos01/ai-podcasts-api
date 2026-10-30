@@ -290,6 +290,28 @@ export async function setGuestResolvedVoice(
   });
 }
 
+/**
+ * Gives `resolved` to the guests of this episode that `wants` it, in one transaction so a guest
+ * that got a voice meanwhile isn't overwritten — see voiceResolution.service.ts's
+ * resolveGuestVoice, which copies a voice into the other parts of a split.
+ */
+export async function shareGuestVoice(
+  podcastId: string,
+  episodeId: string,
+  wants: (guest: Person) => boolean,
+  resolved: { resolvedVoiceId: string; resolvedVoiceOrigin: "design" | "library"; resolvedVoiceHash: string },
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const episode = snap.data() as Episode;
+    if (!episode.guests.some(wants)) return;
+    const guests = episode.guests.map((guest) => (wants(guest) ? { ...guest, ...resolved } : guest));
+    tx.update(ref, { guests, updatedAt: Date.now() });
+  });
+}
+
 /** Stores the Voice Design prompt a guest's voice is about to be designed from — see voiceResolution.service.ts. */
 export async function setGuestVoicePrompt(
   podcastId: string,
