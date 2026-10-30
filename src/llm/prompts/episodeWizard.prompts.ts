@@ -14,7 +14,7 @@ const lengthCatalog = (Object.keys(LENGTH_RANGES) as EpisodeLength[])
 
 // The script writer never sees the earlier episodes, so this draft is the only
 // thing that carries them over.
-const CONTINUITY_NOTES_SECTION = `
+export const CONTINUITY_NOTES_SECTION = `
 
 Continuity notes: the script writer will NOT see the earlier episodes above, only your draft. For every \
 episode you draft, write "continuityNotes": the continuation points for THIS episode, meaning specific moments \
@@ -140,7 +140,7 @@ one half of a two-part episode (e.g. what the other part covers) so the eventual
 coherent pair, not two unrelated episodes.${notesSection}`;
 }
 
-function sourceBlock(sources: Source[]): string {
+export function sourceBlock(sources: Source[]): string {
   if (sources.length === 0) return "(no source material provided)";
   return sources.map((s) => `### ${s.title}\n${s.contents}`).join("\n\n");
 }

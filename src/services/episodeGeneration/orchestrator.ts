@@ -4,6 +4,7 @@ import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLeas
 import {
   acquireGenerationLease,
   getEpisode,
+  getPriorEpisodes,
   heartbeatGenerationLease,
   listDependentEpisodes,
   patchEpisodeState,
@@ -15,8 +16,13 @@ import { getSource } from "../../data/source.repository";
 import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
+import type { Podcast } from "../../schemas/podcast.schema";
+import type { Source } from "../../schemas/source.schema";
 import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
 import { generateEpisodeScript } from "./scriptGeneration.service";
+import { writeContinuityNotes } from "./continuityNotes.service";
+import { needsContinuityNotes } from "../../utils/continuityNotes";
+import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
 import { chunkTranscript } from "./chunker";
@@ -110,8 +116,12 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // started over (see ensureGenerationRunning).
     // Continuity comes from the episode's own continuity notes, written by the
     // draft call (see episodeWizard.prompts.ts); the earlier episodes
-    // themselves are never sent.
-    const scriptPromise = generateEpisodeScript(cast, { podcast, episode, sources }, wordTarget);
+    // themselves are never sent. An episode with no notes, and a later part of
+    // a split (whose draft was made before the part before it existed), first
+    // gets them written by the notes-only call.
+    const scriptPromise = ensureContinuityNotes(podcastId, podcast, episode, sources, patch).then((withNotes) =>
+      generateEpisodeScript(cast, { podcast, episode: withNotes, sources }, wordTarget),
+    );
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
     // Design/Library mint) runs in parallel with script generation rather
@@ -165,6 +175,39 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
   // Reached only when the script finished: kick off the next part, if any.
   await startDependents(podcastId, episodeId);
+}
+
+/**
+ * Writes the episode's continuity notes with the notes-only call when it needs
+ * them (see utils/continuityNotes.ts), saves them on the episode and returns
+ * the episode with them. If the call fails the episode is generated with the
+ * notes it already has (none, for an episode that had none): continuity is not
+ * worth failing a generation over. A lost lease still propagates.
+ */
+async function ensureContinuityNotes(
+  podcastId: string,
+  podcast: Podcast,
+  episode: Episode,
+  sources: Source[],
+  patch: (fields: Partial<Episode>) => Promise<void>,
+): Promise<Episode> {
+  const previousEpisodes = await getPriorEpisodes(
+    podcastId,
+    { id: episode.id, createdAt: episode.createdAt },
+    MAX_HISTORY_EPISODES,
+  );
+  if (!needsContinuityNotes(episode, previousEpisodes.length)) return episode;
+
+  let continuityNotes: string | undefined;
+  try {
+    continuityNotes = await writeContinuityNotes(podcast, episode, sources, previousEpisodes);
+  } catch (err) {
+    console.warn(`Writing continuity notes for ${podcastId}/${episode.id} failed; generating with what it has.`, err);
+    return episode;
+  }
+  if (!continuityNotes) return episode;
+  await patch({ continuityNotes });
+  return { ...episode, continuityNotes };
 }
 
 /**
