@@ -1,7 +1,8 @@
 import { designVoice } from "../../llm/ttsClient";
 import { deleteVoicesIfUnused } from "../voiceCleanup.service";
 import { setHostResolvedVoice, setHostVoicePrompt } from "../../data/podcast.repository";
-import { setGuestResolvedVoice, setGuestVoicePrompt } from "../../data/episode.repository";
+import { getEpisode, setGuestResolvedVoice, setGuestVoicePrompt } from "../../data/episode.repository";
+import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
 import { hasCurrentVoice, voiceHash } from "../../utils/voiceHash";
 import { withVoicePrompt } from "../../utils/voicePrompt";
@@ -91,11 +92,16 @@ export async function resolveGuestVoice(
   episodeId: string,
   guest: Person,
   languageCode?: string,
+  earlierPartGuests: Person[] = [],
 ): Promise<ResolvedVoice & { origin: "design" }> {
   // A voice the user picked is kept for every generation, never re-designed.
   if (guest.resolvedVoicePinned && guest.resolvedVoiceId) {
     return { voiceId: guest.resolvedVoiceId, origin: "design" };
   }
+
+  // The same guest in the part before this one (a multi-episode suggestion repeats its guest in
+  // every part) keeps that voice, so a listener doesn't hear one person in two voices.
+  const sharedVoiceId = sharedGuestVoiceId(guest, earlierPartGuests);
 
   // A voice with no recorded hash predates hash tracking for guests — i.e. it
   // was designed on the previous (AI Studio) platform, where it isn't ours to
@@ -103,6 +109,16 @@ export async function resolveGuestVoice(
   // a hash (this platform) is cleaned up.
   const staleVoiceId =
     guest.resolvedVoiceOrigin === "design" && guest.resolvedVoiceHash ? guest.resolvedVoiceId : null;
+
+  if (sharedVoiceId) {
+    await setGuestResolvedVoice(podcastId, episodeId, guest.id, {
+      resolvedVoiceId: sharedVoiceId,
+      resolvedVoiceOrigin: "design",
+      resolvedVoiceHash: voiceHash(guest),
+    });
+    if (staleVoiceId && staleVoiceId !== sharedVoiceId) await deleteVoicesIfUnused([staleVoiceId]);
+    return { voiceId: sharedVoiceId, origin: "design" };
+  }
 
   const r = await designFor(guest, (prompt) => setGuestVoicePrompt(podcastId, episodeId, guest.id, prompt), languageCode);
   const resolved = { voiceId: r.voiceId, origin: "design" as const };
@@ -116,6 +132,22 @@ export async function resolveGuestVoice(
   if (staleVoiceId) await deleteVoicesIfUnused([staleVoiceId]);
 
   return resolved;
+}
+
+/**
+ * The guests of the part this episode follows in a multi-episode suggestion (none for any other
+ * episode), for `resolveGuestVoice` to share voices with.
+ */
+export async function earlierPartGuests(podcastId: string, episode: Pick<Episode, "startsAfterEpisodeId">): Promise<Person[]> {
+  if (!episode.startsAfterEpisodeId) return [];
+  return (await getEpisode(podcastId, episode.startsAfterEpisodeId))?.guests ?? [];
+}
+
+/** The voice of the earlier part's guest that is this same person (same name/persona/accent/hint), if it has a usable one. */
+function sharedGuestVoiceId(guest: Person, earlierGuests: Person[]): string | null {
+  const hash = voiceHash(guest);
+  const same = earlierGuests.find((earlier) => hasCurrentVoice(earlier) && voiceHash(earlier) === hash);
+  return same?.resolvedVoiceId ?? null;
 }
 
 /**

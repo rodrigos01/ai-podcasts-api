@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { voiceHash } from "../src/utils/voiceHash";
 import type { Person } from "../src/schemas/person.schema";
 
 vi.mock("../src/llm/geminiClient", () => ({
@@ -14,6 +15,7 @@ vi.mock("../src/llm/ttsClient", () => ({
 vi.mock("../src/data/voiceUsage.repository", () => ({ findVoicesInUse: vi.fn(async () => new Set<string>()) }));
 
 vi.mock("../src/data/episode.repository", () => ({
+  getEpisode: vi.fn(),
   setGuestResolvedVoice: vi.fn(),
   setGuestVoicePrompt: vi.fn(),
 }));
@@ -25,9 +27,9 @@ vi.mock("../src/data/podcast.repository", () => ({
 
 import { generateText } from "../src/llm/geminiClient";
 import { deleteVoice, designVoice } from "../src/llm/ttsClient";
-import { setGuestResolvedVoice, setGuestVoicePrompt } from "../src/data/episode.repository";
+import { getEpisode, setGuestResolvedVoice, setGuestVoicePrompt } from "../src/data/episode.repository";
 import { setHostResolvedVoice, setHostVoicePrompt } from "../src/data/podcast.repository";
-import { cleanupGuestVoice, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "../src/services/episodeGeneration/voiceResolution.service";
+import { cleanupGuestVoice, earlierPartGuests, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "../src/services/episodeGeneration/voiceResolution.service";
 
 describe("voiceResolution.service", () => {
   beforeEach(() => {
@@ -251,6 +253,63 @@ describe("voiceResolution.service", () => {
         "host-1",
         expect.objectContaining({ resolvedVoiceId: "voice_designed_on_enterprise" }),
       );
+    });
+  });
+
+  describe("a guest repeated across the parts of a split", () => {
+    const part1Guest = (): Person => {
+      const base = { id: "g1", name: "Sarah Chen", persona: "AI researcher.", voice: "calm" };
+      return {
+        ...base,
+        resolvedVoiceId: "voice_part1",
+        resolvedVoiceOrigin: "design",
+        resolvedVoiceHash: voiceHash(base),
+      };
+    };
+    const part2Guest = (): Person => ({
+      id: "g2",
+      name: "Sarah Chen",
+      persona: "AI researcher.",
+      voice: "calm",
+      resolvedVoiceId: null,
+      resolvedVoiceOrigin: null,
+      resolvedVoiceHash: null,
+    });
+
+    it("reuses the earlier part's voice instead of designing another", async () => {
+      const result = await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [part1Guest()]);
+
+      expect(designVoice).not.toHaveBeenCalled();
+      expect(result).toEqual({ voiceId: "voice_part1", origin: "design" });
+      expect(setGuestResolvedVoice).toHaveBeenCalledWith("pod-1", "ep-2", "g2", {
+        resolvedVoiceId: "voice_part1",
+        resolvedVoiceOrigin: "design",
+        resolvedVoiceHash: voiceHash(part2Guest()),
+      });
+    });
+
+    it("designs its own when the earlier part has no usable voice or a different guest", async () => {
+      vi.mocked(designVoice).mockResolvedValue("voice_new");
+      const noVoice: Person = { ...part1Guest(), resolvedVoiceId: null, resolvedVoiceHash: null };
+      const other: Person = { ...part1Guest(), persona: "A chef." };
+
+      await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [noVoice]);
+      await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [other]);
+
+      expect(designVoice).toHaveBeenCalledTimes(2);
+    });
+
+    it("doesn't delete its own stored voice when that is the shared one", async () => {
+      const again: Person = { ...part2Guest(), resolvedVoiceId: "voice_part1", resolvedVoiceOrigin: "design", resolvedVoiceHash: "h" };
+      await resolveGuestVoice("pod-1", "ep-2", again, undefined, [part1Guest()]);
+      expect(deleteVoice).not.toHaveBeenCalled();
+    });
+
+    it("earlierPartGuests reads the guests of the episode it starts after", async () => {
+      vi.mocked(getEpisode).mockResolvedValue({ guests: [part1Guest()] } as never);
+      expect(await earlierPartGuests("pod-1", { startsAfterEpisodeId: "ep-1" })).toHaveLength(1);
+      expect(getEpisode).toHaveBeenCalledWith("pod-1", "ep-1");
+      expect(await earlierPartGuests("pod-1", {})).toEqual([]);
     });
   });
 
