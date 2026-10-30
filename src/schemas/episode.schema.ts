@@ -59,7 +59,9 @@ export const episodeUpdateSchema = z.object({
 });
 
 export const episodeProgressSchema = z.object({
-  stage: z.enum(["kickoff", "conversation", "chunking", "done"]),
+  // "continuity" only appears when the notes-only call runs (see
+  // episodeGeneration/orchestrator.ts), between "kickoff" and "conversation".
+  stage: z.enum(["kickoff", "continuity", "conversation", "chunking", "done"]),
   currentWordCount: z.number().int().nonnegative().optional(),
   targetWordRange: z.object({ min: z.number(), max: z.number() }).optional(),
 });

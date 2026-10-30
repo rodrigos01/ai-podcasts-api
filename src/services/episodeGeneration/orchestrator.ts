@@ -107,8 +107,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
-
     // A single, non-streaming LLM call writes the whole episode's script
     // itself — see AGENTS.md's migration note for why this replaced the old
     // per-turn, two-independent-agent conversation loop. Nothing is written
@@ -119,8 +117,11 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // themselves are never sent. An episode with no notes, and a later part of
     // a split (whose draft was made before the part before it existed), first
     // gets them written by the notes-only call.
-    const scriptPromise = ensureContinuityNotes(podcastId, podcast, episode, sources, patch).then((withNotes) =>
-      generateEpisodeScript(cast, { podcast, episode: withNotes, sources }, wordTarget),
+    const scriptPromise = ensureContinuityNotes(podcastId, podcast, episode, sources, wordTarget, patch).then(
+      async (withNotes) => {
+        await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
+        return generateEpisodeScript(cast, { podcast, episode: withNotes, sources }, wordTarget);
+      },
     );
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
@@ -182,13 +183,15 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
  * them (see utils/continuityNotes.ts), saves them on the episode and returns
  * the episode with them. If the call fails the episode is generated with the
  * notes it already has (none, for an episode that had none): continuity is not
- * worth failing a generation over. A lost lease still propagates.
+ * worth failing a generation over. A lost lease still propagates. While the
+ * call runs the episode's progress stage is "continuity".
  */
 async function ensureContinuityNotes(
   podcastId: string,
   podcast: Podcast,
   episode: Episode,
   sources: Source[],
+  wordTarget: { min: number; max: number },
   patch: (fields: Partial<Episode>) => Promise<void>,
 ): Promise<Episode> {
   const previousEpisodes = await getPriorEpisodes(
@@ -198,6 +201,9 @@ async function ensureContinuityNotes(
   );
   if (!needsContinuityNotes(episode, previousEpisodes.length)) return episode;
 
+  // Shown to clients only while the call actually runs; the caller moves on to
+  // "conversation" afterwards, whatever happens here.
+  await patch({ progress: { stage: "continuity", currentWordCount: 0, targetWordRange: wordTarget } });
   let continuityNotes: string | undefined;
   try {
     continuityNotes = await writeContinuityNotes(podcast, episode, sources, previousEpisodes);
