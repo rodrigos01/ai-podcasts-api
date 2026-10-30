@@ -11,6 +11,8 @@ vi.mock("../src/llm/ttsClient", () => ({
   deleteVoice: vi.fn(),
 }));
 
+vi.mock("../src/data/voiceUsage.repository", () => ({ findVoicesInUse: vi.fn(async () => new Set<string>()) }));
+
 vi.mock("../src/data/episode.repository", () => ({
   setGuestResolvedVoice: vi.fn(),
   setGuestVoicePrompt: vi.fn(),

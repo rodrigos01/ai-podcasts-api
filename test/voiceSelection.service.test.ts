@@ -6,6 +6,7 @@ vi.mock("../src/data/designedVoice.repository", () => ({
   deleteDesignedVoiceRecords: vi.fn(),
 }));
 vi.mock("../src/llm/ttsClient", () => ({ deleteVoice: vi.fn() }));
+vi.mock("../src/data/voiceUsage.repository", () => ({ findVoicesInUse: vi.fn(async () => new Set<string>()) }));
 
 import {
   deleteDesignedVoiceRecords,

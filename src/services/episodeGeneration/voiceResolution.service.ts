@@ -1,4 +1,5 @@
-import { deleteVoice, designVoice } from "../../llm/ttsClient";
+import { designVoice } from "../../llm/ttsClient";
+import { deleteVoicesIfUnused } from "../voiceCleanup.service";
 import { setHostResolvedVoice, setHostVoicePrompt } from "../../data/podcast.repository";
 import { setGuestResolvedVoice, setGuestVoicePrompt } from "../../data/episode.repository";
 import type { Person } from "../../schemas/person.schema";
@@ -112,7 +113,7 @@ export async function resolveGuestVoice(
     resolvedVoiceHash: voiceHash(guest),
   });
 
-  if (staleVoiceId) await deleteVoice(staleVoiceId);
+  if (staleVoiceId) await deleteVoicesIfUnused([staleVoiceId]);
 
   return resolved;
 }
@@ -126,6 +127,6 @@ export async function cleanupGuestVoice(guest: Person): Promise<void> {
   // A picked voice lives as long as its episode (deleted with it).
   if (guest.resolvedVoicePinned) return;
   if (guest.resolvedVoiceOrigin === "design" && guest.resolvedVoiceId) {
-    await deleteVoice(guest.resolvedVoiceId);
+    await deleteVoicesIfUnused([guest.resolvedVoiceId]);
   }
 }

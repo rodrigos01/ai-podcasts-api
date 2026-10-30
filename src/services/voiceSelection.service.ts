@@ -4,7 +4,7 @@ import {
   markVoicesLinked,
   type DesignedVoice,
 } from "../data/designedVoice.repository";
-import { deleteVoice } from "../llm/ttsClient";
+import { deleteVoicesIfUnused } from "./voiceCleanup.service";
 import type { Person } from "../schemas/person.schema";
 import type { PickedVoice, VoiceDecision } from "../utils/voiceDecision";
 
@@ -49,8 +49,8 @@ export async function createVoicePicker(ownerId: string, sessionId: string | und
       const unused = candidates.map((voice) => voice.voiceId).filter((id) => !applied.has(id));
       try {
         await markVoicesLinked([...applied]);
-        await Promise.all([...unused, ...replaced].map(deleteVoice));
-        await deleteDesignedVoiceRecords([...unused, ...replaced]);
+        const deleted = await deleteVoicesIfUnused([...unused, ...replaced]);
+        await deleteDesignedVoiceRecords(deleted);
       } catch (err) {
         console.error(`Voice cleanup after save failed (session ${sessionId ?? "none"}):`, err);
       }
@@ -71,8 +71,7 @@ export async function deletePeopleVoices(people: Person[], kind: "host" | "guest
     return [person.resolvedVoiceId];
   });
   try {
-    await Promise.all(ids.map(deleteVoice));
-    await deleteDesignedVoiceRecords(ids);
+    await deleteDesignedVoiceRecords(await deleteVoicesIfUnused(ids));
   } catch (err) {
     console.error("Failed to clean up voices of deleted people:", err);
   }
