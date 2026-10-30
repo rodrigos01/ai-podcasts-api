@@ -31,7 +31,7 @@ vi.mock("../src/services/episodeGeneration/voiceResolution.service", () => ({
   resolveHostVoice: vi.fn().mockResolvedValue({ voiceId: "v1" }),
   resolveGuestVoice: vi.fn().mockResolvedValue({ voiceId: "v2" }),
   hasCurrentVoice: vi.fn(),
-  earlierPartGuests: vi.fn().mockResolvedValue([]),
+  otherSplitParts: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../src/llm/ttsClient", () => ({

@@ -11,7 +11,7 @@ import { CHUNK_LOCK_POLL_INTERVAL_MS } from "../constants/ttsLimits";
 import type { Episode } from "../schemas/episode.schema";
 import type { Podcast } from "../schemas/podcast.schema";
 import { speakerLabel } from "./episodeGeneration/speakerSelection";
-import { earlierPartGuests, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
+import { otherSplitParts, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "./episodeGeneration/voiceResolution.service";
 import { finalizeEpisodeAudio } from "./episodeGeneration/audioFinalize.service";
 import { chunkTranscript, getChunkTurns } from "./episodeGeneration/chunker";
 import type { ScriptTurn } from "../utils/scriptText";
@@ -72,7 +72,7 @@ async function resolveCastVoices(
             episodeId,
             person,
             podcast.languageCode,
-            await earlierPartGuests(podcastId, episode),
+            await otherSplitParts(podcastId, episode),
           );
     assignments.push({
       label: speakerLabel(person.name, other.name),

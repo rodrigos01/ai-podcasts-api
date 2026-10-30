@@ -22,7 +22,7 @@ import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from
 import { withContinuity } from "./continuity";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { selectCast } from "./speakerSelection";
-import { earlierPartGuests, resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
+import { otherSplitParts, resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
 import { chunkTranscript } from "./chunker";
 
 /**
@@ -138,12 +138,12 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // this persists. A failure here doesn't fail episode generation itself:
     // audio.service.ts still falls back to resolving lazily (and
     // persisting) if a cast member's resolvedVoiceId ends up missing.
-    const voiceResolutionPromise = earlierPartGuests(podcastId, episode)
-      .then((earlierGuests) =>
+    const voiceResolutionPromise = otherSplitParts(podcastId, episode)
+      .then((otherParts) =>
         Promise.all([
           ...hosts.map((host) => resolveHostVoice(podcastId, host, podcast.languageCode)),
           ...guests.map((guest) =>
-            resolveGuestVoice(podcastId, episodeId, guest, podcast.languageCode, earlierGuests),
+            resolveGuestVoice(podcastId, episodeId, guest, podcast.languageCode, otherParts),
           ),
         ]),
       ).catch((err) => {

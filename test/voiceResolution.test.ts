@@ -16,6 +16,8 @@ vi.mock("../src/data/voiceUsage.repository", () => ({ findVoicesInUse: vi.fn(asy
 
 vi.mock("../src/data/episode.repository", () => ({
   getEpisode: vi.fn(),
+  listDependentEpisodes: vi.fn(),
+  shareGuestVoice: vi.fn(),
   setGuestResolvedVoice: vi.fn(),
   setGuestVoicePrompt: vi.fn(),
 }));
@@ -27,9 +29,9 @@ vi.mock("../src/data/podcast.repository", () => ({
 
 import { generateText } from "../src/llm/geminiClient";
 import { deleteVoice, designVoice } from "../src/llm/ttsClient";
-import { getEpisode, setGuestResolvedVoice, setGuestVoicePrompt } from "../src/data/episode.repository";
+import { getEpisode, listDependentEpisodes, setGuestResolvedVoice, shareGuestVoice, setGuestVoicePrompt } from "../src/data/episode.repository";
 import { setHostResolvedVoice, setHostVoicePrompt } from "../src/data/podcast.repository";
-import { cleanupGuestVoice, earlierPartGuests, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "../src/services/episodeGeneration/voiceResolution.service";
+import { cleanupGuestVoice, otherSplitParts, hasCurrentVoice, resolveGuestVoice, resolveHostVoice } from "../src/services/episodeGeneration/voiceResolution.service";
 
 describe("voiceResolution.service", () => {
   beforeEach(() => {
@@ -276,8 +278,10 @@ describe("voiceResolution.service", () => {
       resolvedVoiceHash: null,
     });
 
-    it("reuses the earlier part's voice instead of designing another", async () => {
-      const result = await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [part1Guest()]);
+    const part = (id: string, guest: Person) => ({ id, guests: [guest] });
+
+    it("reuses a voice another part already has instead of designing another", async () => {
+      const result = await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [part("ep-1", part1Guest())]);
 
       expect(designVoice).not.toHaveBeenCalled();
       expect(result).toEqual({ voiceId: "voice_part1", origin: "design" });
@@ -288,28 +292,51 @@ describe("voiceResolution.service", () => {
       });
     });
 
-    it("designs its own when the earlier part has no usable voice or a different guest", async () => {
+    it("designs a voice and copies it into the other parts when it resolves first", async () => {
+      vi.mocked(designVoice).mockResolvedValue("voice_first");
+
+      await resolveGuestVoice("pod-1", "ep-1", part2Guest(), undefined, [part("ep-2", part2Guest())]);
+
+      expect(designVoice).toHaveBeenCalledTimes(1);
+      expect(shareGuestVoice).toHaveBeenCalledTimes(1);
+      const [podcastId, episodeId, wants, resolved] = vi.mocked(shareGuestVoice).mock.calls[0]!;
+      expect([podcastId, episodeId]).toEqual(["pod-1", "ep-2"]);
+      expect(resolved).toMatchObject({ resolvedVoiceId: "voice_first", resolvedVoiceOrigin: "design" });
+      // It only fills in the same guest, and only one without a usable voice.
+      expect(wants(part2Guest())).toBe(true);
+      expect(wants({ ...part2Guest(), persona: "A chef." })).toBe(false);
+      expect(wants(part1Guest())).toBe(false);
+    });
+
+    it("designs its own when no other part has a usable voice for this guest", async () => {
       vi.mocked(designVoice).mockResolvedValue("voice_new");
       const noVoice: Person = { ...part1Guest(), resolvedVoiceId: null, resolvedVoiceHash: null };
       const other: Person = { ...part1Guest(), persona: "A chef." };
 
-      await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [noVoice]);
-      await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [other]);
+      await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [part("ep-1", noVoice)]);
+      await resolveGuestVoice("pod-1", "ep-2", part2Guest(), undefined, [part("ep-1", other)]);
 
       expect(designVoice).toHaveBeenCalledTimes(2);
     });
 
     it("doesn't delete its own stored voice when that is the shared one", async () => {
       const again: Person = { ...part2Guest(), resolvedVoiceId: "voice_part1", resolvedVoiceOrigin: "design", resolvedVoiceHash: "h" };
-      await resolveGuestVoice("pod-1", "ep-2", again, undefined, [part1Guest()]);
+      await resolveGuestVoice("pod-1", "ep-2", again, undefined, [part("ep-1", part1Guest())]);
       expect(deleteVoice).not.toHaveBeenCalled();
     });
 
-    it("earlierPartGuests reads the guests of the episode it starts after", async () => {
-      vi.mocked(getEpisode).mockResolvedValue({ guests: [part1Guest()] } as never);
-      expect(await earlierPartGuests("pod-1", { startsAfterEpisodeId: "ep-1" })).toHaveLength(1);
-      expect(getEpisode).toHaveBeenCalledWith("pod-1", "ep-1");
-      expect(await earlierPartGuests("pod-1", {})).toEqual([]);
+    it("otherSplitParts walks the startsAfterEpisodeId links both ways", async () => {
+      const ep = (id: string, startsAfterEpisodeId?: string) =>
+        ({ id, guests: [], ...(startsAfterEpisodeId ? { startsAfterEpisodeId } : {}) }) as never;
+      // ep-1 <- ep-2 <- ep-3, asked from the middle.
+      vi.mocked(getEpisode).mockImplementation(async (_p, id) => (id === "ep-1" ? ep("ep-1") : null));
+      vi.mocked(listDependentEpisodes).mockImplementation(async (_p, id) => (id === "ep-2" ? [ep("ep-3", "ep-2")] : []));
+
+      const parts = await otherSplitParts("pod-1", { id: "ep-2", startsAfterEpisodeId: "ep-1" });
+
+      expect(parts.map((p) => p.id).sort()).toEqual(["ep-1", "ep-3"]);
+      vi.mocked(listDependentEpisodes).mockResolvedValue([]);
+      expect(await otherSplitParts("pod-1", { id: "solo" })).toEqual([]);
     });
   });
 
