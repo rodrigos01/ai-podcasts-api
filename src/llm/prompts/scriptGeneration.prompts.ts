@@ -1,16 +1,13 @@
-import type { PriorEpisode } from "../../utils/episodeHistory";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import { buildChainedHistoryNote, buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
+import { buildContinuityNotesBlock } from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
   podcast: Podcast;
   episode: Episode;
   sources: Source[];
-  /** Earlier episodes' transcripts, oldest first — see episodeHistory.prompts.ts. */
-  previousEpisodes: PriorEpisode[];
 }
 
 export interface WordTarget {
@@ -36,6 +33,37 @@ const HISTORY_IS_NOT_A_TEMPLATE_RULE = `- Earlier episodes of this show are shar
 episode's structure, beats, pacing, jokes, or phrasing to build this episode. The one exception is the show's \
 catchphrases (its recurring signature phrases, such as greetings, sign-offs, and segment names), which can be \
 reused as they were.`;
+
+/**
+ * Mandatory spoken-register rules. Fillers are plain spoken words, not
+ * angle-bracket tags, so the TTS says them.
+ */
+const NATURAL_SPEECH_SECTION = `
+Natural speech (mandatory): this is a script for two people talking, not for someone reading a text aloud. \
+Every line must sound like it was said spontaneously, in each speaker's own voice, as their persona would really \
+talk. This is required in every turn, not an occasional flourish:
+- Write for the ear, not the page. Use contractions, sentence fragments, run-ons and everyday words. Avoid \
+polished, essay-like, balanced or tidily structured sentences, and avoid formal or "written" vocabulary a real \
+person wouldn't use out loud.
+- Speakers think while they talk. Include natural disfluencies and filler, written as plain spoken words so the \
+TTS voices them: interjections and hesitation sounds such as hm, ah, oh, uh, um, mm, well, so, I mean, you know, \
+and also false starts, self-corrections, trailing off, restarting a thought, searching for a word, and \
+repeating a word while thinking. Place them where a real person would, such as before an answer they have to \
+think about, while recalling a detail, or when changing their mind. Most turns of more than a sentence or two \
+should have at least one, and they should not be spread evenly or follow a pattern.
+- Let each persona decide how they sound. Their background, age, temperament, humor, vocabulary and regional \
+or professional speech habits shape how formal they are, how much they hedge, how fast they ramble, and which \
+fillers and expressions they favor. Two speakers must never share the same speech patterns, and neither should \
+sound like a neutral assistant.
+- Reactions are spoken, not described. Surprise, doubt, amusement and agreement come out as sounds and half \
+sentences ("oh", "wait, really?", "hm, right") rather than as complete, articulate statements about the feeling.
+- Don't open turns with a neat acknowledgement of what the other person said and then a prepared answer. People \
+jump in, answer sideways, or answer a different part of the question.
+- Don't make information sound organized in advance: no lists of "first, second, third", no mini-lectures with \
+a thesis and a conclusion, no summarizing sentence closing each turn.
+- Keep filler believable and readable: never so dense that the content is lost, and never inside the angle-bracket \
+tags, which stay limited to the mouth sounds listed below.
+`;
 
 /**
  * A single system instruction that writes BOTH speakers' lines itself —
@@ -79,7 +107,7 @@ stretches when someone is telling a story or making a point, and the other speak
 their own take along the way instead of waiting politely for their turn. Don't pad a turn to make it longer, and \
 don't split one speaker's continuous stretch into several turns in a row or have the other speaker finish \
 their sentences. Very short reactions work best as backchanneling (see below).
-
+${NATURAL_SPEECH_SECTION}
 Keep the different speakers as their own individuals, avoiding them sounding like a single entity speaking in \
 turn or completing each other's sentences. If it makes sense for the speakers personas to disagree, they should. \
 If the speakers have explicitly different roles, such as host and guest, make sure they stick to their roles, unless \
@@ -105,6 +133,11 @@ You can use the following tags to make the conversation more realistic:
 written as one or two words, such as <laughs>, <gasps> or <sighs>. The only other tag that works is <claps>. \
 Anything else is not valid: no stage directions, actions, gestures or descriptions of how something is said, and \
 never spoken words inside the brackets. How a whole turn should sound goes in its Style line.
+- Style lines: strictly limited to how the voice sounds, such as tone, emotion, pace, volume, energy or accent. \
+A Style line and an angle-bracket tag may only describe something that can be reproduced with audio alone. \
+Never put physical actions, gestures, facial expressions, body language, or anything that is only seen (nodding, \
+smiling, shrugging, pointing, looking away) in either one, because the TTS engine would voice it or it would be \
+meaningless to a listener. If something can't be heard, leave it out or say it in words.
 - Backchanneling: if you want the *other* speaker to say a quick reaction or interject to what's been spoken, \
 overlapping with the active speaker, you can inject those using pipes like |hm| or |yes| in the active speaker's \
 turn. There's no limit to what can be injected, but it overlaps with the active speaker so keep it brief for \
@@ -116,7 +149,12 @@ what they didn't say.", then the other speaker overlapping with "How so?", then 
 "Because it's not just what's seen. It's what's felt."
 
 The following rules must be followed:
-- When citing sources, never invent details like names, places, dates or specific facts to fill in gaps. Translations can be adapted (see below).
+- Never invent verifiable details. Every name, date, age, number, place, title, quote and factual claim has to come \
+from the sources, the episode draft, the speakers' personas, or the earlier episodes (their transcripts or the \
+continuity notes). That includes the name of a source's author or diarist: if the sources don't name a person, \
+don't give them a name, and refer to them by their role (the author, the diarist, the traveler, the narrator) \
+instead. When something is not given, leave it out or have a speaker say they don't know; never fill the gap with \
+a plausible detail. Translations can be adapted (see below).
 - Always write numbers as words, so that it can be pronounced correctly.
 - If citing sources in a different language from the script, make a best effort to adapt them so that they \
 sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.
@@ -126,19 +164,14 @@ podcast structure asks for one.
 be used mid-turn to inject speech with the OTHER speaker's voice, and IS NOT meant for adding emphasis to the \
 active speaker's turn.
 ${HISTORY_IS_NOT_A_TEMPLATE_RULE}
+- Follow the natural speech requirements above in every turn: no turn may read like written text spoken aloud.
 `;
 }
 
-/**
- * `chained`: the call continues the series' stored interaction, so the earlier
- * episodes are already in the conversation and `ctx.previousEpisodes` is empty;
- * a note says so instead of the transcripts being pasted in.
- */
 export function buildScriptGenerationPrompt(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
-  chained = false,
 ): string {
   const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
   const guest = cast.speakers.find((s) => !s.isHost);
@@ -149,7 +182,9 @@ export function buildScriptGenerationPrompt(
     }`;
 
   const [a, b] = cast.speakers;
-  const history = chained ? buildChainedHistoryNote() : buildEpisodeHistoryBlock(ctx.previousEpisodes, ctx.podcast);
+  // The writer never sees the earlier episodes, only the notes the draft call
+  // wrote for this one (episodeWizard.prompts.ts).
+  const history = buildContinuityNotesBlock(ctx.episode.continuityNotes);
   const historySection = history
     ? `${history}
 

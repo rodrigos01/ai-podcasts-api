@@ -27,6 +27,8 @@ export const episodeCreateSchema = z
     participantHostIds: z.array(z.string().min(1)).max(2),
     guests: z.array(personSaveSchema).max(1),
     productionNotes: optionalText,
+    // Written by the episode wizard's draft call.
+    continuityNotes: optionalText,
   })
   .check(twoVoiceCast);
 
@@ -57,7 +59,9 @@ export const episodeUpdateSchema = z.object({
 });
 
 export const episodeProgressSchema = z.object({
-  stage: z.enum(["kickoff", "conversation", "chunking", "done"]),
+  // "continuity" only appears when the notes-only call runs (see
+  // episodeGeneration/orchestrator.ts), between "kickoff" and "conversation".
+  stage: z.enum(["kickoff", "continuity", "conversation", "chunking", "done"]),
   currentWordCount: z.number().int().nonnegative().optional(),
   targetWordRange: z.object({ min: z.number(), max: z.number() }).optional(),
 });
@@ -80,6 +84,9 @@ export const episodeSchema = z.object({
   participantHostIds: z.array(z.string().min(1)),
   guests: z.array(personSchema),
   productionNotes: z.string().min(1).optional(),
+  // What the script writer is told of the earlier episodes: only what bears on
+  // this episode (written by the draft call, see episodeWizard.prompts.ts).
+  continuityNotes: z.string().min(1).optional(),
   // "streamable" is no longer set by generation itself (the script is written,
   // chunked, and marked "ready" in one step now that there's no condensation
   // pass after it) but stays in the enum: clients treat both "streamable" and
@@ -88,11 +95,6 @@ export const episodeSchema = z.object({
   progress: episodeProgressSchema.nullable(),
   transcript: z.string().nullable(),
   ttsChunks: z.array(ttsChunkSchema).nullable(),
-  // The Interactions API id of the call that wrote this episode's script, kept
-  // only for podcasts that use interaction context: the next episode's script
-  // call and episode drafts continue from it (continuity.ts). Null/absent: not
-  // generated yet, or the podcast doesn't use it.
-  interactionId: z.string().min(1).nullable().optional(),
   // Total audio duration generated so far, in seconds — updated in
   // Firestore as chunks finish generating (audio.service.ts), not computed
   // at request time, so polling clients (GET .../status) can build a "how

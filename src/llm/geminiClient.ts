@@ -34,17 +34,10 @@ let clientPromise: Promise<GoogleGenAIClient> | null = null;
 // isn't used here. Two things about it that aren't obvious:
 //  - It only serves the `global` location (hence the constant below; there
 //    is no location env var anymore).
-//  - Interactions are stored server-side for 7 days BY DEFAULT. Calls here
-//    set `store: false` (stateless / zero data retention): prompts carry
-//    users' source material and the responses are full transcripts. The one
-//    exception is a podcast that uses interaction context (see
-//    episodeGeneration/continuity.ts): its episode drafts and scripts are
-//    stored and chained with `previous_interaction_id`. Probed 2026-10-28:
-//    a call that sets `previous_interaction_id` MUST also set `store: true`
-//    (400 otherwise), the chain carries over even when the system
-//    instruction differs between calls, structured output works on a
-//    continued call, and an unknown, malformed or expired id answers
-//    404 "Requested entity was not found." (`PreviousInteractionNotFoundError`).
+//  - Interactions are stored server-side for 7 days BY DEFAULT. Every call
+//    here sets `store: false` (stateless / zero data retention): prompts
+//    carry users' source material and the responses are full transcripts,
+//    and nothing here uses `previous_interaction_id` chaining.
 //
 // TTS is a separate concern — see llm/ttsClient.ts, which uses the same
 // platform and credentials but talks to Gemini 3.8 Flash TTS's
@@ -92,49 +85,10 @@ function sanitize(node: unknown): unknown {
   return node;
 }
 
-interface InteractionChainOptions {
-  /**
-   * Continue the server-side conversation held by an earlier stored interaction.
-   * The system instruction and generation config are NOT carried over by the
-   * API, so they are still sent on every call. The call is stored (the API
-   * requires it); an id the API no longer has throws PreviousInteractionNotFoundError.
-   */
-  previousInteractionId?: string;
-  /** Keep the interaction server-side so a later call can chain from it. Implied by previousInteractionId. */
-  store?: boolean;
-}
-
-interface GenerateTextOptions<T> extends InteractionChainOptions {
+interface GenerateTextOptions<T> {
   systemInstruction: string;
   prompt: string;
   schema: ZodType<T>;
-}
-
-/** The interaction a call asked to continue is unknown to the API (never existed, malformed, or past its retention). */
-export class PreviousInteractionNotFoundError extends Error {
-  constructor(readonly previousInteractionId: string) {
-    super(`Gemini does not have interaction ${previousInteractionId} (expired or unknown)`);
-    this.name = "PreviousInteractionNotFoundError";
-  }
-}
-
-function isNotFoundError(err: unknown): boolean {
-  return err instanceof Error && "status" in err && (err as ApiError).status === 404;
-}
-
-/** The chaining fields of an `interactions.create` request. */
-function chainParams(options: InteractionChainOptions) {
-  return {
-    store: options.previousInteractionId ? true : (options.store ?? false),
-    ...(options.previousInteractionId ? { previous_interaction_id: options.previousInteractionId } : {}),
-  };
-}
-
-/** Turns the API's 404 for a chained call into the typed error callers fall back on. */
-function asChainError(err: unknown, options: InteractionChainOptions): unknown {
-  return options.previousInteractionId && isNotFoundError(err)
-    ? new PreviousInteractionNotFoundError(options.previousInteractionId)
-    : err;
 }
 
 // The platform's per-minute quota for TEXT_MODEL trips under bursts of
@@ -155,7 +109,6 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
       return await fn();
     } catch (err) {
       lastError = err;
-      if (isNotFoundError(err)) break; // a missing entity won't appear on retry
       if (attempt < attempts) {
         const delay = isRateLimitError(err) ? 2 ** attempt * 1000 : attempt * 500;
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -182,13 +135,6 @@ function readOutputText(interaction: { status?: string; output_text?: string }):
 }
 
 export async function generateText<T>(options: GenerateTextOptions<T>): Promise<T> {
-  return (await generateTextWithId(options)).result;
-}
-
-/** `generateText`, also returning the id of the interaction (usable as `previousInteractionId` if it was stored). */
-export async function generateTextWithId<T>(
-  options: GenerateTextOptions<T>,
-): Promise<{ result: T; interactionId: string }> {
   const responseSchema = toGeminiSchema(options.schema) as Record<string, unknown>;
   const client = await getClient();
 
@@ -198,11 +144,9 @@ export async function generateTextWithId<T>(
       input: options.prompt,
       system_instruction: options.systemInstruction,
       response_format: responseSchema,
-      ...chainParams(options),
+      store: false,
     }),
-  ).catch((err) => {
-    throw asChainError(err, options);
-  });
+  );
 
   const text = readOutputText(interaction);
 
@@ -213,10 +157,10 @@ export async function generateTextWithId<T>(
     throw new Error(`Gemini returned non-JSON output: ${text.slice(0, 200)}`);
   }
 
-  return { result: options.schema.parse(parsed), interactionId: interaction.id };
+  return options.schema.parse(parsed);
 }
 
-interface GeneratePlainTextOptions extends InteractionChainOptions {
+interface GeneratePlainTextOptions {
   systemInstruction: string;
   prompt: string;
   /** Omitted = the model's default thinking level. */
@@ -237,13 +181,6 @@ interface GeneratePlainTextOptions extends InteractionChainOptions {
  * keep using `generateText`.
  */
 export async function generatePlainText(options: GeneratePlainTextOptions): Promise<string> {
-  return (await generatePlainTextWithId(options)).text;
-}
-
-/** `generatePlainText`, also returning the id of the interaction (usable as `previousInteractionId` if it was stored). */
-export async function generatePlainTextWithId(
-  options: GeneratePlainTextOptions,
-): Promise<{ text: string; interactionId: string }> {
   const client = await getClient();
 
   const interaction = await withRetry(() =>
@@ -251,12 +188,10 @@ export async function generatePlainTextWithId(
       model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
-      ...chainParams(options),
+      store: false,
       ...(options.thinkingLevel ? { generation_config: { thinking_level: options.thinkingLevel } } : {}),
     }),
-  ).catch((err) => {
-    throw asChainError(err, options);
-  });
+  );
 
-  return { text: readOutputText(interaction), interactionId: interaction.id };
+  return readOutputText(interaction);
 }
