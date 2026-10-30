@@ -1,7 +1,7 @@
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import { buildContinuityNotesBlock } from "./episodeHistory.prompts";
+import { buildContinuityNotesBlock, extraInstructionsSection } from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
@@ -84,7 +84,7 @@ export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): stri
 "${ctx.podcast.description}"
 And episodes follow this structure:
 ${ctx.podcast.structure}
-
+${extraInstructionsSection(ctx.podcast.extraInstructions)}
 The show host(s) are:
 ${hosts}
 

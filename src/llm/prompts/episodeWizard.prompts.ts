@@ -3,7 +3,7 @@ import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { LENGTH_RANGES, type EpisodeLength } from "../../constants/lengthRanges";
 import type { EpisodeSuggestion } from "../../schemas/wizard.schema";
-import { buildEpisodeHistoryBlock } from "./episodeHistory.prompts";
+import { buildEpisodeHistoryBlock, extraInstructionsSection } from "./episodeHistory.prompts";
 
 // Built from LENGTH_RANGES (the same source of truth episode confirmation
 // itself validates against) so the model reasons about concrete word
@@ -79,7 +79,7 @@ Podcast description: ${podcast.description}
 
 Podcast structure:
 ${podcast.structure}
-
+${extraInstructionsSection(podcast.extraInstructions)}
 Fixed hosts on this show, with their voice descriptions: ${podcast.hosts.map((h) => `${h.name} (persona: ${h.persona}; voice: ${h.voice}${h.accent ? `; accent: ${h.accent}` : ""})`).join("; ")}${historySection}
 
 The user has already chosen a target episode length of "${length}" (${targetRange.min}-${targetRange.max} \
