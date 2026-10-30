@@ -3,7 +3,7 @@ import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { LENGTH_RANGES, type EpisodeLength } from "../../constants/lengthRanges";
 import type { EpisodeSuggestion } from "../../schemas/wizard.schema";
-import { buildChainedHistoryNote, buildEpisodeHistoryBlock, extraInstructionsSection } from "./episodeHistory.prompts";
+import { buildEpisodeHistoryBlock, extraInstructionsSection } from "./episodeHistory.prompts";
 
 // Built from LENGTH_RANGES (the same source of truth episode confirmation
 // itself validates against) so the model reasons about concrete word
@@ -12,21 +12,66 @@ const lengthCatalog = (Object.keys(LENGTH_RANGES) as EpisodeLength[])
   .map((length) => `${length} (${LENGTH_RANGES[length].min}-${LENGTH_RANGES[length].max} words)`)
   .join(", ");
 
+// The script writer never sees the earlier episodes, so this draft is the only
+// thing that carries them over.
+export const CONTINUITY_NOTES_SECTION = `
+
+Continuity notes: the script writer will NOT see the earlier episodes above, only your draft. For every \
+episode you draft, write "continuityNotes": the continuation points for THIS episode, meaning specific moments \
+from the earlier episodes that this episode should pick up, build on, stay consistent with, or avoid \
+repeating, chosen because of this episode's topics, sources and guest. Write each point on its own line with \
+three parts: what was said or done, exactly, and by whom; which episode it comes from (for example \
+"Episode 2"); and why it matters for this episode, stated as the link between the two (which of this episode's \
+topics or moments it connects to, an open thread it leaves, a fact this episode touches, ground this episode \
+overlaps). State why it matters and nothing more: never tell the hosts or the guest what to do with it, and \
+never predict or script what they will say or do in this episode ("should call back", "will react", "can use \
+it" are all out). A point with no concrete link to this episode does not belong. Do not summarize the earlier episodes, do not list what happened \
+in them, and do not add general background on the characters or the show: a few points tied to this episode \
+beat a complete record. If no earlier moment bears on the episode, leave "continuityNotes" unset (apart from the \
+show's formula, below).
+
+Be specific. The writer cannot check anything, so every point carries the details exactly as the earlier \
+episode gave them: names, numbers, places, when and how often something happens, who said what, and how it \
+was resolved. Never restate a detail more vaguely or differently than it was told (if something happens at a \
+certain time of day, say that time of day, not another and not a generic "regularly"), and never merge two \
+episodes' facts into one. When the exact wording matters for a joke, a promise or a callback, quote the \
+original line verbatim in quotation marks.
+
+The show's formula: under its own "Show formula" heading, whatever the episode's topics, list the structural \
+habits the earlier episodes established that the podcast description and structure above do NOT already say. \
+The writer already has that description and structure, so never restate it: no list of segments, no summary of \
+the format, no description of what the show is or does. Look instead for the concrete things the episodes \
+themselves settled into, such as the exact words the episodes open and close with, a recurring sign-off, a \
+recurring prop, drink or setting the hosts always have, how a segment is actually introduced or named in \
+practice, a recurring bit or ritual, a running way the hosts address the listeners or each other, a habit in \
+how the guest is welcomed or sent off. Include only what repeats across episodes or is clearly meant to become \
+a ritual, state each as a short line. Test every line before writing it: if the podcast description or structure \
+above already says it (a segment existing, the order of segments, the kind of scoring, that the host reads the \
+source, that there is a sign-off), drop it; keep it only if it adds a concrete detail the episodes themselves \
+established, such as the actual words used, the specific drink or place, or the name of a recurring bit. Write \
+any line the hosts say verbatim, exactly as it appears in the transcripts, in quotation marks, and when you \
+cannot quote it exactly, leave it out instead of paraphrasing it (when the wording varies between episodes, \
+give the latest version and say what varies). A one-off phrasing is not a formula. If nothing the episodes \
+settled into goes beyond the structure above, leave the heading out. Don't script what the hosts should say in \
+this episode otherwise.
+
+When revising, keep the notes unless the changed topics or guest make other earlier material relevant or \
+irrelevant.`;
+
 export function episodeWizardSystemInstruction(
   podcast: Podcast,
   length: EpisodeLength,
   previousEpisodes: PriorEpisode[],
-  // The call continues the series' stored interaction: the earlier episodes
-  // are in the conversation, not in `previousEpisodes` (see continuity.ts).
-  chained = false,
 ): string {
   const targetRange = LENGTH_RANGES[length];
-  const history = chained ? buildChainedHistoryNote() : buildEpisodeHistoryBlock(previousEpisodes, podcast);
+  const history = buildEpisodeHistoryBlock(previousEpisodes, podcast);
   const historySection = history
     ? `\n\n${history}\n\nWhen drafting, keep this history in mind: build on it rather than repeating it, and \
 build on it in the topics where a callback or follow-up would help (a guest appearing again is fine \
 when it fits, but don't reuse a past guest just because they existed).`
     : "";
+
+  const notesSection = previousEpisodes.length > 0 ? CONTINUITY_NOTES_SECTION : "";
 
   return `You are the producer for the podcast "${podcast.title}".
 
@@ -92,10 +137,10 @@ Whenever any suggestion contains a 2-episode split: give each part its own title
 titles) that could each individually fit the ${length} target; keep the same guest across both parts \
 unless the material genuinely calls for a different one; and give each part production notes making it aware it's \
 one half of a two-part episode (e.g. what the other part covers) so the eventual recording reads as a \
-coherent pair, not two unrelated episodes.`;
+coherent pair, not two unrelated episodes.${notesSection}`;
 }
 
-function sourceBlock(sources: Source[]): string {
+export function sourceBlock(sources: Source[]): string {
   if (sources.length === 0) return "(no source material provided)";
   return sources.map((s) => `### ${s.title}\n${s.contents}`).join("\n\n");
 }

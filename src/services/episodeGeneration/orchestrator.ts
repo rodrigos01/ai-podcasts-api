@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { LENGTH_RANGES } from "../../constants/lengthRanges";
-import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLease";
 import {
   acquireGenerationLease,
-  clearInteractionIdsAfter,
   getEpisode,
   getPriorEpisodes,
   heartbeatGenerationLease,
@@ -18,9 +16,13 @@ import { getSource } from "../../data/source.repository";
 import { deleteEpisodeAudio } from "../../storage/audioCache.repository";
 import type { Episode } from "../../schemas/episode.schema";
 import type { Person } from "../../schemas/person.schema";
+import type { Podcast } from "../../schemas/podcast.schema";
+import type { Source } from "../../schemas/source.schema";
 import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
-import { withContinuity } from "./continuity";
 import { generateEpisodeScript } from "./scriptGeneration.service";
+import { writeContinuityNotes } from "./continuityNotes.service";
+import { needsContinuityNotes } from "../../utils/continuityNotes";
+import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { selectCast } from "./speakerSelection";
 import { resolveGuestVoice, resolveHostVoice } from "./voiceResolution.service";
 import { chunkTranscript } from "./chunker";
@@ -80,16 +82,12 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       status: "generating",
       transcript: null,
       ttsChunks: null,
-      interactionId: null,
       generatedAudioSeconds: 0,
       audioComplete: false,
       audioDurationSeconds: null,
       progress: null,
       error: null,
     });
-    // The episodes after this one hold the version being thrown away in their
-    // interactions; they'll rebuild from transcripts when next needed.
-    await clearInteractionIdsAfter(podcastId, { id: episodeId, createdAt: episode.createdAt });
     await deleteEpisodeAudio(podcastId, episodeId).catch((err) => {
       console.error(
         `Failed to clear cached audio for episode ${podcastId}/${episodeId} before (re)generating:`,
@@ -109,26 +107,21 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
     await patch({ progress: { stage: "kickoff", currentWordCount: 0, targetWordRange: wordTarget } });
 
-    // Continuity: the episodes that come *before* this one in series order
-    // (not merely the newest ones), so regenerating an old episode never sees
-    // episodes that were written after it. Their transcripts go in the prompt,
-    // or, for a podcast on interaction context, the call continues the previous
-    // episode's stored interaction (see continuity.ts).
-    const priorEpisodes = await getPriorEpisodes(
-      podcastId,
-      { id: episode.id, createdAt: episode.createdAt },
-      MAX_HISTORY_EPISODES,
-    );
-
-    await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
-
     // A single, non-streaming LLM call writes the whole episode's script
     // itself — see AGENTS.md's migration note for why this replaced the old
     // per-turn, two-independent-agent conversation loop. Nothing is written
     // until the whole script comes back, so a run lost mid-call is simply
     // started over (see ensureGenerationRunning).
-    const scriptPromise = withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
-      generateEpisodeScript(cast, { podcast, episode, sources, previousEpisodes }, wordTarget, previousInteractionId),
+    // Continuity comes from the episode's own continuity notes, written by the
+    // draft call (see episodeWizard.prompts.ts); the earlier episodes
+    // themselves are never sent. An episode with no notes, and a later part of
+    // a split (whose draft was made before the part before it existed), first
+    // gets them written by the notes-only call.
+    const scriptPromise = ensureContinuityNotes(podcastId, podcast, episode, sources, wordTarget, patch).then(
+      async (withNotes) => {
+        await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
+        return generateEpisodeScript(cast, { podcast, episode: withNotes, sources }, wordTarget);
+      },
     );
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
@@ -155,7 +148,6 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     await patch({
       transcript: script.transcript,
       ttsChunks,
-      interactionId: script.interactionId,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,
@@ -184,6 +176,44 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
 
   // Reached only when the script finished: kick off the next part, if any.
   await startDependents(podcastId, episodeId);
+}
+
+/**
+ * Writes the episode's continuity notes with the notes-only call when it needs
+ * them (see utils/continuityNotes.ts), saves them on the episode and returns
+ * the episode with them. If the call fails the episode is generated with the
+ * notes it already has (none, for an episode that had none): continuity is not
+ * worth failing a generation over. A lost lease still propagates. While the
+ * call runs the episode's progress stage is "continuity".
+ */
+async function ensureContinuityNotes(
+  podcastId: string,
+  podcast: Podcast,
+  episode: Episode,
+  sources: Source[],
+  wordTarget: { min: number; max: number },
+  patch: (fields: Partial<Episode>) => Promise<void>,
+): Promise<Episode> {
+  const previousEpisodes = await getPriorEpisodes(
+    podcastId,
+    { id: episode.id, createdAt: episode.createdAt },
+    MAX_HISTORY_EPISODES,
+  );
+  if (!needsContinuityNotes(episode, previousEpisodes.length)) return episode;
+
+  // Shown to clients only while the call actually runs; the caller moves on to
+  // "conversation" afterwards, whatever happens here.
+  await patch({ progress: { stage: "continuity", currentWordCount: 0, targetWordRange: wordTarget } });
+  let continuityNotes: string | undefined;
+  try {
+    continuityNotes = await writeContinuityNotes(podcast, episode, sources, previousEpisodes);
+  } catch (err) {
+    console.warn(`Writing continuity notes for ${podcastId}/${episode.id} failed; generating with what it has.`, err);
+    return episode;
+  }
+  if (!continuityNotes) return episode;
+  await patch({ continuityNotes });
+  return { ...episode, continuityNotes };
 }
 
 /**

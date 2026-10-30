@@ -58,27 +58,19 @@ Use these${CONTINUITY_GUIDANCE}`;
 }
 
 /**
- * The message of a catch-up call: it carries the earlier transcripts into the
- * conversation (so a chain can be rebuilt after an episode changed) and asks
- * for nothing but an acknowledgement. The guidance on how to use them comes
- * with the real call that continues from it (`buildChainedHistoryNote`).
+ * The continuity notes that stand in for the history in a script call of a
+ * podcast on continuity notes: the draft call already picked what from the
+ * earlier episodes bears on this one, so that is all the writer sees. "" when
+ * the draft had nothing to carry over.
  */
-export function buildCatchUpPrompt(previousEpisodes: PriorEpisode[], podcast: Podcast): string {
-  return `Previous episodes of this podcast, oldest first, with their full transcripts:
+export function buildContinuityNotesBlock(notes: string | undefined): string {
+  if (!notes) return "";
+  return `Continuity notes from the earlier episodes of this podcast (the episodes themselves are not shown; \
+these notes hold only what bears on this episode):
 
-${formatTranscripts(previousEpisodes, podcast)}
+${notes}
 
-These episodes are the history of the show so far; the next messages build on them. Reply with just "Understood."`;
-}
-
-/**
- * What stands in for the history block when the earlier episodes reach the
- * model through the conversation it continues (interaction context — see
- * services/episodeGeneration/continuity.ts) instead of being pasted into the
- * prompt. The guidance is the same text the block carries, so a chained call
- * is told how to use the history exactly as an unchained one is.
- */
-export function buildChainedHistoryNote(): string {
-  return `The earlier episodes of this podcast, oldest first, are already in this conversation, with the full \
-script of each. Use them${CONTINUITY_GUIDANCE}`;
+Treat the details in these notes as exact: they are what the earlier episodes established, so don't change \
+them. Where the notes give the show's formula (opening and closing lines, sign-offs, segment names, rituals), \
+follow it as written. Use these notes${CONTINUITY_GUIDANCE}`;
 }

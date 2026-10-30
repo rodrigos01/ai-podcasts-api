@@ -18,19 +18,16 @@ const prior = [
 ];
 
 describe("episode wizard system instruction", () => {
-  it("pastes the transcripts when the call is not chained", () => {
+  it("pastes the transcripts", () => {
     const text = episodeWizardSystemInstruction(podcast, "medium", prior);
     expect(text).toContain("OLD-TRANSCRIPT");
     expect(text).toContain("keep this history in mind");
-    expect(text).not.toContain("already in this conversation");
   });
 
-  it("points at the conversation when chained, and keeps the drafting guidance", () => {
-    const text = episodeWizardSystemInstruction(podcast, "medium", [], true);
-    expect(text).toContain("already in this conversation");
-    expect(text).toContain("Use them for continuity");
-    expect(text).toContain("keep this history in mind");
-    expect(text).not.toContain("Previous episodes of this podcast");
+  it("asks for continuity notes when there is history, and not for a first episode", () => {
+    const withHistory = episodeWizardSystemInstruction(podcast, "medium", prior);
+    expect(withHistory).toContain('"continuityNotes"');
+    expect(episodeWizardSystemInstruction(podcast, "medium", [])).not.toContain('"continuityNotes"');
   });
 
   it("has no history section for a first episode", () => {

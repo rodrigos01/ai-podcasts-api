@@ -18,13 +18,33 @@ const episode = (guest: string, extra: Partial<Episode> = {}): Episode => ({
 const target = { min: 100, max: 200 };
 
 function render(guest: string, withHistory: boolean) {
-  const ep = episode(guest);
+  const ep = episode(guest, withHistory ? { continuityNotes: "Episode 1: Penny promised a rematch." } : {});
   const cast = selectCast(podcast.hosts, ep.guests);
-  const ctx = { podcast, episode: ep, sources: [], previousEpisodes: withHistory ? [{ number: 1, episode: episode("Old") }] : [] };
+  const ctx = { podcast, episode: ep, sources: [] };
   return { system: buildScriptSystemInstruction(ctx), prompt: buildScriptGenerationPrompt(cast, ctx, target) };
 }
 
 describe("script prompts", () => {
+  it("forbids inventing verifiable details, including names the sources don't give", () => {
+    const { system } = render("Giles Thorne", false);
+    expect(system).toContain("Never invent verifiable details");
+    expect(system).toContain("if the sources don't name a person");
+  });
+
+  it("limits Style lines and tags to what can be heard, and keeps speakers within their persona's knowledge", () => {
+    const { system } = render("Giles Thorne", false);
+    expect(system).toContain("can be reproduced with audio alone");
+    expect(system).toContain("nodding");
+    expect(system).toContain("only explains what their persona, bio and experience would plausibly give them");
+  });
+
+  it("requires natural speech in every turn, with fillers as plain spoken words", () => {
+    const { system } = render("Giles Thorne", false);
+    expect(system).toContain("Natural speech (mandatory)");
+    expect(system).toContain("Follow the natural speech requirements");
+    expect(system).toContain("never inside the angle-bracket");
+  });
+
   it("builds the same system instruction for every episode, whoever the guest is and whatever came before", () => {
     const first = render("Giles Thorne", false);
     const later = render("Sayri Huamán", true);
@@ -88,9 +108,9 @@ describe("script prompts", () => {
     expect(section).not.toMatch(/regularly|sentence|longer|runs past|long turn/i);
   });
 
-  it("puts the history and the episode's speaker labels in the prompt, history first", () => {
+  it("puts the continuity notes and the episode's speaker labels in the prompt, notes first", () => {
     const { prompt } = render("Giles Thorne", true);
-    expect(prompt.startsWith("Previous episodes of this podcast")).toBe(true);
+    expect(prompt.startsWith("Continuity notes from the earlier episodes")).toBe(true);
     expect(prompt).toContain("prioritize the details in the system instructions");
     expect(prompt).toContain('exactly "Penny" and "Giles"');
   });
@@ -103,27 +123,22 @@ describe("script prompts", () => {
 });
 
 describe("script prompt history", () => {
-  const ep = episode("Sayri Huamán");
-  const cast = selectCast(podcast.hosts, ep.guests);
-  const prior = [{ number: 1, episode: episode("Old", { transcript: "Penny: OLD-TRANSCRIPT" }) }];
-
-  it("pastes the transcripts when the call is not chained", () => {
-    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [], previousEpisodes: prior }, target);
-    expect(prompt).toContain("OLD-TRANSCRIPT");
-    expect(prompt).toContain("Use these for continuity: the show is an ongoing series");
-    expect(prompt).not.toContain("already in this conversation");
-  });
-
-  it("points at the conversation instead when chained, with the same guidance", () => {
-    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [], previousEpisodes: [] }, target, true);
-    expect(prompt).toContain("already in this conversation");
-    expect(prompt).toContain("Use them for continuity: the show is an ongoing series");
+  it("gives the writer the episode's continuity notes, never the earlier episodes", () => {
+    const ep = episode("Sayri Huamán", { continuityNotes: "Episode 1: Penny promised a rematch." });
+    const cast = selectCast(podcast.hosts, ep.guests);
+    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [] }, target);
+    expect(prompt).toContain("Continuity notes from the earlier episodes");
+    expect(prompt).toContain("Penny promised a rematch");
+    expect(prompt).toContain("follow it as written");
     expect(prompt).toContain("prioritize the details in the system instructions");
     expect(prompt).not.toContain("Previous episodes of this podcast");
   });
 
-  it("says nothing about history for a show's first episode", () => {
-    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [], previousEpisodes: [] }, target);
+  it("says nothing about history when the draft carried no notes", () => {
+    const ep = episode("Sayri Huamán");
+    const cast = selectCast(podcast.hosts, ep.guests);
+    const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [] }, target);
     expect(prompt).not.toContain("continuity");
+    expect(prompt).not.toContain("Continuity notes");
   });
 });
