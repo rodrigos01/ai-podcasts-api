@@ -128,9 +128,7 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     // Arms with different extra instructions must draft separately: the drafter reads them.
     const arm = await getPodcast(armId);
     const extra = `${arm?.extraInstructions ?? ""}|${arm?.textModel ?? ""}`;
-    const key = createHash("sha1").update(extra + prior.map((p) => p.episode.transcript).join("
----
-")).digest("hex");
+    const key = createHash("sha1").update(extra + prior.map((p) => p.episode.transcript).join("\n---\n")).digest("hex");
     groups.set(key, [...(groups.get(key) ?? []), { armId, label: await armLabel(armId) }]);
   }
   for (const members of groups.values()) {
