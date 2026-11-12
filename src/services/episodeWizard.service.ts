@@ -31,6 +31,7 @@ export async function generateSuggestions(
     systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
     schema: episodeWizardOptionsResponseSchema,
+    ...(podcast.textModel ? { model: podcast.textModel } : {}),
   });
 }
 
@@ -47,5 +48,6 @@ export async function reviseSuggestions(
     systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
     prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
     schema: episodeWizardOptionsResponseSchema,
+    ...(podcast.textModel ? { model: podcast.textModel } : {}),
   });
 }

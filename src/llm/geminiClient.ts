@@ -89,6 +89,8 @@ interface GenerateTextOptions<T> {
   systemInstruction: string;
   prompt: string;
   schema: ZodType<T>;
+  /** A/B tests only: overrides the default model. */
+  model?: string;
 }
 
 // The platform's per-minute quota for TEXT_MODEL trips under bursts of
@@ -140,7 +142,7 @@ export async function generateText<T>(options: GenerateTextOptions<T>): Promise<
 
   const interaction = await withRetry(() =>
     client.interactions.create({
-      model: TEXT_MODEL,
+      model: options.model ?? TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
       response_format: responseSchema,
@@ -165,6 +167,8 @@ interface GeneratePlainTextOptions {
   prompt: string;
   /** Omitted = the model's default thinking level. */
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  /** A/B tests only: overrides the default model. */
+  model?: string;
 }
 
 /**
@@ -185,7 +189,7 @@ export async function generatePlainText(options: GeneratePlainTextOptions): Prom
 
   const interaction = await withRetry(() =>
     client.interactions.create({
-      model: TEXT_MODEL,
+      model: options.model ?? TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
       store: false,

@@ -126,7 +126,8 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     if (episode.transcript) continue; // already generated: leave its draft alone
     const prior = await getPriorEpisodes(armId, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
     // Arms with different extra instructions must draft separately: the drafter reads them.
-    const extra = (await getPodcast(armId))?.extraInstructions ?? "";
+    const arm = await getPodcast(armId);
+    const extra = `${arm?.extraInstructions ?? ""}|${arm?.textModel ?? ""}`;
     const key = createHash("sha1").update(extra + prior.map((p) => p.episode.transcript).join("
 ---
 ")).digest("hex");
