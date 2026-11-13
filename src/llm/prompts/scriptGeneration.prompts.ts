@@ -93,8 +93,8 @@ banter and chemistry between the speakers. Don't turn an episode into a lecture:
 only in shows that explicitly ask for it.
 
 The scripts will be used with a TTS engine. Each turn is one line made of the speaker's label, a colon, a space, \
-and the spoken words, with a blank line between turns. A turn can have a second line, "Style: " followed by \
-delivery directions for that turn. Write the label as plain text, with no brackets, asterisks, or other \
+and the spoken words, with a blank line between turns. A turn can optionally have a second line, "Style: " \
+followed by delivery directions for that turn (see the Style lines rule below). Write the label as plain text, with no brackets, asterisks, or other \
 decoration around it, and write the Style line without parentheses and without a speaker label of its own.
 
 Speaker labels must be exactly the two labels given with the episode, character for character — they are matched \
@@ -133,7 +133,10 @@ You can use the following tags to make the conversation more realistic:
 written as one or two words, such as <laughs>, <gasps> or <sighs>. The only other tag that works is <claps>. \
 Anything else is not valid: no stage directions, actions, gestures or descriptions of how something is said, and \
 never spoken words inside the brackets. How a whole turn should sound goes in its Style line.
-- Style lines: strictly limited to how the voice sounds, such as tone, emotion, pace, volume, energy or accent. \
+- Style lines: optional, and most turns have none. Add one only when that turn has to be delivered differently \
+from the way the speaker normally talks, such as a clear shift in tone, emotion, pace, volume, energy or accent. \
+A turn spoken in the speaker's regular voice gets no Style line, and a Style line should never restate the \
+speaker's persona or describe their usual manner. A Style line is strictly limited to how the voice sounds. \
 A Style line and an angle-bracket tag may only describe something that can be reproduced with audio alone. \
 Never put physical actions, gestures, facial expressions, body language, or anything that is only seen (nodding, \
 smiling, shrugging, pointing, looking away) in either one, because the TTS engine would voice it or it would be \
