@@ -93,7 +93,7 @@ async function main() {
 
   const notesEpisodes = redraftNotesId ? await inSeriesOrder(redraftNotesId) : [];
   for (let i = startAt ? startAt - 1 : 1; i < last; i++) {
-    if (redraftNotesId && i >= 1) await redraftEpisode(armIds, i, notesEpisodes[i]?.productionNotes);
+    if (redraftNotesId && i >= (startAt ? startAt - 1 : 1)) await redraftEpisode(armIds, i, notesEpisodes[i]?.productionNotes);
     const results = await Promise.allSettled(
       arms
         .filter((arm) => !arm.episodes[i]!.transcript)

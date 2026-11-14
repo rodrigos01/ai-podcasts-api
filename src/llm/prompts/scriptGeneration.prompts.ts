@@ -79,6 +79,8 @@ tags, which stay limited to the mouth sounds listed below.
  */
 export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): string {
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
+  // Show-level, so the system instruction stays identical for every episode of a show.
+  const languageLine = ctx.podcast.languageCode ? ` (language code ${ctx.podcast.languageCode})` : "";
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
 "${ctx.podcast.description}"
@@ -93,8 +95,8 @@ banter and chemistry between the speakers. Don't turn an episode into a lecture:
 only in shows that explicitly ask for it.
 
 The scripts will be used with a TTS engine. Each turn is one line made of the speaker's label, a colon, a space, \
-and the spoken words, with a blank line between turns. A turn can have a second line, "Style: " followed by \
-delivery directions for that turn. Write the label as plain text, with no brackets, asterisks, or other \
+and the spoken words, with a blank line between turns. A turn can optionally have a second line, "Style: " \
+followed by delivery directions for that turn (see the Style lines rule below). Write the label as plain text, with no brackets, asterisks, or other \
 decoration around it, and write the Style line without parentheses and without a speaker label of its own.
 
 Speaker labels must be exactly the two labels given with the episode, character for character — they are matched \
@@ -133,7 +135,10 @@ You can use the following tags to make the conversation more realistic:
 written as one or two words, such as <laughs>, <gasps> or <sighs>. The only other tag that works is <claps>. \
 Anything else is not valid: no stage directions, actions, gestures or descriptions of how something is said, and \
 never spoken words inside the brackets. How a whole turn should sound goes in its Style line.
-- Style lines: strictly limited to how the voice sounds, such as tone, emotion, pace, volume, energy or accent. \
+- Style lines: optional, and most turns have none. Add one only when that turn has to be delivered differently \
+from the way the speaker normally talks, such as a clear shift in tone, emotion, pace, volume, energy or accent. \
+A turn spoken in the speaker's regular voice gets no Style line, and a Style line should never restate the \
+speaker's persona or describe their usual manner. A Style line is strictly limited to how the voice sounds. \
 A Style line and an angle-bracket tag may only describe something that can be reproduced with audio alone. \
 Never put physical actions, gestures, facial expressions, body language, or anything that is only seen (nodding, \
 smiling, shrugging, pointing, looking away) in either one, because the TTS engine would voice it or it would be \
@@ -156,8 +161,11 @@ don't give them a name, and refer to them by their role (the author, the diarist
 instead. When something is not given, leave it out or have a speaker say they don't know; never fill the gap with \
 a plausible detail. Translations can be adapted (see below).
 - Always write numbers as words, so that it can be pronounced correctly.
-- If citing sources in a different language from the script, make a best effort to adapt them so that they \
-sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.
+- Everything the speakers say is in the show's language${languageLine}. When a source is in a different language, \
+the speakers say what it says in the show's language and never read it out in the original language: translate \
+it, adapting it so that it sounds natural for the target language's audience instead of always translating it \
+literally, while keeping the original intent. Proper names, titles and the like stay as they are, and a phrase in \
+the original language is only kept when the speakers are talking about that exact wording.
 - Avoid recaps: don't summarize the episode so far, the segment that just ended, or past episodes, unless the \
 podcast structure asks for one.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \

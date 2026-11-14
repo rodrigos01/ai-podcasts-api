@@ -16,19 +16,29 @@ const lengthCatalog = (Object.keys(LENGTH_RANGES) as EpisodeLength[])
 // thing that carries them over.
 export const CONTINUITY_NOTES_SECTION = `
 
-Continuity notes: the script writer will NOT see the earlier episodes above, only your draft. For every \
-episode you draft, write "continuityNotes": the continuation points for THIS episode, meaning specific moments \
-from the earlier episodes that this episode should pick up, build on, stay consistent with, or avoid \
-repeating, chosen because of this episode's topics, sources and guest. Write each point on its own line with \
-three parts: what was said or done, exactly, and by whom; which episode it comes from (for example \
-"Episode 2"); and why it matters for this episode, stated as the link between the two (which of this episode's \
-topics or moments it connects to, an open thread it leaves, a fact this episode touches, ground this episode \
-overlaps). State why it matters and nothing more: never tell the hosts or the guest what to do with it, and \
-never predict or script what they will say or do in this episode ("should call back", "will react", "can use \
-it" are all out). A point with no concrete link to this episode does not belong. Do not summarize the earlier episodes, do not list what happened \
-in them, and do not add general background on the characters or the show: a few points tied to this episode \
-beat a complete record. If no earlier moment bears on the episode, leave "continuityNotes" unset (apart from the \
-show's formula, below).
+Context and continuity notes: the script writer will NOT see the earlier episodes above, only your draft. \
+For every episode you draft, write "continuityNotes": the context and continuation \
+points for THIS episode, taken from the earlier episodes and chosen because of this episode's topics, sources \
+and guest. They have two kinds of point, and the context ones matter as much as the continuation ones:
+- Context: what the writer needs to know from the earlier episodes to write this episode's content correctly, \
+when it is relevant. For example who a person, place or thing this episode touches is as the earlier episodes \
+established it; what is already known, decided or settled between the hosts, or between the hosts and a \
+returning guest; how an earlier thread this episode builds on actually ended; and where the series stands on \
+the source material (what the earlier episodes already covered, so this one starts from the right place and \
+doesn't treat covered ground as new).
+- Continuation: specific moments from the earlier episodes that this episode should pick up, build on, stay \
+consistent with, or avoid repeating.
+Write each point on its own line with three parts: what was said or done, exactly, and by whom; which episode \
+it comes from (for example "Episode 2"); and why it matters for this episode, stated as the link between the \
+two (which of this episode's topics or moments it connects to, an open thread it leaves, a fact this episode \
+touches, ground this episode overlaps). State why it matters and nothing more: never tell the hosts or the \
+guest what to do with it, and never predict or script what they will say or do in this episode ("should call \
+back", "will react", "can use it" are all out). A point with no concrete link to this episode's content does \
+not belong. Do not summarize the earlier episodes wholesale or list everything that happened in them, and do \
+not add general background on the characters or the show that this episode does not need: every point is \
+there because this episode's content needs it, but nothing this episode needs may be left out, so cover every \
+topic, source and guest in the draft that the earlier episodes bear on. If no earlier episode bears on the \
+episode, leave "continuityNotes" unset (apart from the show's formula, below).
 
 Be specific. The writer cannot check anything, so every point carries the details exactly as the earlier \
 episode gave them: names, numbers, places, when and how often something happens, who said what, and how it \

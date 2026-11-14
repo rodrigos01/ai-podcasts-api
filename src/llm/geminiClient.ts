@@ -4,7 +4,7 @@ import { z } from "zod";
 import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
 
-const TEXT_MODEL = "gemini-3.8-flash";
+const TEXT_MODEL = "gemini-4-hydrogen";
 
 let clientPromise: Promise<GoogleGenAIClient> | null = null;
 

@@ -30,6 +30,13 @@ describe("episode wizard system instruction", () => {
     expect(episodeWizardSystemInstruction(podcast, "medium", [])).not.toContain('"continuityNotes"');
   });
 
+  it("asks for context as well as continuation points in the notes", () => {
+    const system = episodeWizardSystemInstruction(podcast, "medium", prior);
+    expect(system).toContain("Context and continuity notes");
+    expect(system).toContain("- Context:");
+    expect(system).toContain("- Continuation:");
+  });
+
   it("has no history section for a first episode", () => {
     expect(episodeWizardSystemInstruction(podcast, "medium", [])).not.toContain("history");
   });

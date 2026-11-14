@@ -65,8 +65,8 @@ Use these${CONTINUITY_GUIDANCE}`;
  */
 export function buildContinuityNotesBlock(notes: string | undefined): string {
   if (!notes) return "";
-  return `Continuity notes from the earlier episodes of this podcast (the episodes themselves are not shown; \
-these notes hold only what bears on this episode):
+  return `Context and continuity notes from the earlier episodes of this podcast (the episodes themselves are not \
+shown; these notes hold the context and continuation points that bear on this episode):
 
 ${notes}
 
