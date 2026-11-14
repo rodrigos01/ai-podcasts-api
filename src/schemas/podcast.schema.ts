@@ -42,8 +42,6 @@ export const podcastUpdateSchema = z.object({
 
 export const podcastSchema = podcastCreateSchema.extend({
   id: z.string().min(1),
-  // A/B tests only (set directly in Firestore, not by the API): text model for this podcast's drafts and scripts.
-  textModel: z.string().optional(),
   hosts: z.array(personSchema).min(1),
   ownerId: z.string().nullable(),
   createdAt: z.number(),

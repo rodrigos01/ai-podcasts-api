@@ -38,6 +38,22 @@ describe("script prompts", () => {
     expect(system).toContain("only explains what their persona, bio and experience would plausibly give them");
   });
 
+  it("makes Style lines optional and for turns delivered unlike the speaker's usual voice", () => {
+    const { system } = render("Giles Thorne", false);
+    expect(system).toContain("A turn can optionally have a second line");
+    expect(system).toContain("most turns have none");
+    expect(system).toContain("never restate the speaker's persona");
+  });
+
+  it("has the speakers say sources in other languages in the show's language, naming the language code when known", () => {
+    const { system } = render("Giles Thorne", false);
+    expect(system).toContain("Everything the speakers say is in the show's language.");
+    expect(system).toContain("never read it out in the original language");
+    const ep = episode("Giles Thorne");
+    const withCode = buildScriptSystemInstruction({ podcast: { ...podcast, languageCode: "pt-BR" }, episode: ep, sources: [] });
+    expect(withCode).toContain("in the show's language (language code pt-BR).");
+  });
+
   it("requires natural speech in every turn, with fillers as plain spoken words", () => {
     const { system } = render("Giles Thorne", false);
     expect(system).toContain("Natural speech (mandatory)");
@@ -110,7 +126,7 @@ describe("script prompts", () => {
 
   it("puts the continuity notes and the episode's speaker labels in the prompt, notes first", () => {
     const { prompt } = render("Giles Thorne", true);
-    expect(prompt.startsWith("Continuity notes from the earlier episodes")).toBe(true);
+    expect(prompt.startsWith("Context and continuity notes from the earlier episodes")).toBe(true);
     expect(prompt).toContain("prioritize the details in the system instructions");
     expect(prompt).toContain('exactly "Penny" and "Giles"');
   });
@@ -127,7 +143,7 @@ describe("script prompt history", () => {
     const ep = episode("Sayri Huamán", { continuityNotes: "Episode 1: Penny promised a rematch." });
     const cast = selectCast(podcast.hosts, ep.guests);
     const prompt = buildScriptGenerationPrompt(cast, { podcast, episode: ep, sources: [] }, target);
-    expect(prompt).toContain("Continuity notes from the earlier episodes");
+    expect(prompt).toContain("Context and continuity notes from the earlier episodes");
     expect(prompt).toContain("Penny promised a rematch");
     expect(prompt).toContain("follow it as written");
     expect(prompt).toContain("prioritize the details in the system instructions");

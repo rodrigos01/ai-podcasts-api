@@ -179,7 +179,6 @@ async function generateOnce(
     systemInstruction: buildScriptSystemInstruction(ctx),
     prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
     thinkingLevel: "high",
-    ...(ctx.podcast.textModel ? { model: ctx.podcast.textModel } : {}),
   });
 
   const turns = parseScriptTurns(raw);

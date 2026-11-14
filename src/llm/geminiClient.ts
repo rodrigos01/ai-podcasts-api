@@ -4,7 +4,7 @@ import { z } from "zod";
 import { serviceAccount } from "../config/firebase";
 import { env } from "../config/env";
 
-const TEXT_MODEL = "gemini-3.8-flash";
+const TEXT_MODEL = "gemini-4-hydrogen";
 
 let clientPromise: Promise<GoogleGenAIClient> | null = null;
 
@@ -89,8 +89,6 @@ interface GenerateTextOptions<T> {
   systemInstruction: string;
   prompt: string;
   schema: ZodType<T>;
-  /** A/B tests only: overrides the default model. */
-  model?: string;
 }
 
 // The platform's per-minute quota for TEXT_MODEL trips under bursts of
@@ -142,7 +140,7 @@ export async function generateText<T>(options: GenerateTextOptions<T>): Promise<
 
   const interaction = await withRetry(() =>
     client.interactions.create({
-      model: options.model ?? TEXT_MODEL,
+      model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
       response_format: responseSchema,
@@ -167,8 +165,6 @@ interface GeneratePlainTextOptions {
   prompt: string;
   /** Omitted = the model's default thinking level. */
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
-  /** A/B tests only: overrides the default model. */
-  model?: string;
 }
 
 /**
@@ -189,7 +185,7 @@ export async function generatePlainText(options: GeneratePlainTextOptions): Prom
 
   const interaction = await withRetry(() =>
     client.interactions.create({
-      model: options.model ?? TEXT_MODEL,
+      model: TEXT_MODEL,
       input: options.prompt,
       system_instruction: options.systemInstruction,
       store: false,

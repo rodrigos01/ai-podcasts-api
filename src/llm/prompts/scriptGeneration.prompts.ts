@@ -79,6 +79,8 @@ tags, which stay limited to the mouth sounds listed below.
  */
 export function buildScriptSystemInstruction(ctx: ScriptGenerationContext): string {
   const hosts = ctx.podcast.hosts.map((h) => `${h.name}: ${h.persona}`).join("\n");
+  // Show-level, so the system instruction stays identical for every episode of a show.
+  const languageLine = ctx.podcast.languageCode ? ` (language code ${ctx.podcast.languageCode})` : "";
 
   return `You are a script writer for a podcast called "${ctx.podcast.title}". The podcast premise is as follows:
 "${ctx.podcast.description}"
@@ -159,8 +161,11 @@ don't give them a name, and refer to them by their role (the author, the diarist
 instead. When something is not given, leave it out or have a speaker say they don't know; never fill the gap with \
 a plausible detail. Translations can be adapted (see below).
 - Always write numbers as words, so that it can be pronounced correctly.
-- If citing sources in a different language from the script, make a best effort to adapt them so that they \
-sound natural for the target language's audience, instead of always translating them literally, while keeping the original intent.
+- Everything the speakers say is in the show's language${languageLine}. When a source is in a different language, \
+the speakers say what it says in the show's language and never read it out in the original language: translate \
+it, adapting it so that it sounds natural for the target language's audience instead of always translating it \
+literally, while keeping the original intent. Proper names, titles and the like stay as they are, and a phrase in \
+the original language is only kept when the speakers are talking about that exact wording.
 - Avoid recaps: don't summarize the episode so far, the segment that just ended, or past episodes, unless the \
 podcast structure asks for one.
 - |backchanneling| should NEVER appear as the first or last spoken sentence in a turn. This tool should only \
