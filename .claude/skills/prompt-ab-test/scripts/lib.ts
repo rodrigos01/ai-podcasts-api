@@ -154,8 +154,14 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
         // The model has also returned drafts that pass the schema but are placeholders ("...") or leak its
         // own reasoning into the title; treat those as failed attempts too.
         const d = candidate.suggestions[0]!.episodes[0]!;
-        const bad = d.topics.trim().length < 40 || d.title.length > 200 || /\bwait\b/i.test(d.title) ||
-          (d.continuityNotes !== undefined && d.continuityNotes.trim().length < 40);
+        // Reasoning that leaks into any field ("wait", "let's fix", "let me") also marks a draft as degenerate, and an
+        // arm on continuity notes with earlier episodes must come back with notes.
+        const leaks = /\b(wait\b|let'?s fix|let me (make sure|check|fix))/i;
+        const needsNotes = !podcast.useInteractionContext && previousEpisodes.length > 0;
+        const bad = d.topics.trim().length < 40 || d.title.length > 200 || leaks.test(d.title) || leaks.test(d.topics) ||
+          (d.productionNotes !== undefined && leaks.test(d.productionNotes)) ||
+          (needsNotes && (d.continuityNotes === undefined || d.continuityNotes.trim().length < 40)) ||
+          (d.continuityNotes !== undefined && (d.continuityNotes.trim().length < 40 || leaks.test(d.continuityNotes)));
         if (bad) throw new Error(`degenerate draft (title ${d.title.length} chars, topics ${d.topics.length}, notes ${d.continuityNotes?.length ?? "none"})`);
         result = candidate;
       } catch (err) {
