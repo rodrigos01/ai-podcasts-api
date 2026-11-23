@@ -8,8 +8,10 @@ import type { PriorEpisode } from "../utils/episodeHistory";
 import type { EpisodeLength } from "../constants/lengthRanges";
 import type { Podcast } from "../schemas/podcast.schema";
 import type { Source } from "../schemas/source.schema";
+import { usesInteractionContext } from "../utils/interactionContext";
 import {
   episodeWizardOptionsResponseSchema,
+  episodeWizardOptionsResponseWithoutNotesSchema,
   type EpisodeSuggestion,
   type EpisodeWizardSuggestionsResponse,
 } from "../schemas/wizard.schema";
@@ -19,6 +21,14 @@ import {
 // wizard.schema.ts's episodeWizardOptionsResponseSchema) — each suggestion's
 // shape is fully described by its own `episodes.length`, which Gemini's
 // structured-output schema already grammar-constrains directly.
+
+// A podcast on interaction context is not asked for notes, so its drafts don't
+// get the field; an opted-out podcast's drafts write them.
+function draftSchemaFor(podcast: Podcast): typeof episodeWizardOptionsResponseSchema {
+  return usesInteractionContext(podcast)
+    ? (episodeWizardOptionsResponseWithoutNotesSchema as unknown as typeof episodeWizardOptionsResponseSchema)
+    : episodeWizardOptionsResponseSchema;
+}
 
 export async function generateSuggestions(
   podcast: Podcast,
@@ -32,7 +42,7 @@ export async function generateSuggestions(
   return generateText({
     systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
-    schema: episodeWizardOptionsResponseSchema,
+    schema: draftSchemaFor(podcast),
     ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 }
@@ -50,7 +60,7 @@ export async function reviseSuggestions(
   return generateText({
     systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
     prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
-    schema: episodeWizardOptionsResponseSchema,
+    schema: draftSchemaFor(podcast),
     ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 }
