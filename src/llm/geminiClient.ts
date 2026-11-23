@@ -108,6 +108,8 @@ interface GenerateTextOptions<T> extends InteractionChainOptions {
   systemInstruction: string;
   prompt: string;
   schema: ZodType<T>;
+  /** EXPERIMENT: omitted = the model's default thinking level. */
+  thinkingLevel?: "minimal" | "low" | "medium" | "high";
 }
 
 /** The interaction a call asked to continue is unknown to the API (never existed, malformed, or past its retention). */
@@ -199,6 +201,7 @@ export async function generateTextWithId<T>(
       system_instruction: options.systemInstruction,
       response_format: responseSchema,
       ...chainParams(options),
+      ...(options.thinkingLevel ? { generation_config: { thinking_level: options.thinkingLevel } } : {}),
     }),
   ).catch((err) => {
     throw asChainError(err, options);
