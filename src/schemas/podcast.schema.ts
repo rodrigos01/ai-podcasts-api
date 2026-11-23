@@ -14,6 +14,9 @@ export const podcastCreateSchema = z.object({
   // every voice design for this podcast's hosts and guests; absent on
   // podcasts created before it existed, whose voices are designed without one.
   languageCode: languageCodeSchema,
+  // EXPERIMENT ONLY (never merged): true gives script generation and drafts the
+  // old chained-interaction history instead of continuity notes.
+  useInteractionContext: z.boolean().optional(),
 });
 
 // POST /podcasts also takes the wizard's voice-design session id, which lets

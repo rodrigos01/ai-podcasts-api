@@ -148,6 +148,26 @@ export async function deleteEpisode(podcastId: string, episodeId: string): Promi
   return true;
 }
 
+/**
+ * Records `interactionId` as the series state through this episode, unless the
+ * episode's transcript has changed since the interaction was built from it
+ * (it was regenerated in the meantime, so the interaction describes a version
+ * that is gone).
+ */
+export async function setInteractionIdIfCurrent(
+  podcastId: string,
+  episodeId: string,
+  transcript: string,
+  interactionId: string,
+): Promise<void> {
+  const ref = episodesCollection(podcastId).doc(episodeId);
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists || snap.data()?.transcript !== transcript) return;
+    tx.update(ref, { interactionId });
+  });
+}
+
 // Filtered in memory (rather than a Firestore range query on createdAt) to
 // avoid depending on a manually-provisioned composite index and to keep the
 // tiebreak/null-transcript rules in one testable place — fine at this app's

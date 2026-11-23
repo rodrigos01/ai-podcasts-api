@@ -87,6 +87,8 @@ export const episodeSchema = z.object({
   // What the script writer is told of the earlier episodes: only what bears on
   // this episode (written by the draft call, see episodeWizard.prompts.ts).
   continuityNotes: z.string().min(1).optional(),
+  // EXPERIMENT ONLY: the Interactions API id of the call that wrote the script.
+  interactionId: z.string().min(1).nullable().optional(),
   // "streamable" is no longer set by generation itself (the script is written,
   // chunked, and marked "ready" in one step now that there's no condensation
   // pass after it) but stays in the enum: clients treat both "streamable" and

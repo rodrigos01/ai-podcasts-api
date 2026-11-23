@@ -34,6 +34,7 @@ import { NO_VOICE } from "../../../../src/utils/voiceDecision";
 import { chunkTranscript } from "../../../../src/services/episodeGeneration/chunker";
 import { generateEpisodeScript, type EpisodeScript } from "../../../../src/services/episodeGeneration/scriptGeneration.service";
 import { generateSuggestions } from "../../../../src/services/episodeWizard.service";
+import { withContinuity } from "../../../../src/services/episodeGeneration/continuity";
 import { selectCast } from "../../../../src/services/episodeGeneration/speakerSelection";
 
 export const log = (label: string, msg: string) => console.log(`[${new Date().toISOString()}] ${label}: ${msg}`);
@@ -55,6 +56,7 @@ export async function armLabel(podcastId: string): Promise<string> {
 export const ready = (script: EpisodeScript): Partial<Episode> => ({
   transcript: script.transcript,
   ttsChunks: chunkTranscript(script.transcript),
+  interactionId: script.interactionId,
   status: "ready",
   progress: { stage: "done", currentWordCount: script.wordCount },
   error: null,
@@ -95,8 +97,11 @@ export async function generate(label: string, podcastId: string, episodeId: stri
     const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(podcastId, id)))).filter((s) => s !== null);
     const wordTarget = LENGTH_RANGES[episode.length];
     const t0 = Date.now();
-    log(label, `start (${episode.continuityNotes ? `${episode.continuityNotes.length} chars of continuity notes` : "no continuity notes"})`);
-    const script = await generateEpisodeScript(cast, { podcast, episode, sources }, wordTarget);
+    const prior = await getPriorEpisodes(podcast.id, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
+    const script = await withContinuity(podcast, prior, (c) => {
+      log(label, c.previousInteractionId ? `start (chained from ${c.previousInteractionId})` : podcast.useInteractionContext ? `start (${c.previousEpisodes.length} prior transcripts in the prompt)` : `start (${episode.continuityNotes ? `${episode.continuityNotes.length} chars of continuity notes` : "no continuity notes"})`);
+      return generateEpisodeScript(cast, { podcast, episode, sources, previousEpisodes: c.previousEpisodes }, wordTarget, c.previousInteractionId);
+    });
     await patch(ready(script));
     log(label, `done: ${script.wordCount} words (target ${wordTarget.min}-${wordTarget.max}) in ${Math.round((Date.now() - t0) / 1000)}s`);
     return script;
@@ -127,7 +132,8 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     const prior = await getPriorEpisodes(armId, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
     // Arms with different extra instructions must draft separately: the drafter reads them.
     const extra = (await getPodcast(armId))?.extraInstructions ?? "";
-    const key = createHash("sha1").update(extra + prior.map((p) => p.episode.transcript).join("\n---\n")).digest("hex");
+    const mode = (await getPodcast(armId))?.useInteractionContext ? `chain:${prior[prior.length - 1]?.episode.interactionId}` : "notes";
+    const key = createHash("sha1").update(mode + extra + prior.map((p) => p.episode.transcript).join("\n---\n")).digest("hex");
     groups.set(key, [...(groups.get(key) ?? []), { armId, label: await armLabel(armId) }]);
   }
   for (const members of groups.values()) {
@@ -137,7 +143,9 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     const episode = (await inSeriesOrder(lead.armId))[index]!;
     const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(lead.armId, id)))).filter((s) => s !== null);
     const previousEpisodes = await getPriorEpisodes(lead.armId, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
-    const result = await generateSuggestions(podcast, sources, episode.length, previousEpisodes, prompt);
+    const result = await withContinuity(podcast, previousEpisodes, (c) =>
+      generateSuggestions(podcast, sources, episode.length, c.previousEpisodes, prompt, c.previousInteractionId),
+    );
     const draft = result.suggestions[0]!.episodes[0]!;
     const shape = result.suggestions.map((s) => `${s.episodes.length} ep`).join(" + ");
     log(

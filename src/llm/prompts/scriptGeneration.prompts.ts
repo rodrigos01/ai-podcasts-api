@@ -1,13 +1,21 @@
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import { buildContinuityNotesBlock, extraInstructionsSection } from "./episodeHistory.prompts";
+import type { PriorEpisode } from "../../utils/episodeHistory";
+import {
+  buildChainedHistoryNote,
+  buildContinuityNotesBlock,
+  buildEpisodeHistoryBlock,
+  extraInstructionsSection,
+} from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
   podcast: Podcast;
   episode: Episode;
   sources: Source[];
+  /** EXPERIMENT ONLY: earlier transcripts for a podcast on interaction context that has no chain to continue. */
+  previousEpisodes?: PriorEpisode[];
 }
 
 export interface WordTarget {
@@ -180,6 +188,7 @@ export function buildScriptGenerationPrompt(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
+  chained = false,
 ): string {
   const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
   const guest = cast.speakers.find((s) => !s.isHost);
@@ -192,7 +201,11 @@ export function buildScriptGenerationPrompt(
   const [a, b] = cast.speakers;
   // The writer never sees the earlier episodes, only the notes the draft call
   // wrote for this one (episodeWizard.prompts.ts).
-  const history = buildContinuityNotesBlock(ctx.episode.continuityNotes);
+  const history = ctx.podcast.useInteractionContext
+    ? chained
+      ? buildChainedHistoryNote()
+      : buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast)
+    : buildContinuityNotesBlock(ctx.episode.continuityNotes);
   const historySection = history
     ? `${history}
 

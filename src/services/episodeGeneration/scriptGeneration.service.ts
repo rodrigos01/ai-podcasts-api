@@ -1,4 +1,4 @@
-import { generatePlainText } from "../../llm/geminiClient";
+import { generatePlainTextWithId, PreviousInteractionNotFoundError } from "../../llm/geminiClient";
 import {
   buildScriptGenerationPrompt,
   buildScriptSystemInstruction,
@@ -9,12 +9,15 @@ import { countWords } from "../../utils/wordCount";
 import { parseScriptTurns, type ScriptTurn } from "../../utils/scriptText";
 import { buildTranscript } from "./transcriptBuilder";
 import { speakerLabel, type Cast } from "./speakerSelection";
+import { usesInteractionContext } from "./continuity";
 
 const MAX_GENERATION_ATTEMPTS = 3;
 
 export interface EpisodeScript {
   transcript: string;
   wordCount: number;
+  /** EXPERIMENT ONLY: the stored interaction that wrote it (podcasts on interaction context). */
+  interactionId: string | null;
 }
 
 /**
@@ -170,15 +173,19 @@ async function generateOnce(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
+  previousInteractionId?: string,
 ): Promise<EpisodeScript> {
   const [a, b] = cast.speakers;
   const labelA = speakerLabel(a.name, b.name);
   const labelB = speakerLabel(b.name, a.name);
 
-  const raw = await generatePlainText({
+  const store = usesInteractionContext(ctx.podcast);
+  const { text: raw, interactionId } = await generatePlainTextWithId({
     systemInstruction: buildScriptSystemInstruction(ctx),
-    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget),
+    prompt: buildScriptGenerationPrompt(cast, ctx, wordTarget, previousInteractionId !== undefined),
     thinkingLevel: "high",
+    store,
+    ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 
   const turns = parseScriptTurns(raw);
@@ -203,7 +210,7 @@ async function generateOnce(
     })),
   );
 
-  return { transcript, wordCount: countWords(transcript) };
+  return { transcript, wordCount: countWords(transcript), interactionId: store ? interactionId : null };
 }
 
 /**
@@ -220,12 +227,14 @@ export async function generateEpisodeScript(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
+  previousInteractionId?: string,
 ): Promise<EpisodeScript> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
     try {
-      return await generateOnce(cast, ctx, wordTarget);
+      return await generateOnce(cast, ctx, wordTarget, previousInteractionId);
     } catch (err) {
+      if (err instanceof PreviousInteractionNotFoundError) throw err;
       lastError = err;
       console.warn(
         `Script attempt ${attempt}/${MAX_GENERATION_ATTEMPTS} for "${ctx.episode.title}" failed: ${err instanceof Error ? err.message : err}`,

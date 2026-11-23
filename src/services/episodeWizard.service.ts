@@ -26,11 +26,14 @@ export async function generateSuggestions(
   length: EpisodeLength,
   previousEpisodes: PriorEpisode[],
   prompt?: string,
+  // EXPERIMENT ONLY: continue the series' stored interaction instead of sending the transcripts.
+  previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
     schema: episodeWizardOptionsResponseSchema,
+    ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 }
 

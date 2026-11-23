@@ -64,6 +64,7 @@ async function main() {
         await writeEpisode(arm.id, target.id, {
           transcript: from.transcript,
           ttsChunks: from.ttsChunks,
+          interactionId: from.interactionId ?? null,
           status: "ready",
           progress: from.progress,
           error: null,
@@ -84,6 +85,7 @@ async function main() {
     await writeEpisode(arm.id, first.id, {
       transcript: seedFirst.transcript,
       ttsChunks: seedFirst.ttsChunks,
+      interactionId: seedFirst.interactionId ?? null,
       status: "ready",
       progress: seedFirst.progress,
       error: null,
