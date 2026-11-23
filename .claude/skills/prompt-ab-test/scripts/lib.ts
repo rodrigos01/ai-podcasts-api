@@ -148,9 +148,16 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     let result: Awaited<ReturnType<typeof generateSuggestions>> | undefined;
     for (let attempt = 1; attempt <= 3 && !result; attempt++) {
       try {
-        result = await withContinuity(podcast, previousEpisodes, (c) =>
+        const candidate = await withContinuity(podcast, previousEpisodes, (c) =>
           generateSuggestions(podcast, sources, episode.length, c.previousEpisodes, prompt, c.previousInteractionId),
         );
+        // The model has also returned drafts that pass the schema but are placeholders ("...") or leak its
+        // own reasoning into the title; treat those as failed attempts too.
+        const d = candidate.suggestions[0]!.episodes[0]!;
+        const bad = d.topics.trim().length < 40 || d.title.length > 200 || /\bwait\b/i.test(d.title) ||
+          (d.continuityNotes !== undefined && d.continuityNotes.trim().length < 40);
+        if (bad) throw new Error(`degenerate draft (title ${d.title.length} chars, topics ${d.topics.length}, notes ${d.continuityNotes?.length ?? "none"})`);
+        result = candidate;
       } catch (err) {
         log(members.map((m) => `${m.label}${index + 1}`).join("+"), `draft attempt ${attempt}/3 failed: ${err instanceof Error ? err.message.slice(0, 200).replace(/\s+/g, " ") : err}`);
         if (attempt === 3) throw err;
