@@ -148,9 +148,14 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     let result: Awaited<ReturnType<typeof generateSuggestions>> | undefined;
     for (let attempt = 1; attempt <= 3 && !result; attempt++) {
       try {
-        const candidate = await withContinuity(podcast, previousEpisodes, (c) =>
-          generateSuggestions(podcast, sources, episode.length, c.previousEpisodes, prompt, c.previousInteractionId),
-        );
+        // A draft call has been seen to hang for 10+ minutes (the app has no timeout on it either), so give up
+        // after 3 minutes and let the retry loop try again.
+        const candidate = await Promise.race([
+          withContinuity(podcast, previousEpisodes, (c) =>
+            generateSuggestions(podcast, sources, episode.length, c.previousEpisodes, prompt, c.previousInteractionId),
+          ),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("draft call timed out after 180s")), 180_000)),
+        ]);
         // The model has also returned drafts that pass the schema but are placeholders ("...") or leak its
         // own reasoning into the title; treat those as failed attempts too.
         const d = candidate.suggestions[0]!.episodes[0]!;
