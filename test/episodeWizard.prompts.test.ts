@@ -24,14 +24,15 @@ describe("episode wizard system instruction", () => {
     expect(text).toContain("keep this history in mind");
   });
 
-  it("asks for continuity notes when there is history, and not for a first episode", () => {
-    const withHistory = episodeWizardSystemInstruction(podcast, "medium", prior);
-    expect(withHistory).toContain('"continuityNotes"');
-    expect(episodeWizardSystemInstruction(podcast, "medium", [])).not.toContain('"continuityNotes"');
+  it("asks for continuity notes only from a podcast that opted out of interaction context, and not for a first episode", () => {
+    const optedOut = { ...podcast, useInteractionContext: false } as Podcast;
+    expect(episodeWizardSystemInstruction(optedOut, "medium", prior)).toContain('"continuityNotes"');
+    expect(episodeWizardSystemInstruction(optedOut, "medium", [])).not.toContain('"continuityNotes"');
+    expect(episodeWizardSystemInstruction(podcast, "medium", prior)).not.toContain('"continuityNotes"');
   });
 
   it("asks for context as well as continuation points in the notes", () => {
-    const system = episodeWizardSystemInstruction(podcast, "medium", prior);
+    const system = episodeWizardSystemInstruction({ ...podcast, useInteractionContext: false } as Podcast, "medium", prior);
     expect(system).toContain("Context and continuity notes");
     expect(system).toContain("- Context:");
     expect(system).toContain("- Continuation:");

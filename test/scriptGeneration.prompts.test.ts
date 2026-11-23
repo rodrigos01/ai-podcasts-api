@@ -158,3 +158,32 @@ describe("script prompt history", () => {
     expect(prompt).not.toContain("Continuity notes");
   });
 });
+
+describe("script prompt history by mode", () => {
+  const cast = selectCast(podcast.hosts, episode("Sayri Huamán").guests);
+  const prior = [{ number: 1, episode: episode("Old", { transcript: "Penny: OLD-TRANSCRIPT" }) }];
+  const promptFor = (p: Podcast, ep: Episode, chained = false) =>
+    buildScriptGenerationPrompt(cast, { podcast: p, episode: ep, sources: [], previousEpisodes: prior }, target, chained);
+
+  it("a podcast on interaction context (the default) tells a chained call the earlier episodes are in the conversation", () => {
+    const prompt = promptFor(podcast, episode("Sayri Huamán"), true);
+    expect(prompt).toContain("already in this conversation");
+    expect(prompt).not.toContain("OLD-TRANSCRIPT");
+  });
+
+  it("with no chain it falls back to the episode's notes, then to the transcripts", () => {
+    const withNotes = promptFor(podcast, episode("Sayri Huamán", { continuityNotes: "Episode 1: a promise." }));
+    expect(withNotes).toContain("Episode 1: a promise.");
+    expect(withNotes).not.toContain("OLD-TRANSCRIPT");
+    expect(promptFor(podcast, episode("Sayri Huamán"))).toContain("OLD-TRANSCRIPT");
+  });
+
+  it("a podcast that opted out only ever sees the notes, even with transcripts and a chain flag", () => {
+    const optedOut = { ...podcast, useInteractionContext: false } as Podcast;
+    const prompt = promptFor(optedOut, episode("Sayri Huamán", { continuityNotes: "Episode 1: a promise." }), true);
+    expect(prompt).toContain("Episode 1: a promise.");
+    expect(prompt).not.toContain("OLD-TRANSCRIPT");
+    expect(prompt).not.toContain("already in this conversation");
+    expect(promptFor(optedOut, episode("Sayri Huamán"))).not.toContain("OLD-TRANSCRIPT");
+  });
+});

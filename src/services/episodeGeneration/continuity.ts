@@ -3,6 +3,9 @@ import { buildCatchUpPrompt } from "../../llm/prompts/episodeHistory.prompts";
 import { setInteractionIdIfCurrent } from "../../data/episode.repository";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { PriorEpisode } from "../../utils/episodeHistory";
+import { usesInteractionContext } from "../../utils/interactionContext";
+
+export { usesInteractionContext };
 
 /**
  * How a call (an episode's script, or a draft of the next episode) learns the
@@ -19,9 +22,6 @@ export interface Continuity {
   previousInteractionId?: string;
 }
 
-export function usesInteractionContext(podcast: Pick<Podcast, "useInteractionContext">): boolean {
-  return podcast.useInteractionContext === true; // opt-in on this experiment branch
-}
 
 /**
  * The stored interaction that holds the series through the latest earlier

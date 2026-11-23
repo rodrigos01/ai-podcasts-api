@@ -1,9 +1,10 @@
 /**
  * Runs the episode wizard's draft call N times in parallel for episode E of an arm (history = its earlier
- * transcripts, drafted the way the arm does) and counts how many come back usable, with an optional thinking
- * level, to compare the draft call's failure rate. Nothing is written.
+ * transcripts, drafted the way the arm does) and counts how many come back usable, to measure the draft call's
+ * failure rate (gemini-4-hydrogen returns placeholders, leaked reasoning, empty fields or hangs now and then).
+ * Nothing is written.
  *
- *   npx tsx .../draft-reliability.ts <armPodcastId> <notesPodcastId> <episodeNumber> <samples> <thinking|none>
+ *   npx tsx .../draft-reliability.ts <armPodcastId> <notesPodcastId> <episodeNumber> <samples>
  */
 import { firestore } from "../../../../src/config/firebase";
 import { getSource } from "../../../../src/data/source.repository";
@@ -14,10 +15,9 @@ import type { PriorEpisode } from "../../../../src/utils/episodeHistory";
 import { baseTitle, inSeriesOrder, isDegenerateDraft } from "./lib";
 
 async function main() {
-  const [armId, notesId, nArg, samplesArg, thinkingArg] = process.argv.slice(2);
-  if (!armId || !notesId || !nArg || !samplesArg || !thinkingArg) throw new Error("usage: draft-reliability.ts <arm> <notesPodcast> <episodeNumber> <samples> <thinking|none>");
+  const [armId, notesId, nArg, samplesArg] = process.argv.slice(2);
+  if (!armId || !notesId || !nArg || !samplesArg) throw new Error("usage: draft-reliability.ts <arm> <notesPodcast> <episodeNumber> <samples>");
   const n = Number(nArg);
-  const thinking = thinkingArg === "none" ? undefined : (thinkingArg as "minimal" | "low" | "medium" | "high");
   const stored = (await firestore.collection("podcasts").doc(armId).get()).data() as Podcast;
   const podcast = { ...stored, title: baseTitle(stored.title) };
   const episodes = await inSeriesOrder(armId);
@@ -31,7 +31,7 @@ async function main() {
       const t0 = Date.now();
       try {
         const result = await Promise.race([
-          withContinuity(podcast, prior, (c) => generateSuggestions(podcast, sources, target.length, c.previousEpisodes, prompt, c.previousInteractionId, thinking)),
+          withContinuity(podcast, prior, (c) => generateSuggestions(podcast, sources, target.length, c.previousEpisodes, prompt, c.previousInteractionId)),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout 240s")), 240_000)),
         ]);
         const d = result.suggestions[0]!.episodes[0]!;
@@ -42,6 +42,6 @@ async function main() {
     }),
   );
   const ok = outcomes.filter((o) => o.ok);
-  console.log(`thinking=${thinkingArg}: ${ok.length}/${outcomes.length} usable | seconds ${outcomes.map((o) => o.secs).sort((a, b) => a - b).join(",")} | failures: ${outcomes.filter((o) => !o.ok).map((o) => o.why).join(",") || "none"} | notes chars (usable) ${ok.map((o) => o.notes).join(",")}`);
+  console.log(`${ok.length}/${outcomes.length} usable | seconds ${outcomes.map((o) => o.secs).sort((a, b) => a - b).join(",")} | failures: ${outcomes.filter((o) => !o.ok).map((o) => o.why).join(",") || "none"} | notes chars (usable) ${ok.map((o) => o.notes).join(",")}`);
 }
 main().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });

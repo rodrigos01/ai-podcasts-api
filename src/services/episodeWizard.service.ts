@@ -26,15 +26,12 @@ export async function generateSuggestions(
   length: EpisodeLength,
   previousEpisodes: PriorEpisode[],
   prompt?: string,
-  // EXPERIMENT ONLY: continue the series' stored interaction instead of sending the transcripts.
+  // Continue the series' stored interaction instead of sending the transcripts (the default; see continuity.ts).
   previousInteractionId?: string,
-  // EXPERIMENT: thinking level for the draft call (omitted = the model default).
-  thinkingLevel?: "minimal" | "low" | "medium" | "high",
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
     systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
     prompt: buildEpisodeDraftPrompt(sources, prompt),
-    ...(thinkingLevel ? { thinkingLevel } : {}),
     schema: episodeWizardOptionsResponseSchema,
     ...(previousInteractionId ? { previousInteractionId } : {}),
   });
@@ -48,10 +45,12 @@ export async function reviseSuggestions(
   targetSuggestionIndex: number,
   targetEpisodeIndex: number | undefined,
   instruction: string,
+  previousInteractionId?: string,
 ): Promise<EpisodeWizardSuggestionsResponse> {
   return generateText({
-    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes),
+    systemInstruction: episodeWizardSystemInstruction(podcast, length, previousEpisodes, previousInteractionId !== undefined),
     prompt: buildEpisodeRevisePrompt(suggestions, targetSuggestionIndex, targetEpisodeIndex, instruction),
     schema: episodeWizardOptionsResponseSchema,
+    ...(previousInteractionId ? { previousInteractionId } : {}),
   });
 }

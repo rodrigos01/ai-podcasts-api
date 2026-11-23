@@ -3,7 +3,8 @@ import { episodeWizardSystemInstruction } from "../src/llm/prompts/episodeWizard
 import { episodeDraftSchema } from "../src/schemas/wizard.schema";
 import type { Podcast } from "../src/schemas/podcast.schema";
 
-const podcast = { id: "p", title: "Show", description: "d", structure: "s", hosts: [] } as unknown as Podcast;
+// Notes are only written for a podcast that opted out of interaction context.
+const podcast = { id: "p", title: "Show", description: "d", structure: "s", hosts: [], useInteractionContext: false } as unknown as Podcast;
 const prior = [{ number: 1, episode: { id: "e", title: "One", transcript: "Penny: hi", participantHostIds: [], guests: [] } }] as never;
 
 describe("episode wizard continuity notes", () => {

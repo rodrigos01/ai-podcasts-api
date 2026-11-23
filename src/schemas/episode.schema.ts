@@ -87,7 +87,9 @@ export const episodeSchema = z.object({
   // What the script writer is told of the earlier episodes: only what bears on
   // this episode (written by the draft call, see episodeWizard.prompts.ts).
   continuityNotes: z.string().min(1).optional(),
-  // EXPERIMENT ONLY: the Interactions API id of the call that wrote the script.
+  // The Interactions API id of the call that wrote this episode's script, kept for podcasts on
+  // interaction context: the next episode's script call and drafts continue from it
+  // (continuity.ts). Null/absent: not generated yet, or the podcast opted out.
   interactionId: z.string().min(1).nullable().optional(),
   // "streamable" is no longer set by generation itself (the script is written,
   // chunked, and marked "ready" in one step now that there's no condensation

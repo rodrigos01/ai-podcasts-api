@@ -9,14 +9,14 @@ import { countWords } from "../../utils/wordCount";
 import { parseScriptTurns, type ScriptTurn } from "../../utils/scriptText";
 import { buildTranscript } from "./transcriptBuilder";
 import { speakerLabel, type Cast } from "./speakerSelection";
-import { usesInteractionContext } from "./continuity";
+import { usesInteractionContext } from "../../utils/interactionContext";
 
 const MAX_GENERATION_ATTEMPTS = 3;
 
 export interface EpisodeScript {
   transcript: string;
   wordCount: number;
-  /** EXPERIMENT ONLY: the stored interaction that wrote it (podcasts on interaction context). */
+  /** The stored interaction that wrote it, which the next episode's script and drafts continue from. Null for a podcast that opted out. */
   interactionId: string | null;
 }
 

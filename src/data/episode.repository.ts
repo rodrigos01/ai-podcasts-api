@@ -143,9 +143,28 @@ export async function deleteEpisode(podcastId: string, episodeId: string): Promi
   const ref = episodesCollection(podcastId).doc(episodeId);
   const existing = await ref.get();
   if (!existing.exists) return false;
+  const anchor = { id: episodeId, createdAt: existing.data()?.createdAt as number };
   await ref.delete();
   await deleteEpisodeAudio(podcastId, episodeId);
+  // Later episodes' interactions still hold the deleted one.
+  await clearInteractionIdsAfter(podcastId, anchor);
   return true;
+}
+
+/**
+ * Forgets the stored interaction of every episode after `anchor`: their
+ * interactions were built on the version of `anchor` that has just been
+ * replaced (regenerated) or removed, so continuing from one would hand the
+ * model an episode that no longer exists. An episode without an id makes
+ * the next call rebuild the series state from the transcripts
+ * (episodeGeneration/continuity.ts); the transcripts themselves are kept.
+ */
+export async function clearInteractionIdsAfter(podcastId: string, anchor: EpisodeAnchor): Promise<void> {
+  const stale = episodesAfter(await listEpisodes(podcastId), anchor).filter((episode) => episode.interactionId);
+  if (stale.length === 0) return;
+  const batch = firestore.batch();
+  for (const episode of stale) batch.update(episodesCollection(podcastId).doc(episode.id), { interactionId: null });
+  await batch.commit();
 }
 
 /**
