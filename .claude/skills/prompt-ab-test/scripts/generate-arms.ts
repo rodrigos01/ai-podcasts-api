@@ -100,11 +100,16 @@ async function main() {
 
   const notesEpisodes = redraftNotesId ? await inSeriesOrder(redraftNotesId) : [];
   for (let i = startAt ? startAt - 1 : 1; i < last; i++) {
-    if (redraftNotesId && i >= (startAt ? startAt - 1 : 1)) await redraftEpisode(armIds, i, notesEpisodes[i]?.productionNotes);
+    // Each arm drafts (with --redraft) and then generates on its own, so one arm's slow or retried draft
+    // does not hold up another arm's script; the episodes still advance in lockstep.
+    const redraft = redraftNotesId !== null && i >= (startAt ? startAt - 1 : 1);
     const results = await Promise.allSettled(
       arms
         .filter((arm) => !arm.episodes[i]!.transcript)
-        .map((arm) => generate(`${arm.label}${i + 1}`, arm.id, arm.episodes[i]!.id)),
+        .map(async (arm) => {
+          if (redraft) await redraftEpisode([arm.id], i, notesEpisodes[i]?.productionNotes);
+          return generate(`${arm.label}${i + 1}`, arm.id, arm.episodes[i]!.id);
+        }),
     );
     const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failed.length) throw new Error(`episode ${i + 1} failed: ${failed.map((r) => r.reason?.message ?? r.reason).join("; ")}`);
