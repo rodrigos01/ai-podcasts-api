@@ -143,9 +143,20 @@ export async function redraftEpisode(armIds: string[], index: number, prompt: st
     const episode = (await inSeriesOrder(lead.armId))[index]!;
     const sources = (await Promise.all(episode.sourceIds.map((id) => getSource(lead.armId, id)))).filter((s) => s !== null);
     const previousEpisodes = await getPriorEpisodes(lead.armId, { id: episode.id, createdAt: episode.createdAt }, MAX_HISTORY_EPISODES);
-    const result = await withContinuity(podcast, previousEpisodes, (c) =>
-      generateSuggestions(podcast, sources, episode.length, c.previousEpisodes, prompt, c.previousInteractionId),
-    );
+    // gemini-4-hydrogen sometimes returns a draft the schema rejects (empty predictedChanges); the app has no
+    // retry for that, so the harness retries the draft call a couple of times and logs each failure.
+    let result: Awaited<ReturnType<typeof generateSuggestions>> | undefined;
+    for (let attempt = 1; attempt <= 3 && !result; attempt++) {
+      try {
+        result = await withContinuity(podcast, previousEpisodes, (c) =>
+          generateSuggestions(podcast, sources, episode.length, c.previousEpisodes, prompt, c.previousInteractionId),
+        );
+      } catch (err) {
+        log(members.map((m) => `${m.label}${index + 1}`).join("+"), `draft attempt ${attempt}/3 failed: ${err instanceof Error ? err.message.slice(0, 200).replace(/\s+/g, " ") : err}`);
+        if (attempt === 3) throw err;
+      }
+    }
+    if (!result) throw new Error("draft failed");
     const draft = result.suggestions[0]!.episodes[0]!;
     const shape = result.suggestions.map((s) => `${s.episodes.length} ep`).join(" + ");
     log(
