@@ -12,6 +12,7 @@
  *   npx tsx .claude/skills/prompt-ab-test/scripts/generate-arms.ts <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
  *   npx tsx .../generate-arms.ts --only <n> <seedPodcastId> <armId> [<armId> ...]
  *   npx tsx .../generate-arms.ts --from <n> <seedPodcastId> <lastEpisode> <armId> [<armId> ...]
+ *   add `--no-chain-ids` to seed episodes without their interaction ids (chain arm rebuilds with the catch-up call)
  *   add `--redraft <notesPodcastId>` to draft each episode from episode 2 on from scratch (episode 1 keeps its stored draft) (see lib.ts's redraftEpisode)
  *   instead of using the stored title/topics/guest; the user prompt of each draft call is the
  *   production notes of the same-numbered episode in <notesPodcastId> (none if it has none).
@@ -33,6 +34,10 @@ async function main() {
     args = args.filter((_, i) => i !== at && i !== at + 1);
     return value;
   };
+  // --no-chain-ids: seeded episodes do not carry the seed's stored interaction ids, so a chain arm
+  // rebuilds its series state from the transcripts with the catch-up call (seed that is not a chain arm).
+  const noChainIds = args.includes("--no-chain-ids");
+  args = args.filter((a) => a !== "--no-chain-ids");
   const redraftAt = args.indexOf("--redraft");
   const redraftNotesId = redraftAt >= 0 ? args[redraftAt + 1] : null;
   if (redraftAt >= 0) args = args.filter((_, i) => i !== redraftAt && i !== redraftAt + 1);
@@ -64,7 +69,7 @@ async function main() {
         await writeEpisode(arm.id, target.id, {
           transcript: from.transcript,
           ttsChunks: from.ttsChunks,
-          interactionId: from.interactionId ?? null,
+          interactionId: noChainIds ? null : (from.interactionId ?? null),
           status: "ready",
           progress: from.progress,
           error: null,
