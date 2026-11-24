@@ -1,9 +1,10 @@
 import type { PriorEpisode } from "../../utils/episodeHistory";
+import { usesInteractionContext } from "../../utils/interactionContext";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
 import { LENGTH_RANGES, type EpisodeLength } from "../../constants/lengthRanges";
 import type { EpisodeSuggestion } from "../../schemas/wizard.schema";
-import { buildEpisodeHistoryBlock, extraInstructionsSection } from "./episodeHistory.prompts";
+import { buildChainedHistoryNote, buildEpisodeHistoryBlock, extraInstructionsSection } from "./episodeHistory.prompts";
 
 // Built from LENGTH_RANGES (the same source of truth episode confirmation
 // itself validates against) so the model reasons about concrete word
@@ -72,16 +73,20 @@ export function episodeWizardSystemInstruction(
   podcast: Podcast,
   length: EpisodeLength,
   previousEpisodes: PriorEpisode[],
+  // The call continues the series' stored interaction: the earlier episodes are in the conversation,
+  // not in `previousEpisodes` (see continuity.ts).
+  chained = false,
 ): string {
   const targetRange = LENGTH_RANGES[length];
-  const history = buildEpisodeHistoryBlock(previousEpisodes, podcast);
+  const history = chained ? buildChainedHistoryNote() : buildEpisodeHistoryBlock(previousEpisodes, podcast);
   const historySection = history
     ? `\n\n${history}\n\nWhen drafting, keep this history in mind: build on it rather than repeating it, and \
 build on it in the topics where a callback or follow-up would help (a guest appearing again is fine \
 when it fits, but don't reuse a past guest just because they existed).`
     : "";
 
-  const notesSection = previousEpisodes.length > 0 ? CONTINUITY_NOTES_SECTION : "";
+  // Only a podcast that opted out of interaction context gets notes written by its drafts.
+  const notesSection = previousEpisodes.length > 0 && !usesInteractionContext(podcast) ? CONTINUITY_NOTES_SECTION : "";
 
   return `You are the producer for the podcast "${podcast.title}".
 

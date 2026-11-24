@@ -3,6 +3,7 @@ import { LENGTH_RANGES } from "../../constants/lengthRanges";
 import { GENERATION_HEARTBEAT_INTERVAL_MS } from "../../constants/generationLease";
 import {
   acquireGenerationLease,
+  clearInteractionIdsAfter,
   getEpisode,
   getPriorEpisodes,
   heartbeatGenerationLease,
@@ -21,6 +22,7 @@ import type { Source } from "../../schemas/source.schema";
 import { dependencyAction, isGenerationSuperseded, needsGenerationRestart } from "../../utils/generationLease";
 import { generateEpisodeScript } from "./scriptGeneration.service";
 import { writeContinuityNotes } from "./continuityNotes.service";
+import { usesInteractionContext, withContinuity } from "./continuity";
 import { needsContinuityNotes } from "../../utils/continuityNotes";
 import { MAX_HISTORY_EPISODES } from "../../constants/episodeHistory";
 import { selectCast } from "./speakerSelection";
@@ -82,12 +84,16 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
       status: "generating",
       transcript: null,
       ttsChunks: null,
+      interactionId: null,
       generatedAudioSeconds: 0,
       audioComplete: false,
       audioDurationSeconds: null,
       progress: null,
       error: null,
     });
+    // The episodes after this one hold the version being thrown away in their
+    // interactions; they rebuild from the transcripts when next needed.
+    await clearInteractionIdsAfter(podcastId, { id: episodeId, createdAt: episode.createdAt });
     await deleteEpisodeAudio(podcastId, episodeId).catch((err) => {
       console.error(
         `Failed to clear cached audio for episode ${podcastId}/${episodeId} before (re)generating:`,
@@ -112,17 +118,30 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     // per-turn, two-independent-agent conversation loop. Nothing is written
     // until the whole script comes back, so a run lost mid-call is simply
     // started over (see ensureGenerationRunning).
-    // Continuity comes from the episode's own continuity notes, written by the
-    // draft call (see episodeWizard.prompts.ts); the earlier episodes
-    // themselves are never sent. An episode with no notes, and a later part of
-    // a split (whose draft was made before the part before it existed), first
-    // gets them written by the notes-only call.
-    const scriptPromise = ensureContinuityNotes(podcastId, podcast, episode, sources, wordTarget, patch).then(
-      async (withNotes) => {
-        await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
-        return generateEpisodeScript(cast, { podcast, episode: withNotes, sources }, wordTarget);
-      },
-    );
+    // Continuity: by default the call continues the interaction of the episode
+    // right before this one (continuity.ts), which already holds the series so
+    // far; a missing or expired chain is rebuilt with one catch-up call. A
+    // podcast that opted out (`useInteractionContext: false`) never sends the
+    // earlier episodes: it gets its episode's continuity notes, written by the
+    // draft call (see episodeWizard.prompts.ts), and an episode with no notes
+    // (or a later part of a split, drafted before the part before it existed)
+    // first gets them written by the notes-only call.
+    const scriptPromise = usesInteractionContext(podcast)
+      ? (async () => {
+          await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
+          const priorEpisodes = await getPriorEpisodes(
+            podcastId,
+            { id: episode.id, createdAt: episode.createdAt },
+            MAX_HISTORY_EPISODES,
+          );
+          return withContinuity(podcast, priorEpisodes, ({ previousEpisodes, previousInteractionId }) =>
+            generateEpisodeScript(cast, { podcast, episode, sources, previousEpisodes }, wordTarget, previousInteractionId),
+          );
+        })()
+      : ensureContinuityNotes(podcastId, podcast, episode, sources, wordTarget, patch).then(async (withNotes) => {
+          await patch({ progress: { stage: "conversation", currentWordCount: 0, targetWordRange: wordTarget } });
+          return generateEpisodeScript(cast, { podcast, episode: withNotes, sources }, wordTarget);
+        });
 
     // Voice resolution (host Voice Design cache hit/miss, guest Voice
     // Design/Library mint) runs in parallel with script generation rather
@@ -153,6 +172,7 @@ export async function runEpisodeGeneration(podcastId: string, episodeId: string)
     await patch({
       transcript: script.transcript,
       ttsChunks,
+      interactionId: script.interactionId,
       status: "ready",
       progress: { stage: "done", currentWordCount: script.wordCount, targetWordRange: wordTarget },
       error: null,

@@ -82,6 +82,17 @@ export const episodeWizardOptionsResponseSchema = z.object({
   suggestions: z.array(episodeSuggestionSchema).min(1).max(2),
 });
 
+// The same response without the notes field, which is what a podcast on
+// interaction context (the default) asks the draft call for: its drafts are
+// not asked to write notes, so the model isn't offered a field it has no
+// instruction for (it filled it in anyway, unasked, when it was offered).
+export const episodeWizardOptionsResponseWithoutNotesSchema = z.object({
+  suggestions: z
+    .array(z.object({ episodes: z.array(episodeDraftSchema.omit({ continuityNotes: true })).min(1).max(2) }))
+    .min(1)
+    .max(2),
+});
+
 export const episodeWizardOptionsRequestSchema = z.object({
   prompt: z.string().optional(),
   sourceIds: z.array(z.string().min(1)),

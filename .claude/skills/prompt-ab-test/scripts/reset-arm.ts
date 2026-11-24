@@ -19,6 +19,7 @@ async function main() {
       status: "generating",
       transcript: null,
       ttsChunks: null,
+      interactionId: null,
       progress: null,
       error: null,
       generationLease: null,

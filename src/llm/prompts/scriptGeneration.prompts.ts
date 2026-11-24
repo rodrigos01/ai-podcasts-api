@@ -1,13 +1,22 @@
 import type { Episode } from "../../schemas/episode.schema";
 import type { Podcast } from "../../schemas/podcast.schema";
 import type { Source } from "../../schemas/source.schema";
-import { buildContinuityNotesBlock, extraInstructionsSection } from "./episodeHistory.prompts";
+import type { PriorEpisode } from "../../utils/episodeHistory";
+import { usesInteractionContext } from "../../utils/interactionContext";
+import {
+  buildChainedHistoryNote,
+  buildContinuityNotesBlock,
+  buildEpisodeHistoryBlock,
+  extraInstructionsSection,
+} from "./episodeHistory.prompts";
 import { speakerLabel, type Cast, type Speaker } from "../../services/episodeGeneration/speakerSelection";
 
 export interface ScriptGenerationContext {
   podcast: Podcast;
   episode: Episode;
   sources: Source[];
+  /** Earlier transcripts, for a podcast on interaction context whose chain could not be built. */
+  previousEpisodes?: PriorEpisode[];
 }
 
 export interface WordTarget {
@@ -180,6 +189,7 @@ export function buildScriptGenerationPrompt(
   cast: Cast,
   ctx: ScriptGenerationContext,
   wordTarget: WordTarget,
+  chained = false,
 ): string {
   const minutes = Math.round((wordTarget.min + wordTarget.max) / 2 / WORDS_PER_MINUTE);
   const guest = cast.speakers.find((s) => !s.isHost);
@@ -192,7 +202,19 @@ export function buildScriptGenerationPrompt(
   const [a, b] = cast.speakers;
   // The writer never sees the earlier episodes, only the notes the draft call
   // wrote for this one (episodeWizard.prompts.ts).
-  const history = buildContinuityNotesBlock(ctx.episode.continuityNotes);
+  // A podcast on interaction context (the default) continues the series' stored
+  // interaction, so a note says the earlier episodes are already in the
+  // conversation. If no chain could be built, the episode's own notes stand in
+  // when it has any, else the transcripts go in the prompt. A podcast that
+  // opted out never shows the writer the earlier episodes, only the notes the
+  // draft call wrote for this one (episodeWizard.prompts.ts).
+  const history = usesInteractionContext(ctx.podcast)
+    ? chained
+      ? buildChainedHistoryNote()
+      : ctx.episode.continuityNotes
+        ? buildContinuityNotesBlock(ctx.episode.continuityNotes)
+        : buildEpisodeHistoryBlock(ctx.previousEpisodes ?? [], ctx.podcast)
+    : buildContinuityNotesBlock(ctx.episode.continuityNotes);
   const historySection = history
     ? `${history}
 

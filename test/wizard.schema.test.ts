@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   episodeWizardOptionsResponseSchema,
+  episodeWizardOptionsResponseWithoutNotesSchema,
   episodeWizardReviseRequestSchema,
   podcastWizardReviseRequestSchema,
 } from "../src/schemas/wizard.schema";
@@ -126,5 +127,24 @@ describe("wizard revise requests", () => {
         instruction: "x",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("episodeWizardOptionsResponseWithoutNotesSchema", () => {
+  const draft = { title: "t", topics: "x", guests: [], predictedChanges: ["a", "b", "c"] };
+
+  it("does not offer the notes field: it is stripped from a response that carries it", () => {
+    const parsed = episodeWizardOptionsResponseWithoutNotesSchema.parse({
+      suggestions: [{ episodes: [{ ...draft, continuityNotes: "Episode 1: a callback" }] }],
+    });
+    expect(parsed.suggestions[0]!.episodes[0]).not.toHaveProperty("continuityNotes");
+  });
+
+  it("keeps the same 1-2 suggestions of 1-2 episodes shape", () => {
+    expect(episodeWizardOptionsResponseWithoutNotesSchema.safeParse({ suggestions: [] }).success).toBe(false);
+    expect(
+      episodeWizardOptionsResponseWithoutNotesSchema.safeParse({ suggestions: [{ episodes: [draft, draft, draft] }] }).success,
+    ).toBe(false);
+    expect(episodeWizardOptionsResponseWithoutNotesSchema.safeParse({ suggestions: [{ episodes: [draft] }] }).success).toBe(true);
   });
 });
